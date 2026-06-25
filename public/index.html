@@ -4,17 +4,37 @@
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>Forest</title>
+  <link rel="icon" href="data:image/svg+xml,%3Csvg%20xmlns='http://www.w3.org/2000/svg'%20viewBox='0%200%2016%2016'%3E%3Ctext%20y='13'%20font-size='13'%3E%F0%9F%8C%B2%3C/text%3E%3C/svg%3E" />
+  <script>
+    // set theme before first paint to avoid a flash
+    try {
+      var t = localStorage.getItem('forest-theme')
+        || (window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light');
+      document.documentElement.dataset.theme = t;
+    } catch (e) { /* default light */ }
+  </script>
   <link rel="stylesheet" href="/style.css" />
 </head>
 <body>
   <header>
-    <div class="brand">🌲 Forest</div>
+    <div class="brand"><span class="brand-mark">🌲</span> Forest</div>
+    <div id="readout" class="readout"></div>
     <input id="search" type="search" placeholder="Filter by repo, branch, or ticket…" />
     <button id="fetch-all" title="git fetch all repos">Fetch all</button>
-    <button id="mode-toggle" class="mode-guided" title="Toggle guided/auto">Guided</button>
+    <button id="mode-toggle" class="mode-guided" title="Toggle guided / auto">Guided</button>
+    <button id="theme-toggle" title="Toggle light / dark">☾</button>
   </header>
 
   <main>
+    <div class="cols">
+      <div class="col-branch">Branch / ticket</div>
+      <div class="col-status">Status</div>
+      <div class="col-owner">Owner</div>
+      <div class="col-agent">Agent</div>
+      <div class="col-age">Age</div>
+      <div class="col-size">Size</div>
+      <div class="col-actions"></div>
+    </div>
     <div id="table" class="table"></div>
   </main>
 

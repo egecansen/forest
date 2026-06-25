@@ -25,6 +25,21 @@ function setMode(mode) {
   b.className = mode === 'auto' ? 'mode-auto' : 'mode-guided';
 }
 
+// theme — boot script in index.html sets the initial data-theme (incl. OS default);
+// here we only sync the toggle glyph and persist on explicit user action.
+function syncThemeButton() {
+  const t = document.documentElement.dataset.theme || 'light';
+  const b = $('#theme-toggle');
+  b.textContent = t === 'dark' ? '☀' : '☾';
+  b.title = t === 'dark' ? 'Switch to light' : 'Switch to dark';
+}
+function toggleTheme() {
+  const next = document.documentElement.dataset.theme === 'dark' ? 'light' : 'dark';
+  document.documentElement.dataset.theme = next;
+  localStorage.setItem('forest-theme', next);
+  syncThemeButton();
+}
+
 function statusBadge(w) {
   if (w.stale || w.merged) return `<span class="badge b-stale">${w.merged ? 'merged' : 'stale'}</span>`;
   if (w.status.dirty) return `<span class="badge b-changed">${w.status.changed} changed</span>`;
@@ -54,13 +69,13 @@ function rowHtml(w, repo) {
   const enc = encodeURIComponent(w.path);
   const pruneable = (w.stale || w.merged) && !w.isPrimary;
   return `<div class="row ${w.isPrimary ? '' : 'nested'}" data-path="${enc}">
-    <div class="branch">${ticketCell(w)}</div>
-    <div>${statusBadge(w)}</div>
-    <div>${esc(w.owner)}</div>
-    <div>${agentCell(w.agent)}</div>
-    <div>${ageCell(w)}</div>
-    <div>${sizeCell(w)}</div>
-    <div class="actions">
+    <div class="col-branch branch">${ticketCell(w)}</div>
+    <div class="col-status">${statusBadge(w)}</div>
+    <div class="col-owner">${esc(w.owner)}</div>
+    <div class="col-agent">${agentCell(w.agent)}</div>
+    <div class="col-age">${ageCell(w)}</div>
+    <div class="col-size">${sizeCell(w)}</div>
+    <div class="col-actions actions">
       <button title="Quick task" data-act="task" data-path="${enc}">⚡</button>
       <button title="Launch Claude" data-act="launch" data-path="${enc}">▶</button>
       <button title="Open in Cursor" data-act="open-cursor" data-path="${enc}">⤓</button>
@@ -71,11 +86,29 @@ function rowHtml(w, repo) {
 
 function render() {
   const html = state.snapshot.repos.map((r) => {
-    const rows = r.worktrees.filter((w) => matches(w, r.repo)).map((w) => rowHtml(w, r.repo)).join('');
+    const shown = r.worktrees.filter((w) => matches(w, r.repo));
+    const rows = shown.map((w) => rowHtml(w, r.repo)).join('');
     if (!rows) return '';
-    return `<div class="repo-group"><div class="repo-name">${esc(r.repo)}</div>${rows}</div>`;
+    return `<div class="repo-group"><div class="repo-name">${esc(r.repo)}<span class="repo-count">${shown.length}</span></div>${rows}</div>`;
   }).join('');
-  $('#table').innerHTML = html || '<p style="color:var(--muted)">No worktrees match.</p>';
+  $('#table').innerHTML = html || '<p class="empty">No worktrees match.</p>';
+  renderReadout();
+}
+
+function renderReadout() {
+  let total = 0, changed = 0, prunable = 0, live = 0;
+  for (const r of state.snapshot.repos) for (const w of r.worktrees) {
+    total++;
+    if (w.status.dirty && !(w.stale || w.merged)) changed++;
+    if ((w.stale || w.merged) && !w.isPrimary) prunable++;
+    if (w.agent.state === 'running') live++;
+  }
+  const el = $('#readout');
+  if (!el) return;
+  el.innerHTML = `<b>${total}</b> worktrees`
+    + (changed ? ` · <b>${changed}</b> changed` : '')
+    + (prunable ? ` · <b class="rd-prune">${prunable}</b> prunable` : '')
+    + (live ? ` · <span class="dot run"></span><b class="rd-live">${live}</b> live` : '');
 }
 
 function findWorktree(path) {
@@ -98,9 +131,9 @@ async function openDrawer(path) {
   if (!w) return;
   const d = $('#drawer');
   d.classList.remove('hidden');
-  d.innerHTML = `<button id="drawer-close" style="float:right">✕</button>
-    <h3 class="branch">${esc(w.branch) || '(detached)'}</h3>
-    <p style="color:var(--muted)">${esc(w.repo)} · ${esc(w.owner)} · ${ageCell(w)} · ${sizeCell(w)}</p>
+  d.innerHTML = `<button id="drawer-close" class="drawer-close">Close ✕</button>
+    <h3>${esc(w.branch) || '(detached)'}</h3>
+    <p class="meta-line">${esc(w.repo)} · ${esc(w.owner)} · ${ageCell(w)} · ${sizeCell(w)}</p>
     <div id="task-panel"></div>
     <h4>Diff</h4><pre id="diff">loading…</pre>`;
   $('#drawer-close').onclick = () => d.classList.add('hidden');
@@ -145,6 +178,7 @@ async function doAction(act, ds) {
 
 function wireEvents() {
   $('#mode-toggle').onclick = () => setMode(state.mode === 'auto' ? 'guided' : 'auto');
+  $('#theme-toggle').onclick = toggleTheme;
   $('#search').oninput = (e) => { state.filter = e.target.value; render(); };
   $('#fetch-all').onclick = async () => { const r = await api('/api/fetch-all', { mode: state.mode }); toast(state.mode === 'guided' ? 'Sent to terminal' : 'Fetched all'); };
 
@@ -209,6 +243,7 @@ function connectSSE() {
 }
 
 async function init() {
+  syncThemeButton();
   state.config = await fetch('/api/config').then((r) => r.json());
   setMode(localStorage.getItem('forest-mode') || state.config.defaultMode);
   state.snapshot = await fetch('/api/worktrees').then((r) => r.json());
