@@ -1,0 +1,10 @@
+{
+  "port": 5577,
+  "roots": ["/Users/egecan.sen/sahibinden/repo"],
+  "jiraBaseUrl": "",
+  "staleDays": 14,
+  "defaultMode": "guided",
+  "terminalApp": "Terminal",
+  "openEditorCmd": "open -a Cursor",
+  "setupScript": ".forest-setup.sh"
+}
