@@ -1,0 +1,37 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Forest</title>
+  <link rel="stylesheet" href="/style.css" />
+</head>
+<body>
+  <header>
+    <div class="brand">🌲 Forest</div>
+    <input id="search" type="search" placeholder="Filter by repo, branch, or ticket…" />
+    <button id="fetch-all" title="git fetch all repos">Fetch all</button>
+    <button id="mode-toggle" class="mode-guided" title="Toggle guided/auto">Guided</button>
+  </header>
+
+  <main>
+    <div id="table" class="table"></div>
+  </main>
+
+  <aside id="drawer" class="drawer hidden"></aside>
+
+  <section id="journal" class="journal">
+    <div class="journal-head">Command journal</div>
+    <ul id="journal-list"></ul>
+  </section>
+
+  <div id="palette" class="palette hidden">
+    <input id="palette-input" type="text" placeholder="Jump to worktree or action…" />
+    <ul id="palette-list"></ul>
+  </div>
+
+  <div id="toast" class="toast hidden"></div>
+
+  <script type="module" src="/app.js"></script>
+</body>
+</html>
