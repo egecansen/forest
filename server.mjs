@@ -34,7 +34,7 @@ const MIME = { '.html': 'text/html', '.css': 'text/css', '.js': 'text/javascript
 async function serveStatic(req, res) {
   let rel = req.url === '/' ? '/index.html' : req.url.split('?')[0];
   const path = normalize(join(PUBLIC, rel));
-  if (!path.startsWith(PUBLIC)) { res.writeHead(403).end(); return; }
+  if (path !== PUBLIC && !path.startsWith(PUBLIC + '/')) { res.writeHead(403).end(); return; }
   try {
     const body = await readFile(path);
     res.writeHead(200, { 'content-type': MIME[extname(path)] || 'application/octet-stream' });
@@ -79,6 +79,7 @@ const server = http.createServer(async (req, res) => {
   if (url === '/api/journal') return sendJson(res, journal.recent());
   if (url === '/api/diff') {
     const p = new URL(req.url, 'http://x').searchParams.get('path');
+    if (!p) return sendJson(res, { diff: '', error: 'path required' }, 400);
     try { return sendJson(res, { diff: await runGit(p, ['diff']) }); }
     catch (e) { return sendJson(res, { diff: '', error: String(e) }); }
   }
@@ -88,7 +89,8 @@ const server = http.createServer(async (req, res) => {
 });
 
 // Periodic snapshot push.
-setInterval(async () => { try { broadcast('worktrees', await snapshot()); } catch { /* ignore */ } }, 4000);
+const snapshotInterval = setInterval(async () => { try { broadcast('worktrees', await snapshot()); } catch { /* ignore */ } }, 4000);
+server.on('close', () => clearInterval(snapshotInterval));
 
 server.listen(config.port, '127.0.0.1', () => {
   console.log(`Forest on http://127.0.0.1:${config.port}`);
