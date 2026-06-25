@@ -7,6 +7,7 @@ import { buildSnapshot } from './lib/discover.mjs';
 import { createRegistry } from './lib/agents.mjs';
 import { createJournal } from './lib/journal.mjs';
 import { runGit } from './lib/git.mjs';
+import { createActionHandler } from './lib/actions.mjs';
 
 const ROOT = fileURLToPath(new URL('.', import.meta.url));
 const PUBLIC = join(ROOT, 'public');
@@ -63,6 +64,7 @@ export const ctx = { config, registry, journal, broadcast, snapshot, CLAUDE_PROJ
 // Action router is attached in Task 8; defaults to 404 until then.
 export let handleAction = async (req, res) => { res.writeHead(404).end('no action'); };
 export function setActionHandler(fn) { handleAction = fn; }
+setActionHandler(createActionHandler());
 
 const server = http.createServer(async (req, res) => {
   const url = req.url.split('?')[0];
