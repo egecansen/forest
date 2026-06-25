@@ -12,7 +12,7 @@ them — including running Claude Code on a branch. It exists because worktrees 
 scattered across ~10 separate repos and spawned by multiple AI tools (Cursor,
 Claude Code), with no single place to see or manage them.
 
-Run `forest` (alias `wt`) → a browser tab opens at `localhost`. Done.
+Run `forest` → a browser tab opens at `localhost`. Done.
 
 ## Context (the environment we're building for)
 
@@ -34,6 +34,9 @@ Run `forest` (alias `wt`) → a browser tab opens at `localhost`. Done.
 - Clean, readable graphical UI (not a TUI).
 - Full control: create/remove worktrees, launch agents, run git ops — safely.
 - Make running AI on a branch a one-click action.
+- **Augment the terminal, don't replace it.** Keep the user fluent in raw
+  `git`/`claude` — Forest is a glass cockpit, not an autopilot (see Action
+  posture).
 - Zero install friction; works immediately and offline.
 
 ## Non-goals
@@ -64,11 +67,60 @@ Run `forest` (alias `wt`) → a browser tab opens at `localhost`. Done.
 - `git.mjs` — run git commands and parse porcelain output into typed records
   (worktree list, status, ahead/behind, merge state, last commit). Pure parsers
   separated from the exec wrappers so they unit-test cleanly.
-- `agents.mjs` — launch interactive Claude, run headless tasks (`claude -p`),
-  detect running agent sessions, fire macOS notifications.
-- `server.mjs` — HTTP routing, SSE hub, static file serving, action endpoints,
-  config loading.
+- `agents.mjs` — launch interactive Claude (terminal-first), run headless tasks
+  (`claude -p`), detect agent state (in-memory registry + Claude session-file
+  heuristic), fire macOS notifications with the "Continue interactively" action.
+- `terminal.mjs` — dispatch commands to the user's terminal app / open a terminal
+  in a worktree (guided mode), via `open`/AppleScript.
+- `journal.mjs` — record every command Forest runs or suggests; expose recent
+  entries and stream new ones over SSE.
+- `server.mjs` — HTTP routing, SSE hub, static file serving, action endpoints
+  (guided/auto dispatch), config loading.
 - `public/` — `index.html`, `app.js`, `style.css`.
+
+## Action posture (glass cockpit)
+
+The guiding principle: Forest amplifies the one thing the terminal is bad at
+(seeing across ~10 repos at once) and, for everything else, keeps the user in the
+terminal and keeps the real commands visible — so `git`/`claude` fluency never
+rusts. Visibility is all-GUI; **mutations are transparent and terminal-first.**
+
+### Two execution modes, chosen by a toggle
+
+Every mutating action (create, remove/prune, commit/push/pull, fetch-all,
+auto-setup, headless task) runs in one of two modes:
+
+- **Guided (default):** Forest sends the exact command to the user's terminal
+  (e.g. `git worktree remove <path>`) for them to run, or opens a terminal in the
+  worktree. The user executes it and stays fluent. Forest still updates its view
+  from the result.
+- **Auto:** Forest runs the command itself in the background, then writes the raw
+  command to the command journal so it's still visible.
+
+The toggle has two scopes:
+
+- A **global switch** in the header (`Guided ⟷ Auto`) sets the default for all
+  actions. It starts in **Guided**.
+- A **per-action override** lets a single action run the other way without
+  flipping the global default (e.g. "just auto this one fetch").
+
+The two extreme postures are therefore presets of this one knob: *all guided +
+headless hidden* = strict "map, not driver"; *all auto* = full automation. No
+feature is added or removed by the toggle — only how/where it executes.
+
+### Command journal
+
+A persistent, always-visible panel logs every `git`/`claude` command Forest ran
+or suggested, raw and copy-pasteable. It doubles as a cheat-sheet of the commands
+for the user's own repos, and as an audit trail of what auto-mode did. Journal
+entries also stream over SSE.
+
+### Terminal target
+
+"Run in your terminal" / "open a terminal here" targets the user's terminal app
+(default **Terminal.app** via `open -a`/AppleScript; configurable, e.g. iTerm2).
+Interactive Claude launch (▶) is always terminal-first in both modes — it opens a
+real terminal running `claude`, never a hidden background process.
 
 ## Data model
 
@@ -94,7 +146,12 @@ A worktree record the API returns and the UI renders:
   "lastCommitAt": "2026-06-24T11:02:00Z",
   "ageDays": 1,
   "sizeBytes": 357564928,        // cached, refreshed async / on demand
-  "agent": { "running": true, "kind": "claude", "pid": 12345 }
+  "agent": {
+    "state": "running",          // "running" | "idle" | "unknown"
+    "kind": "claude",            // "claude" | "cursor" | null
+    "source": "session-file",    // "registry" (Forest-launched) | "session-file" | null
+    "pid": null                  // set only when source === "registry"
+  }
 }
 ```
 
@@ -116,28 +173,46 @@ A worktree record the API returns and the UI renders:
 - **Last commit:** `git -C <wt> log -1 --format=%cI`.
 - **Size:** `du -sk <wt>` — slow, so cached and refreshed asynchronously /
   on demand, never blocking the main snapshot.
-- **Agent running:** sessions Forest launches are tracked authoritatively in an
-  in-memory registry (pid + worktree). External sessions are detected
-  best-effort by matching `claude`/`cursor` processes to worktree dirs; if
-  detection is unreliable it degrades to "unknown" rather than lying.
+- **Agent state:** two signals, no `lsof` process-scanning.
+  1. *Registry (authoritative):* sessions Forest launches are tracked in-memory
+     (pid + worktree) → exact start/stop. `source: "registry"`.
+  2. *Session-file heuristic:* Claude Code writes a transcript per project at
+     `~/.claude/projects/<path-with-/-and-.-as-->/*.jsonl` (the path encoding is
+     confirmed: `/Users/egecan.sen/sahibinden/repo` → `-Users-egecan-sen-sahibinden-repo`).
+     `stat` the newest transcript for a worktree's encoded path; mtime within
+     ~15s → `running`, else `idle`. Path-keyed, so it catches **any** Claude Code
+     session in the worktree — terminal-, Forest-, or Cursor-launched — at the
+     cost of one `stat` per tick. `source: "session-file"`.
+  - If neither signal is available, `state: "unknown"` (never a confident lie).
+    Cursor's *native* (non-Claude) agents leave no such trace and stay
+    `unknown`. The heuristic reads Claude's internal layout; if that format
+    changes it degrades to `unknown` rather than breaking.
 - **Ticket:** first `[A-Z]{2,}-\d+` match in the branch name.
 
 ## API endpoints
 
+Mutating endpoints take a `mode: "guided" | "auto"` (default from config /
+global toggle, overridable per-action). In **guided** mode the server returns the
+exact command and dispatches it to the terminal (or opens a terminal); in
+**auto** mode it runs the command itself. Either way it appends to the journal.
+
 - `GET  /api/worktrees` — full snapshot (repos + worktrees).
-- `GET  /api/events` — SSE stream (state changes, agent output, task lifecycle).
-- `GET  /api/diff?path=<wt>` — `git diff` for review in-browser.
-- `POST /api/worktree/create` — `{ repo, branch, base }` → `git worktree add`,
-  then optional auto-setup script.
-- `POST /api/worktree/remove` — `{ path, force? }` → `git worktree remove`
-  (client confirms; server refuses primary worktrees).
-- `POST /api/launch` — `{ path }` → open Terminal running `claude` in the wt.
+- `GET  /api/events` — SSE stream (state changes, agent output, task lifecycle,
+  journal entries).
+- `GET  /api/diff?path=<wt>` — `git diff` for review in-browser (read-only).
+- `GET  /api/journal` — recent command-journal entries (backfill on load).
+- `POST /api/worktree/create` — `{ repo, branch, base, mode }` →
+  `git worktree add`, then optional auto-setup script.
+- `POST /api/worktree/remove` — `{ path, force?, mode }` → `git worktree remove`
+  (client confirms; server refuses primary worktrees — both modes).
+- `POST /api/launch` — `{ path }` → open the terminal running `claude` in the wt
+  (always terminal-first; no `mode`).
 - `POST /api/open` — `{ path, target }` → `cursor` | `finder` | `terminal`.
-- `POST /api/task` — `{ path, prompt }` → spawn `claude -p`, stream output via
-  SSE, notify on finish.
-- `POST /api/git` — `{ path, action, message? }` → `fetch|commit|push|pull`.
-- `POST /api/fetch-all` — fetch every repo, refresh ahead/behind.
-- `GET  /api/config` — current config (for the UI).
+- `POST /api/task` — `{ path, prompt, mode }` → spawn `claude -p`, stream output
+  via SSE, notify on finish.
+- `POST /api/git` — `{ path, action, message?, mode }` → `fetch|commit|push|pull`.
+- `POST /api/fetch-all` — `{ mode }` → fetch every repo, refresh ahead/behind.
+- `GET  /api/config` — current config (incl. default mode, for the UI).
 
 ## UI / UX
 
@@ -152,12 +227,18 @@ web-test    tech/WEBT-249514     ● 3 changed   you      —        2h    1.2G 
 sui         tech/SUI-238145      ✓ clean       you      —        3h    900M   ⚡ ▶ ⤓ ⋯
 ```
 
+- **Header:** the global `Guided ⟷ Auto` toggle (starts Guided), a fetch-all
+  button, and the search/filter box.
 - **Color/badge language:** clean = green, changed = amber, merged/stale = grey
-  with a prune nudge, agent running = blue pulse.
+  with a prune nudge. Agent state: ● blue pulse = running, ○ grey = idle,
+  `?` = unknown.
 - **Row click → detail panel:** in-browser diff, ticket link, full actions,
-  live headless-task output.
+  live headless-task output. Each mutating action shows its exact command and a
+  per-action guided/auto override.
 - **Action icons:** ⚡ quick task · ▶ launch Claude · ⤓ open (Cursor/Finder/
   Terminal) · ⋯ more (git ops, remove) · 🧹 prune (on stale/merged).
+- **Command journal:** a collapsible bottom panel streaming every `git`/`claude`
+  command Forest ran or suggested, raw and copy-pasteable.
 
 ## Features
 
@@ -172,28 +253,36 @@ sui         tech/SUI-238145      ✓ clean       you      —        3h    900M 
 5. **Quick-open** — Cursor / Finder / Terminal in one click.
 6. **Stale/merged cleanup** — detect orphaned/merged worktrees, one-click prune
    (with confirm; primary worktrees protected).
+7. **Glass-cockpit toggle + command journal** — global `Guided ⟷ Auto` switch
+   with per-action override, and an always-visible journal of every raw command
+   (see Action posture). Keeps fundamentals in view.
 
 ### Side
 
-7. **Headless quick task** (⚡) — type a small task for a branch → runs
+8. **Headless quick task** (⚡) — type a small task for a branch → runs
    `claude -p` in that worktree, streams output live, fires a macOS notification
    on finish whose **"Continue interactively"** action drops you into a real
    Claude session in the same worktree. For small fire-and-forget jobs; hands
-   off cleanly to interactive when it needs a human.
-8. **JIRA ticket deep-link** — branch ticket token links to
+   off cleanly to interactive when it needs a human. (Visible in Guided mode too,
+   since it's opt-in and journaled; hidden only in the strict preset.)
+9. **JIRA ticket deep-link** — branch ticket token links to
    `<jiraBaseUrl>/browse/<TICKET>`.
-9. **Auto-setup on create** — after `git worktree add`, run an optional per-repo
-   setup script (e.g. `npm install`) so an agent starts with a working tree;
-   output streamed.
-10. **Fetch-all + git quick actions** — one button to fetch all repos (refresh
+10. **Auto-setup on create** — after `git worktree add`, run an optional per-repo
+    setup script (e.g. `npm install`) so an agent starts with a working tree;
+    output streamed.
+11. **Fetch-all + git quick actions** — one button to fetch all repos (refresh
     ahead/behind), plus per-worktree commit / push / pull.
-11. **⌘K command palette** — keyboard jump to any worktree or action.
+12. **⌘K command palette** — keyboard jump to any worktree or action.
 
 ## Safety
 
 - Destructive actions (remove/prune) require a client confirm, **never** touch a
-  repo's primary worktree, and warn when the worktree is dirty.
+  repo's primary worktree, and warn when the worktree is dirty — in **both**
+  guided and auto modes (the toggle changes *who runs* the command, not the
+  guardrails).
 - `force` removal is explicit and separately confirmed.
+- Every mutating command is appended to the journal, so auto-mode is never
+  invisible.
 - Everything else is read-only by default.
 - Server binds `127.0.0.1` only.
 
@@ -207,6 +296,8 @@ sui         tech/SUI-238145      ✓ clean       you      —        3h    900M 
   "roots": ["/Users/egecan.sen/sahibinden/repo"],
   "jiraBaseUrl": "",            // user fills in, e.g. https://<org>.atlassian.net
   "staleDays": 14,
+  "defaultMode": "guided",      // "guided" | "auto" — global toggle's start state
+  "terminalApp": "Terminal",    // terminal to target for guided actions / launch
   "openEditorCmd": "open -a Cursor",
   "setupScript": ".forest-setup.sh"  // looked up in each repo root; optional
 }
@@ -214,8 +305,8 @@ sui         tech/SUI-238145      ✓ clean       you      —        3h    900M 
 
 ## Installation / launcher
 
-- A `forest` launcher script (alias `wt`) symlinked into `~/.local/bin/`
-  (already on PATH). It starts `node ~/sahibinden/forest/server.mjs` and runs
+- A `forest` launcher script symlinked into `~/.local/bin/` (already on PATH).
+  It starts `node ~/sahibinden/forest/server.mjs` and runs
   `open http://localhost:<port>`. If the server is already up, it just opens the
   tab.
 
