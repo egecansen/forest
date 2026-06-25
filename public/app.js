@@ -1,4 +1,5 @@
 const $ = (s) => document.querySelector(s);
+function esc(s) { return String(s ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;'); }
 const state = { config: null, snapshot: { repos: [] }, filter: '', mode: 'guided', taskBuf: {} };
 
 function toast(msg) {
@@ -7,8 +8,13 @@ function toast(msg) {
 }
 
 async function api(path, body) {
-  const res = await fetch(path, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) });
-  return res.json();
+  try {
+    const res = await fetch(path, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) });
+    return await res.json();
+  } catch (e) {
+    toast(`Error: ${e.message}`);
+    return {};
+  }
 }
 
 function setMode(mode) {
@@ -33,9 +39,9 @@ function ageCell(w) { return w.ageDays == null ? '—' : w.ageDays === 0 ? 'toda
 function sizeCell(w) { return w.sizeBytes == null ? '—' : `${(w.sizeBytes / 1e9).toFixed(1)}G`; }
 function ticketCell(w) {
   if (w.ticket && state.config.jiraBaseUrl) {
-    return `<a class="ticket-link" href="${state.config.jiraBaseUrl}/browse/${w.ticket}" target="_blank" onclick="event.stopPropagation()">${w.branch}</a>`;
+    return `<a class="ticket-link" href="${state.config.jiraBaseUrl}/browse/${encodeURIComponent(w.ticket)}" target="_blank" onclick="event.stopPropagation()">${esc(w.branch)}</a>`;
   }
-  return w.branch || '(detached)';
+  return esc(w.branch) || '(detached)';
 }
 
 function matches(w, repo) {
@@ -50,7 +56,7 @@ function rowHtml(w, repo) {
   return `<div class="row ${w.isPrimary ? '' : 'nested'}" data-path="${enc}">
     <div class="branch">${ticketCell(w)}</div>
     <div>${statusBadge(w)}</div>
-    <div>${w.owner}</div>
+    <div>${esc(w.owner)}</div>
     <div>${agentCell(w.agent)}</div>
     <div>${ageCell(w)}</div>
     <div>${sizeCell(w)}</div>
@@ -67,7 +73,7 @@ function render() {
   const html = state.snapshot.repos.map((r) => {
     const rows = r.worktrees.filter((w) => matches(w, r.repo)).map((w) => rowHtml(w, r.repo)).join('');
     if (!rows) return '';
-    return `<div class="repo-group"><div class="repo-name">${r.repo}</div>${rows}</div>`;
+    return `<div class="repo-group"><div class="repo-name">${esc(r.repo)}</div>${rows}</div>`;
   }).join('');
   $('#table').innerHTML = html || '<p style="color:var(--muted)">No worktrees match.</p>';
 }
@@ -93,8 +99,8 @@ async function openDrawer(path) {
   const d = $('#drawer');
   d.classList.remove('hidden');
   d.innerHTML = `<button id="drawer-close" style="float:right">✕</button>
-    <h3 class="branch">${w.branch || '(detached)'}</h3>
-    <p style="color:var(--muted)">${w.repo} · ${w.owner} · ${ageCell(w)} · ${sizeCell(w)}</p>
+    <h3 class="branch">${esc(w.branch) || '(detached)'}</h3>
+    <p style="color:var(--muted)">${esc(w.repo)} · ${esc(w.owner)} · ${ageCell(w)} · ${sizeCell(w)}</p>
     <div id="task-panel"></div>
     <h4>Diff</h4><pre id="diff">loading…</pre>`;
   $('#drawer-close').onclick = () => d.classList.add('hidden');
@@ -129,6 +135,7 @@ async function doAction(act, ds) {
   }
   if (act === 'remove') {
     const w = findWorktree(path);
+    if (!w) return;
     if (w.status.dirty && !confirm('Worktree has uncommitted changes. Remove anyway?')) return;
     if (!confirm(`Remove worktree?\n${path}`)) return;
     const r = await api('/api/worktree/remove', { repoPath: decodeURIComponent(ds.repo), path, force: w.status.dirty, isPrimary: w.isPrimary, mode: state.mode });
@@ -170,7 +177,7 @@ function paletteItems() {
 function renderPalette(q) {
   const ql = q.toLowerCase();
   const items = paletteItems().filter((i) => i.label.toLowerCase().includes(ql)).slice(0, 30);
-  $('#palette-list').innerHTML = items.map((i) => `<li data-path="${encodeURIComponent(i.path)}">${i.label}</li>`).join('');
+  $('#palette-list').innerHTML = items.map((i) => `<li data-path="${encodeURIComponent(i.path)}">${esc(i.label)}</li>`).join('');
 }
 
 function wirePalette() {
@@ -183,7 +190,7 @@ function wirePalette() {
 
 function addJournal(entry) {
   const li = document.createElement('li');
-  li.innerHTML = `<span class="j-mode">${entry.mode || ''}</span>${entry.cmd}`;
+  li.innerHTML = `<span class="j-mode">${esc(entry.mode || '')}</span>${esc(entry.cmd)}`;
   $('#journal-list').appendChild(li);
   $('#journal').scrollTop = $('#journal').scrollHeight;
 }
