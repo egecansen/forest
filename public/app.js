@@ -1,0 +1,214 @@
+const $ = (s) => document.querySelector(s);
+const state = { config: null, snapshot: { repos: [] }, filter: '', mode: 'guided', taskBuf: {} };
+
+function toast(msg) {
+  const t = $('#toast'); t.textContent = msg; t.classList.remove('hidden');
+  clearTimeout(toast._t); toast._t = setTimeout(() => t.classList.add('hidden'), 2200);
+}
+
+async function api(path, body) {
+  const res = await fetch(path, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) });
+  return res.json();
+}
+
+function setMode(mode) {
+  state.mode = mode;
+  localStorage.setItem('forest-mode', mode);
+  const b = $('#mode-toggle');
+  b.textContent = mode === 'auto' ? 'Auto' : 'Guided';
+  b.className = mode === 'auto' ? 'mode-auto' : 'mode-guided';
+}
+
+function statusBadge(w) {
+  if (w.stale || w.merged) return `<span class="badge b-stale">${w.merged ? 'merged' : 'stale'}</span>`;
+  if (w.status.dirty) return `<span class="badge b-changed">${w.status.changed} changed</span>`;
+  return `<span class="badge b-clean">clean</span>`;
+}
+function agentCell(a) {
+  const cls = a.state === 'running' ? 'run' : a.state === 'idle' ? 'idle' : 'unknown';
+  const label = a.state === 'running' ? (a.kind || 'agent') : a.state;
+  return `<span><span class="dot ${cls}"></span>${label}</span>`;
+}
+function ageCell(w) { return w.ageDays == null ? '—' : w.ageDays === 0 ? 'today' : `${w.ageDays}d`; }
+function sizeCell(w) { return w.sizeBytes == null ? '—' : `${(w.sizeBytes / 1e9).toFixed(1)}G`; }
+function ticketCell(w) {
+  if (w.ticket && state.config.jiraBaseUrl) {
+    return `<a class="ticket-link" href="${state.config.jiraBaseUrl}/browse/${w.ticket}" target="_blank" onclick="event.stopPropagation()">${w.branch}</a>`;
+  }
+  return w.branch || '(detached)';
+}
+
+function matches(w, repo) {
+  const f = state.filter.toLowerCase();
+  if (!f) return true;
+  return [repo, w.branch, w.ticket, w.owner].filter(Boolean).some((s) => s.toLowerCase().includes(f));
+}
+
+function rowHtml(w, repo) {
+  const enc = encodeURIComponent(w.path);
+  const pruneable = (w.stale || w.merged) && !w.isPrimary;
+  return `<div class="row ${w.isPrimary ? '' : 'nested'}" data-path="${enc}">
+    <div class="branch">${ticketCell(w)}</div>
+    <div>${statusBadge(w)}</div>
+    <div>${w.owner}</div>
+    <div>${agentCell(w.agent)}</div>
+    <div>${ageCell(w)}</div>
+    <div>${sizeCell(w)}</div>
+    <div class="actions">
+      <button title="Quick task" data-act="task" data-path="${enc}">⚡</button>
+      <button title="Launch Claude" data-act="launch" data-path="${enc}">▶</button>
+      <button title="Open in Cursor" data-act="open-cursor" data-path="${enc}">⤓</button>
+      ${pruneable ? `<button title="Prune" data-act="remove" data-path="${enc}" data-repo="${encodeURIComponent(w.repoPath)}" data-primary="${w.isPrimary}">🧹</button>` : ''}
+    </div>
+  </div>`;
+}
+
+function render() {
+  const html = state.snapshot.repos.map((r) => {
+    const rows = r.worktrees.filter((w) => matches(w, r.repo)).map((w) => rowHtml(w, r.repo)).join('');
+    if (!rows) return '';
+    return `<div class="repo-group"><div class="repo-name">${r.repo}</div>${rows}</div>`;
+  }).join('');
+  $('#table').innerHTML = html || '<p style="color:var(--muted)">No worktrees match.</p>';
+}
+
+function findWorktree(path) {
+  for (const r of state.snapshot.repos) for (const w of r.worktrees) if (w.path === path) return w;
+  return null;
+}
+
+function colorizeDiff(text) {
+  return text.split('\n').map((l) => {
+    const e = l.replace(/&/g, '&amp;').replace(/</g, '&lt;');
+    if (l.startsWith('+')) return `<span class="diff-add">${e}</span>`;
+    if (l.startsWith('-')) return `<span class="diff-del">${e}</span>`;
+    if (l.startsWith('@@')) return `<span class="diff-hunk">${e}</span>`;
+    return e;
+  }).join('\n');
+}
+
+async function openDrawer(path) {
+  const w = findWorktree(path);
+  if (!w) return;
+  const d = $('#drawer');
+  d.classList.remove('hidden');
+  d.innerHTML = `<button id="drawer-close" style="float:right">✕</button>
+    <h3 class="branch">${w.branch || '(detached)'}</h3>
+    <p style="color:var(--muted)">${w.repo} · ${w.owner} · ${ageCell(w)} · ${sizeCell(w)}</p>
+    <div id="task-panel"></div>
+    <h4>Diff</h4><pre id="diff">loading…</pre>`;
+  $('#drawer-close').onclick = () => d.classList.add('hidden');
+  const buf = state.taskBuf[path];
+  if (buf) renderTaskPanel(path);
+  const res = await fetch(`/api/diff?path=${encodeURIComponent(path)}`).then((r) => r.json());
+  $('#diff').innerHTML = res.diff ? colorizeDiff(res.diff) : '(no changes)';
+}
+
+function renderTaskPanel(path) {
+  const panel = $('#task-panel');
+  if (!panel) return;
+  const buf = state.taskBuf[path];
+  if (!buf) { panel.innerHTML = ''; return; }
+  panel.innerHTML = `<h4>Task output</h4><pre>${buf.text.replace(/</g, '&lt;')}</pre>
+    ${buf.done ? `<button id="continue-int">Continue interactively</button>` : '<em>running…</em>'}`;
+  const c = $('#continue-int');
+  if (c) c.onclick = () => api('/api/launch', { path });
+}
+
+async function doAction(act, ds) {
+  const path = decodeURIComponent(ds.path);
+  if (act === 'launch') { await api('/api/launch', { path }); toast('Launching Claude…'); return; }
+  if (act === 'open-cursor') { await api('/api/open', { path, target: 'cursor' }); return; }
+  if (act === 'task') {
+    const prompt = state.mode === 'auto' ? window.prompt('Task for Claude (headless):') : null;
+    if (state.mode === 'auto' && !prompt) return;
+    state.taskBuf[path] = { text: '', done: false };
+    await api('/api/task', { path, prompt, mode: state.mode });
+    openDrawer(path);
+    return;
+  }
+  if (act === 'remove') {
+    const w = findWorktree(path);
+    if (w.status.dirty && !confirm('Worktree has uncommitted changes. Remove anyway?')) return;
+    if (!confirm(`Remove worktree?\n${path}`)) return;
+    const r = await api('/api/worktree/remove', { repoPath: decodeURIComponent(ds.repo), path, force: w.status.dirty, isPrimary: w.isPrimary, mode: state.mode });
+    toast(r.error ? `Error: ${r.error}` : state.mode === 'guided' ? 'Sent to terminal' : 'Removed');
+  }
+}
+
+function wireEvents() {
+  $('#mode-toggle').onclick = () => setMode(state.mode === 'auto' ? 'guided' : 'auto');
+  $('#search').oninput = (e) => { state.filter = e.target.value; render(); };
+  $('#fetch-all').onclick = async () => { const r = await api('/api/fetch-all', { mode: state.mode }); toast(state.mode === 'guided' ? 'Sent to terminal' : 'Fetched all'); };
+
+  $('#table').addEventListener('click', (e) => {
+    const btn = e.target.closest('button[data-act]');
+    if (btn) { e.stopPropagation(); doAction(btn.dataset.act, btn.dataset); return; }
+    const row = e.target.closest('.row[data-path]');
+    if (row) openDrawer(decodeURIComponent(row.dataset.path));
+  });
+
+  document.addEventListener('keydown', (e) => {
+    if ((e.metaKey || e.ctrlKey) && e.key === 'k') { e.preventDefault(); togglePalette(); }
+    if (e.key === 'Escape') { $('#palette').classList.add('hidden'); $('#drawer').classList.add('hidden'); }
+  });
+}
+
+function togglePalette() {
+  const p = $('#palette');
+  const show = p.classList.contains('hidden');
+  p.classList.toggle('hidden');
+  if (show) { $('#palette-input').value = ''; renderPalette(''); $('#palette-input').focus(); }
+}
+function paletteItems() {
+  const items = [];
+  for (const r of state.snapshot.repos) for (const w of r.worktrees) {
+    items.push({ label: `${r.repo} · ${w.branch || '(detached)'}`, path: w.path });
+  }
+  return items;
+}
+function renderPalette(q) {
+  const ql = q.toLowerCase();
+  const items = paletteItems().filter((i) => i.label.toLowerCase().includes(ql)).slice(0, 30);
+  $('#palette-list').innerHTML = items.map((i) => `<li data-path="${encodeURIComponent(i.path)}">${i.label}</li>`).join('');
+}
+
+function wirePalette() {
+  $('#palette-input').addEventListener('input', (e) => renderPalette(e.target.value));
+  $('#palette-list').addEventListener('click', (e) => {
+    const li = e.target.closest('li[data-path]');
+    if (li) { $('#palette').classList.add('hidden'); openDrawer(decodeURIComponent(li.dataset.path)); }
+  });
+}
+
+function addJournal(entry) {
+  const li = document.createElement('li');
+  li.innerHTML = `<span class="j-mode">${entry.mode || ''}</span>${entry.cmd}`;
+  $('#journal-list').appendChild(li);
+  $('#journal').scrollTop = $('#journal').scrollHeight;
+}
+
+function connectSSE() {
+  const es = new EventSource('/api/events');
+  es.addEventListener('worktrees', (e) => { state.snapshot = JSON.parse(e.data); render(); });
+  es.addEventListener('journal', (e) => addJournal(JSON.parse(e.data)));
+  es.addEventListener('task', (e) => {
+    const d = JSON.parse(e.data);
+    const buf = (state.taskBuf[d.path] ||= { text: '', done: false });
+    if (d.chunk) buf.text += d.chunk;
+    if (d.done) buf.done = true;
+    renderTaskPanel(d.path);
+  });
+}
+
+async function init() {
+  state.config = await fetch('/api/config').then((r) => r.json());
+  setMode(localStorage.getItem('forest-mode') || state.config.defaultMode);
+  state.snapshot = await fetch('/api/worktrees').then((r) => r.json());
+  (await fetch('/api/journal').then((r) => r.json())).forEach(addJournal);
+  render();
+  wireEvents();
+  wirePalette();
+  connectSSE();
+}
+init();
