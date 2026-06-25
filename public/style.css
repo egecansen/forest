@@ -1,13 +1,20 @@
-/* Forest — field-instrument theme. Light + dark via [data-theme] on <html>. */
+/* Forest — field-instrument theme. Light + dark via [data-theme] on <html>.
+   Type: self-hosted IBM Plex (bundled woff2, offline — no CDN). */
+
+@font-face { font-family: "IBM Plex Sans"; font-style: normal; font-weight: 400; font-display: swap; src: url("/fonts/plex-sans-400.woff2") format("woff2"); }
+@font-face { font-family: "IBM Plex Sans"; font-style: normal; font-weight: 600; font-display: swap; src: url("/fonts/plex-sans-600.woff2") format("woff2"); }
+@font-face { font-family: "IBM Plex Mono"; font-style: normal; font-weight: 400; font-display: swap; src: url("/fonts/plex-mono-400.woff2") format("woff2"); }
+@font-face { font-family: "IBM Plex Mono"; font-style: normal; font-weight: 500; font-display: swap; src: url("/fonts/plex-mono-500.woff2") format("woff2"); }
+@font-face { font-family: "IBM Plex Serif"; font-style: normal; font-weight: 600; font-display: swap; src: url("/fonts/plex-serif-600.woff2") format("woff2"); }
 
 :root {
-  --font-ui: system-ui, -apple-system, "SF Pro Text", sans-serif;
-  --font-mono: ui-monospace, "SF Mono", SFMono-Regular, Menlo, monospace;
-  --font-serif: ui-serif, "New York", Georgia, serif;
+  --font-ui: "IBM Plex Sans", system-ui, -apple-system, sans-serif;
+  --font-mono: "IBM Plex Mono", ui-monospace, "SF Mono", Menlo, monospace;
+  --font-serif: "IBM Plex Serif", ui-serif, Georgia, serif;
 
   /* light — cool sage paper, pine ink, evergreen accent */
   --bg: #f3f5f1; --panel: #ffffff; --panel-2: #f7f9f5;
-  --line: #e3e7e0; --ink: #1b2620; --muted: #6c766e;
+  --line: #e3e7e0; --ink: #1b2620; --muted: #5b655d;
   --accent: #2f6f4f; --accent-weak: #e7f0ea;
   --green: #2c7a4b; --green-bg: #e7f1ea;
   --amber: #b56a22; --amber-bg: #f6ecdd;
@@ -20,23 +27,24 @@
 }
 
 :root[data-theme="dark"] {
-  --bg: #0d1311; --panel: #141b18; --panel-2: #101714;
-  --line: #232b27; --ink: #e6ebe5; --muted: #8b958c;
-  --accent: #5fae7e; --accent-weak: #16241c;
-  --green: #5fae7e; --green-bg: #15231b;
-  --amber: #d39a52; --amber-bg: #241d12;
-  --grey: #6f7a72; --stale-bg: #1a211d;
-  --run: #49b8d6;
-  --rail: #2a332d;
-  --shadow: rgba(0, 0, 0, .45);
-  --journal-bg: #0a0f0c; --journal-ink: #c9d3c7; --journal-mode: #d6a44a;
-  --term-bg: #0a0f0c; --term-ink: #e6ebe5;
+  /* clear surface hierarchy: bg darkest → panel → panel-2 raised */
+  --bg: #0c100e; --panel: #151c18; --panel-2: #1c241f;
+  --line: #2c352f; --ink: #e9eee8; --muted: #98a49b;
+  --accent: #66c08c; --accent-weak: #19281f;
+  --green: #66c08c; --green-bg: #18261d;
+  --amber: #e0a35b; --amber-bg: #2a2114;
+  --grey: #707b73; --stale-bg: #1d251f;
+  --run: #4fc1de;
+  --rail: #34403a;
+  --shadow: rgba(0, 0, 0, .5);
+  --journal-bg: #090c0a; --journal-ink: #cbd5c9; --journal-mode: #e0a35b;
+  --term-bg: #090c0a; --term-ink: #e9eee8;
 }
 
 * { box-sizing: border-box; }
 body {
-  margin: 0; font: 14px/1.5 var(--font-ui); color: var(--ink); background: var(--bg);
-  -webkit-font-smoothing: antialiased;
+  margin: 0; font: 14.5px/1.55 var(--font-ui); color: var(--ink); background: var(--bg);
+  -webkit-font-smoothing: antialiased; text-rendering: optimizeLegibility;
 }
 :focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; border-radius: 6px; }
 
@@ -77,28 +85,29 @@ header button:hover { border-color: var(--accent); }
 #theme-toggle { font-size: 15px; line-height: 1; padding: 8px 11px; }
 
 /* ---- table ---- */
-main { padding: 16px 18px 210px; }
+main { max-width: 1320px; margin: 0 auto; padding: 16px 18px 210px; }
 
 .cols, .row {
   display: grid;
-  grid-template-columns: minmax(0, 2.4fr) 1fr .85fr .9fr .55fr .55fr auto;
-  gap: 12px; align-items: center;
+  grid-template-columns: minmax(0, 1.8fr) minmax(0, .9fr) minmax(0, .75fr) minmax(0, .85fr) minmax(0, .5fr) minmax(0, .5fr) 150px;
+  gap: 14px; align-items: center;
 }
 .cols {
   position: sticky; top: 56px; z-index: 3;
-  padding: 6px 14px; margin-bottom: 8px;
+  padding: 8px 16px; margin-bottom: 8px;
   font-family: var(--font-mono); font-size: 11px; letter-spacing: .04em; text-transform: uppercase;
   color: var(--muted); background: var(--bg);
 }
+.col-age, .col-size { text-align: right; }
 
 .repo-group {
   position: relative; display: flex; flex-direction: column; margin-bottom: 16px;
   background: var(--panel); border: 1px solid var(--line); border-radius: 12px; overflow: hidden;
 }
 .repo-name {
-  font-family: var(--font-serif); font-size: 13.5px; font-weight: 600; color: var(--ink);
-  padding: 9px 14px; background: var(--panel-2); border-bottom: 1px solid var(--line);
-  display: flex; align-items: baseline; gap: 8px;
+  font-family: var(--font-serif); font-size: 15px; font-weight: 600; color: var(--ink);
+  padding: 10px 16px; background: var(--panel-2); border-bottom: 1px solid var(--line);
+  display: flex; align-items: baseline; gap: 9px;
 }
 .repo-count {
   font-family: var(--font-mono); font-size: 11px; font-weight: 500; color: var(--muted);
@@ -106,21 +115,22 @@ main { padding: 16px 18px 210px; }
 }
 
 .row {
-  padding: 9px 14px; background: transparent; border: none; border-top: 1px solid var(--line);
+  padding: 11px 16px; background: transparent; border: none; border-top: 1px solid var(--line);
   cursor: pointer; transition: background .12s;
 }
 .repo-name + .row { border-top: none; }
 .row:hover { background: var(--accent-weak); }
 
-/* branch rail — nested worktrees branch off their repo */
-.row.nested { padding-left: 40px; position: relative; }
-.row.nested::before {
-  content: ""; position: absolute; left: 22px; top: 0; bottom: 0;
+/* branch rail — nested worktrees branch off their repo. Indent only the
+   branch cell so columns 2-7 stay aligned with the header row. */
+.row.nested .col-branch { position: relative; padding-left: 24px; }
+.row.nested .col-branch::before {
+  content: ""; position: absolute; left: 6px; top: -11px; bottom: -11px;
   border-left: 1.5px solid var(--rail);
 }
-.row.nested:last-child::before { bottom: 50%; }
-.row.nested::after {
-  content: ""; position: absolute; left: 22px; top: 50%; width: 13px; height: 1.5px;
+.row.nested:last-child .col-branch::before { bottom: 50%; }
+.row.nested .col-branch::after {
+  content: ""; position: absolute; left: 6px; top: 50%; width: 12px; height: 1.5px;
   background: var(--rail); border-bottom-left-radius: 8px;
 }
 
@@ -144,9 +154,13 @@ main { padding: 16px 18px 210px; }
   100% { box-shadow: 0 0 0 0 transparent; }
 }
 
-.actions { display: flex; gap: 4px; justify-content: flex-end; }
-.actions button { border: none; background: transparent; cursor: pointer; font-size: 15px; padding: 3px 5px; border-radius: 7px; line-height: 1; }
-.actions button:hover { background: var(--accent-weak); }
+.actions { display: flex; gap: 5px; justify-content: flex-end; }
+.actions button {
+  width: 30px; height: 28px; display: inline-flex; align-items: center; justify-content: center;
+  border: 1px solid var(--line); background: var(--panel-2); color: var(--ink);
+  cursor: pointer; font-size: 14px; line-height: 1; border-radius: 8px; transition: border-color .12s, background .12s;
+}
+.actions button:hover { border-color: var(--accent); background: var(--accent-weak); }
 
 .ticket-link { color: var(--accent); text-decoration: none; }
 .ticket-link:hover { text-decoration: underline; }

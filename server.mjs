@@ -30,7 +30,7 @@ async function snapshot() {
   return buildSnapshot(config, { registry, nowMs: Date.now(), claudeProjectsDir: CLAUDE_PROJECTS, sizes });
 }
 
-const MIME = { '.html': 'text/html', '.css': 'text/css', '.js': 'text/javascript', '.json': 'application/json' };
+const MIME = { '.html': 'text/html', '.css': 'text/css', '.js': 'text/javascript', '.json': 'application/json', '.woff2': 'font/woff2', '.svg': 'image/svg+xml' };
 
 async function serveStatic(req, res) {
   let rel = req.url === '/' ? '/index.html' : req.url.split('?')[0];
