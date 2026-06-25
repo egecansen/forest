@@ -91,10 +91,14 @@ main { padding: 16px 18px 210px; }
   color: var(--muted); background: var(--bg);
 }
 
-.repo-group { position: relative; display: flex; flex-direction: column; gap: 3px; margin-bottom: 18px; }
+.repo-group {
+  position: relative; display: flex; flex-direction: column; margin-bottom: 16px;
+  background: var(--panel); border: 1px solid var(--line); border-radius: 12px; overflow: hidden;
+}
 .repo-name {
-  font-family: var(--font-serif); font-size: 14px; font-weight: 600; color: var(--ink);
-  margin: 4px 2px 5px; display: flex; align-items: baseline; gap: 8px;
+  font-family: var(--font-serif); font-size: 13.5px; font-weight: 600; color: var(--ink);
+  padding: 9px 14px; background: var(--panel-2); border-bottom: 1px solid var(--line);
+  display: flex; align-items: baseline; gap: 8px;
 }
 .repo-count {
   font-family: var(--font-mono); font-size: 11px; font-weight: 500; color: var(--muted);
@@ -102,21 +106,21 @@ main { padding: 16px 18px 210px; }
 }
 
 .row {
-  padding: 11px 14px; background: var(--panel); border: 1px solid var(--line);
-  border-radius: 10px; cursor: pointer; transition: border-color .12s, transform .06s;
+  padding: 9px 14px; background: transparent; border: none; border-top: 1px solid var(--line);
+  cursor: pointer; transition: background .12s;
 }
-.row:hover { border-color: var(--accent); }
-.row:active { transform: translateY(1px); }
+.repo-name + .row { border-top: none; }
+.row:hover { background: var(--accent-weak); }
 
 /* branch rail — nested worktrees branch off their repo */
-.row.nested { margin-left: 30px; background: var(--panel-2); position: relative; }
+.row.nested { padding-left: 40px; position: relative; }
 .row.nested::before {
-  content: ""; position: absolute; left: -19px; top: -3px; bottom: -3px;
+  content: ""; position: absolute; left: 22px; top: 0; bottom: 0;
   border-left: 1.5px solid var(--rail);
 }
 .row.nested:last-child::before { bottom: 50%; }
 .row.nested::after {
-  content: ""; position: absolute; left: -19px; top: 50%; width: 15px; height: 1.5px;
+  content: ""; position: absolute; left: 22px; top: 50%; width: 13px; height: 1.5px;
   background: var(--rail); border-bottom-left-radius: 8px;
 }
 
@@ -124,7 +128,7 @@ main { padding: 16px 18px 210px; }
 .col-owner { color: var(--muted); font-size: 13px; }
 .col-age, .col-size { font-family: var(--font-mono); font-size: 12px; color: var(--muted); font-variant-numeric: tabular-nums; }
 
-.badge { display: inline-block; padding: 2px 9px; border-radius: 999px; font-size: 12px; font-weight: 500; }
+.badge { display: inline-block; padding: 2px 9px; border-radius: 999px; font-size: 12px; font-weight: 600; }
 .b-clean { color: var(--green); background: var(--green-bg); }
 .b-changed { color: var(--amber); background: var(--amber-bg); }
 .b-stale { color: var(--muted); background: var(--stale-bg); }
