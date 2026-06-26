@@ -1,6 +1,8 @@
 {
   "port": 5577,
-  "roots": ["/Users/egecan.sen/sahibinden/repo"],
+  "roots": ["/absolute/path/to/your/code-root"],
+  "containers": ["APPS"],
+  "packsDir": "/absolute/path/to/your/SKLS",
   "jiraBaseUrl": "",
   "staleDays": 14,
   "defaultMode": "guided",
