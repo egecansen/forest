@@ -321,8 +321,11 @@ function renderPack(p, picked) {
   const kitSection = (p.kits && p.kits.length)
     ? `<div class="pk-group"><div class="pk-group-h">Kits</div>${p.kits.map((k) => skillRow(p.pack, 'kit', k.id, k.label, '', kits.includes(k.id))).join('')}</div>`
     : '';
+  const hooksSection = p.hooks
+    ? `<div class="pk-group"><div class="pk-group-h">Gates</div>${skillRow(p.pack, 'hooks', p.hooks.id, p.hooks.label, p.hooks.description, !!picked.hooks)}</div>`
+    : '';
   const head = `<div class="pk-pack-h"><label class="pk-all-row"><input type="checkbox" class="pk-all" /> Select all ${esc(p.pack)}</label></div>`;
-  return `<div class="pk-pack">${head}${sections}${kitSection}</div>`;
+  return `<div class="pk-pack">${head}${sections}${kitSection}${hooksSection}</div>`;
 }
 
 // Reflect each pack's "Select all" master from its individual checkboxes
@@ -360,8 +363,10 @@ function updatePickerCount() {
 function collectSel() {
   const sel = {};
   document.querySelectorAll('#pk-body .pk-cb:checked').forEach((cb) => {
-    const p = (sel[cb.dataset.pack] ||= { skills: [], kits: [] });
-    (cb.dataset.kind === 'kit' ? p.kits : p.skills).push(cb.dataset.id);
+    const p = (sel[cb.dataset.pack] ||= { skills: [], kits: [], hooks: false });
+    if (cb.dataset.kind === 'kit') p.kits.push(cb.dataset.id);
+    else if (cb.dataset.kind === 'hooks') p.hooks = true;
+    else p.skills.push(cb.dataset.id);
   });
   return sel;
 }
@@ -370,7 +375,7 @@ async function startSession() {
   if (!path) return;
   const sel = collectSel();
   saveSel(path, sel);
-  const selections = Object.entries(sel).map(([pack, v]) => ({ pack, skills: v.skills, kits: v.kits }));
+  const selections = Object.entries(sel).map(([pack, v]) => ({ pack, skills: v.skills, kits: v.kits, hooks: v.hooks }));
   const btn = $('#pk-start');
   btn.disabled = true;
   const r = await api('/api/launch', { path, selections, mode: state.mode });
@@ -378,8 +383,8 @@ async function startSession() {
   if (!r || (!r.ok && r.error)) { toast(`Launch failed: ${(r && r.error) || 'server unreachable'}`); return; }
   closePicker();
   const prov = r.provisioned;
-  const provMsg = prov && (prov.skills.length || prov.kits.length)
-    ? `${prov.skills.length} skill(s)${prov.kits.length ? `, ${prov.kits.length} kit(s)` : ''} · ` : '';
+  const provMsg = prov && (prov.skills.length || prov.kits.length || prov.hooks)
+    ? `${prov.skills.length} skill(s)${prov.kits.length ? `, ${prov.kits.length} kit(s)` : ''}${prov.hooks ? ', gates' : ''} · ` : '';
   toast(r.action === 'focused' ? 'Claude already running — Terminal brought to front' : `${provMsg}Launching Claude…`);
 }
 
@@ -413,10 +418,39 @@ function wireEvents() {
     if (row) openDrawer(decodeURIComponent(row.dataset.path));
   });
 
+  wireDrawerResize();
+
   document.addEventListener('keydown', (e) => {
     if ((e.metaKey || e.ctrlKey) && e.key === 'k') { e.preventDefault(); togglePalette(); }
     if (e.key === 'Escape') { $('#palette').classList.add('hidden'); $('#drawer').classList.add('hidden'); $('#newwt').classList.add('hidden'); $('#picker').classList.add('hidden'); }
   });
+}
+
+function setDrawerWidth(px) {
+  const w = Math.min(window.innerWidth * 0.95, Math.max(360, px));
+  document.documentElement.style.setProperty('--drawer-w', `${Math.round(w)}px`);
+}
+function wireDrawerResize() {
+  const handle = $('#drawer-resize');
+  let dragging = false;
+  handle.addEventListener('pointerdown', (e) => {
+    dragging = true; handle.classList.add('dragging');
+    try { handle.setPointerCapture(e.pointerId); } catch { /* synthetic/edge pointer */ }
+    document.body.style.userSelect = 'none';
+    e.preventDefault();
+  });
+  handle.addEventListener('pointermove', (e) => {
+    if (dragging) setDrawerWidth(window.innerWidth - e.clientX); // drawer is right-anchored
+  });
+  const end = () => {
+    if (!dragging) return;
+    dragging = false; handle.classList.remove('dragging');
+    document.body.style.userSelect = '';
+    localStorage.setItem('forest-drawer-w', getComputedStyle(document.documentElement).getPropertyValue('--drawer-w').trim());
+  };
+  handle.addEventListener('pointerup', end);
+  handle.addEventListener('pointercancel', end);
+  handle.addEventListener('dblclick', () => { localStorage.removeItem('forest-drawer-w'); document.documentElement.style.removeProperty('--drawer-w'); });
 }
 
 function togglePalette() {
@@ -476,6 +510,8 @@ function connectSSE() {
 
 async function init() {
   syncThemeButton();
+  const savedW = localStorage.getItem('forest-drawer-w');
+  if (savedW) document.documentElement.style.setProperty('--drawer-w', savedW);
   setJournalCollapsed(localStorage.getItem('forest-journal') === 'collapsed');
   state.config = await fetch('/api/config').then((r) => r.json());
   setMode(localStorage.getItem('forest-mode') || state.config.defaultMode);

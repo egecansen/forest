@@ -11,6 +11,7 @@
   --font-ui: "IBM Plex Sans", system-ui, -apple-system, sans-serif;
   --font-mono: "IBM Plex Mono", ui-monospace, "SF Mono", Menlo, monospace;
   --font-serif: "IBM Plex Serif", ui-serif, Georgia, serif;
+  --drawer-w: min(46vw, 620px); /* resizable: dragged via #drawer-resize */
 
   /* light — cool sage paper, pine ink, evergreen accent */
   --bg: #f3f5f1; --panel: #ffffff; --panel-2: #f7f9f5;
@@ -184,10 +185,15 @@ main { max-width: 1320px; margin: 0 auto; padding: 16px 18px 210px; }
 
 /* ---- drawer ---- */
 .drawer {
-  position: fixed; top: 0; right: 0; width: min(46vw, 620px); height: 100vh;
+  position: fixed; top: 0; right: 0; width: var(--drawer-w); height: 100vh;
   background: var(--panel); border-left: 1px solid var(--line); padding: 20px; overflow: auto;
   z-index: 7; box-shadow: -10px 0 40px var(--shadow);
 }
+/* drag-to-resize handle sitting on the drawer's left edge (shown with the drawer) */
+#drawer-resize { display: none; position: fixed; top: 0; bottom: 0; right: var(--drawer-w); width: 9px; z-index: 8; cursor: ew-resize; touch-action: none; }
+#drawer:not(.hidden) ~ #drawer-resize { display: block; }
+#drawer-resize::before { content: ''; position: absolute; inset: 0 3px; background: var(--line); opacity: 0; transition: opacity .15s; }
+#drawer-resize:hover::before, #drawer-resize.dragging::before { opacity: 1; background: var(--accent); }
 .drawer h3 { font-family: var(--font-mono); font-size: 15px; margin: 4px 0 2px; word-break: break-all; }
 .drawer h4 { font-size: 12px; text-transform: uppercase; letter-spacing: .05em; color: var(--muted); margin: 18px 0 8px; }
 .drawer .meta-line { color: var(--muted); font-size: 13px; margin: 0; }
@@ -331,6 +337,7 @@ main { max-width: 1320px; margin: 0 auto; padding: 16px 18px 210px; }
   .cols, .row { grid-template-columns: minmax(0, 2fr) 1fr .9fr auto; }
   .col-age, .col-size { display: none; }
   .drawer { width: 100vw; }
+  #drawer-resize { display: none !important; }
 }
 @media (max-width: 560px) {
   .cols, .row { grid-template-columns: minmax(0, 1.6fr) auto auto; }
