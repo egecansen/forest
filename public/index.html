@@ -75,6 +75,19 @@
     </div>
   </div>
 
+  <div id="picker" class="modal hidden">
+    <div class="modal-card picker-card">
+      <h3>Start a Claude session</h3>
+      <p class="picker-sub" id="pk-sub"></p>
+      <div id="pk-body" class="pk-body"></div>
+      <div class="modal-actions">
+        <span id="pk-count" class="pk-count"></span>
+        <button id="pk-cancel" class="btn-ghost">Cancel</button>
+        <button id="pk-start" class="btn-accent">Start session</button>
+      </div>
+    </div>
+  </div>
+
   <div id="toast" class="toast hidden"></div>
 
   <script type="module" src="/app.js"></script>
