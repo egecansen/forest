@@ -1,7 +1,15 @@
 #!/usr/bin/env bash
 set -euo pipefail
-DIR="$HOME/sahibinden/forest"
-PORT="$(node --input-type=commonjs -e "try{process.stdout.write(String(JSON.parse(require('fs').readFileSync(process.env.HOME+'/sahibinden/forest/config.json','utf8')).port||5577))}catch(e){process.stdout.write('5577')}" 2>/dev/null || echo 5577)"
+# Resolve this script's real directory, following the launcher symlink, so
+# Forest works wherever the project lives (no hardcoded path).
+SOURCE="${BASH_SOURCE[0]}"
+while [ -L "$SOURCE" ]; do
+  LINKDIR="$(cd -P "$(dirname "$SOURCE")" && pwd)"
+  SOURCE="$(readlink "$SOURCE")"
+  [[ $SOURCE != /* ]] && SOURCE="$LINKDIR/$SOURCE"
+done
+DIR="$(cd -P "$(dirname "$SOURCE")/.." && pwd)"
+PORT="$(node --input-type=commonjs -e "try{process.stdout.write(String(JSON.parse(require('fs').readFileSync('$DIR/config.json','utf8')).port||5577))}catch(e){process.stdout.write('5577')}" 2>/dev/null || echo 5577)"
 if ! curl -s "http://127.0.0.1:${PORT}/api/config" >/dev/null 2>&1; then
   (cd "$DIR" && nohup node server.mjs >/tmp/forest.log 2>&1 &)
   started=0

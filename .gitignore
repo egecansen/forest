@@ -3,3 +3,5 @@ node_modules/
 config.json
 config.local.json
 *.log
+.playwright-mcp/
+forest-*.png
