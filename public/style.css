@@ -108,9 +108,16 @@ main { max-width: 1320px; margin: 0 auto; padding: 16px 18px 210px; }
 }
 .repo-name {
   font-family: var(--font-serif); font-size: 15px; font-weight: 600; color: var(--ink);
-  padding: 10px 16px; background: var(--panel-2); border-bottom: 1px solid var(--line);
-  display: flex; align-items: baseline; gap: 9px;
+  padding: 7px 10px 7px 16px; background: var(--panel-2); border-bottom: 1px solid var(--line);
+  display: flex; align-items: center; gap: 9px;
 }
+.repo-name-label { display: inline-flex; align-items: baseline; gap: 9px; }
+.repo-add {
+  margin-left: auto; font: 12px var(--font-ui); color: var(--muted);
+  background: transparent; border: 1px solid transparent; padding: 4px 10px;
+  border-radius: 8px; cursor: pointer; transition: color .12s, border-color .12s, background .12s;
+}
+.repo-add:hover { color: var(--accent); border-color: var(--accent); background: var(--accent-weak); }
 .repo-count {
   font-family: var(--font-mono); font-size: 11px; font-weight: 500; color: var(--muted);
   border: 1px solid var(--line); border-radius: 999px; padding: 0 7px;

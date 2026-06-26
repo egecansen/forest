@@ -89,7 +89,7 @@ function render() {
     const shown = r.worktrees.filter((w) => matches(w, r.repo));
     const rows = shown.map((w) => rowHtml(w, r.repo)).join('');
     if (!rows) return '';
-    return `<div class="repo-group"><div class="repo-name">${esc(r.repo)}<span class="repo-count">${shown.length}</span></div>${rows}</div>`;
+    return `<div class="repo-group"><div class="repo-name"><span class="repo-name-label">${esc(r.repo)}<span class="repo-count">${shown.length}</span></span><button class="repo-add" data-repo="${esc(r.repoPath)}" title="New worktree in ${esc(r.repo)}">+ worktree</button></div>${rows}</div>`;
   }).join('');
   $('#table').innerHTML = html || '<p class="empty">No worktrees match.</p>';
   renderReadout();
@@ -176,9 +176,10 @@ async function doAction(act, ds) {
   }
 }
 
-function openNewWorktree() {
+function openNewWorktree(repoPath) {
   const sel = $('#nw-repo');
   sel.innerHTML = state.snapshot.repos.map((r) => `<option value="${esc(r.repoPath)}">${esc(r.repo)}</option>`).join('');
+  if (repoPath) sel.value = repoPath;
   $('#nw-branch').value = '';
   $('#nw-base').value = '';
   $('#nw-newbranch').checked = true;
@@ -213,6 +214,8 @@ function wireEvents() {
   $('#fetch-all').onclick = async () => { const r = await api('/api/fetch-all', { mode: state.mode }); toast(state.mode === 'guided' ? 'Sent to terminal' : 'Fetched all'); };
 
   $('#table').addEventListener('click', (e) => {
+    const add = e.target.closest('.repo-add');
+    if (add) { e.stopPropagation(); openNewWorktree(add.dataset.repo); return; }
     const btn = e.target.closest('button[data-act]');
     if (btn) { e.stopPropagation(); doAction(btn.dataset.act, btn.dataset); return; }
     const row = e.target.closest('.row[data-path]');
