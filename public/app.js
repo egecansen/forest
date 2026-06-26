@@ -159,7 +159,7 @@ async function doAction(act, ds) {
   if (act === 'launch') {
     const r = await api('/api/launch', { path });
     if (!r || !r.ok) { toast(`Launch failed: ${(r && r.error) || 'server unreachable'}`); return; }
-    toast(r.action === 'focused' ? 'Focused running Claude session' : 'Launching Claude…');
+    toast(r.action === 'focused' ? 'Claude already running — Terminal brought to front' : 'Launching Claude…');
     return;
   }
   if (act === 'open-cursor') { await api('/api/open', { path, target: 'cursor' }); return; }
