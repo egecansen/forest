@@ -205,6 +205,7 @@ async function submitNewWorktree() {
 function wireEvents() {
   $('#mode-toggle').onclick = () => setMode(state.mode === 'auto' ? 'guided' : 'auto');
   $('#theme-toggle').onclick = toggleTheme;
+  $('#journal-toggle').onclick = () => setJournalCollapsed(!$('#journal').classList.contains('collapsed'));
   $('#new-wt').onclick = openNewWorktree;
   $('#nw-cancel').onclick = closeNewWorktree;
   $('#nw-create').onclick = submitNewWorktree;
@@ -255,11 +256,19 @@ function wirePalette() {
   });
 }
 
+function setJournalCollapsed(collapsed) {
+  $('#journal').classList.toggle('collapsed', collapsed);
+  document.documentElement.classList.toggle('journal-collapsed', collapsed);
+  localStorage.setItem('forest-journal', collapsed ? 'collapsed' : 'open');
+}
+
 function addJournal(entry) {
   const li = document.createElement('li');
   li.innerHTML = `<span class="j-mode">${esc(entry.mode || '')}</span>${esc(entry.cmd)}`;
-  $('#journal-list').appendChild(li);
-  $('#journal').scrollTop = $('#journal').scrollHeight;
+  const list = $('#journal-list');
+  list.appendChild(li);
+  $('#journal-count').textContent = `· ${list.children.length}`;
+  if (!$('#journal').classList.contains('collapsed')) $('#journal').scrollTop = $('#journal').scrollHeight;
 }
 
 function connectSSE() {
@@ -277,6 +286,7 @@ function connectSSE() {
 
 async function init() {
   syncThemeButton();
+  setJournalCollapsed(localStorage.getItem('forest-journal') === 'collapsed');
   state.config = await fetch('/api/config').then((r) => r.json());
   setMode(localStorage.getItem('forest-mode') || state.config.defaultMode);
   state.snapshot = await fetch('/api/worktrees').then((r) => r.json());
