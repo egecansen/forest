@@ -255,6 +255,11 @@ main { max-width: 1320px; margin: 0 auto; padding: 16px 18px 210px; }
 .btn-accent:hover { background: var(--accent); color: var(--bg); }
 .btn-accent:disabled { opacity: .55; cursor: default; }
 
+.apply-row { display: flex; gap: 8px; align-items: center; margin-bottom: 4px; }
+.apply-row select { flex: 1; padding: 8px 10px; font: 13px var(--font-mono); color: var(--ink); background: var(--bg); border: 1px solid var(--line); border-radius: 8px; }
+.apply-row select:focus { outline: none; border-color: var(--accent); }
+.apply-row .btn-accent { padding: 8px 14px; white-space: nowrap; }
+
 .hidden { display: none !important; }
 
 /* ---- responsive ---- */

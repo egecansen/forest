@@ -116,6 +116,11 @@ function findWorktree(path) {
   return null;
 }
 
+function siblingWorktrees(w) {
+  const repo = state.snapshot.repos.find((r) => r.repoPath === w.repoPath);
+  return repo ? repo.worktrees.filter((x) => x.path !== w.path) : [];
+}
+
 function colorizeDiff(text) {
   return text.split('\n').map((l) => {
     const e = l.replace(/&/g, '&amp;').replace(/</g, '&lt;');
@@ -131,12 +136,30 @@ async function openDrawer(path) {
   if (!w) return;
   const d = $('#drawer');
   d.classList.remove('hidden');
+  const sibs = siblingWorktrees(w);
+  const applyHtml = (w.status.dirty && sibs.length)
+    ? `<h4>Move uncommitted changes to…</h4>
+       <div class="apply-row">
+         <select id="apply-target">${sibs.map((s) => `<option value="${esc(s.path)}">${esc(s.branch || '(detached)')}</option>`).join('')}</select>
+         <button id="apply-go" class="btn-accent">Apply diff</button>
+       </div>`
+    : '';
   d.innerHTML = `<button id="drawer-close" class="drawer-close">Close ✕</button>
     <h3>${esc(w.branch) || '(detached)'}</h3>
     <p class="meta-line">${esc(w.repo)} · ${esc(w.owner)} · ${ageCell(w)} · ${sizeCell(w)}</p>
+    ${applyHtml}
     <div id="task-panel"></div>
     <h4>Diff</h4><pre id="diff">loading…</pre>`;
   $('#drawer-close').onclick = () => d.classList.add('hidden');
+  const applyBtn = $('#apply-go');
+  if (applyBtn) applyBtn.onclick = async () => {
+    const targetPath = $('#apply-target').value;
+    applyBtn.disabled = true;
+    const r = await api('/api/worktree/apply-diff', { sourcePath: w.path, targetPath, mode: state.mode });
+    applyBtn.disabled = false;
+    if (r && r.error) { toast(`Error: ${r.error}`); return; }
+    toast(state.mode === 'guided' ? 'Apply sent to terminal' : 'Diff applied');
+  };
   const buf = state.taskBuf[path];
   if (buf) renderTaskPanel(path);
   const res = await fetch(`/api/diff?path=${encodeURIComponent(path)}`).then((r) => r.json());
