@@ -7,6 +7,7 @@ import { buildSnapshot } from './lib/discover.mjs';
 import { createRegistry } from './lib/agents.mjs';
 import { createJournal } from './lib/journal.mjs';
 import { runGit } from './lib/git.mjs';
+import { listPacks } from './lib/packs.mjs';
 import { createActionHandler } from './lib/actions.mjs';
 
 const ROOT = fileURLToPath(new URL('.', import.meta.url));
@@ -79,10 +80,13 @@ const server = http.createServer(async (req, res) => {
   if (url === '/api/config') return sendJson(res, config);
   if (url === '/api/worktrees') return sendJson(res, await snapshot());
   if (url === '/api/journal') return sendJson(res, journal.recent());
+  if (url === '/api/packs') return sendJson(res, { packs: await listPacks(config.packsDir) });
   if (url === '/api/diff') {
     const p = new URL(req.url, 'http://x').searchParams.get('path');
     if (!p) return sendJson(res, { diff: '', error: 'path required' }, 400);
-    try { return sendJson(res, { diff: await runGit(p, ['diff']) }); }
+    // `diff HEAD` shows staged + unstaged together (what changed since the last
+    // commit), matching how GitHub Desktop presents a worktree's changes.
+    try { return sendJson(res, { diff: await runGit(p, ['diff', 'HEAD']) }); }
     catch (e) { return sendJson(res, { diff: '', error: String(e) }); }
   }
   if (url.startsWith('/api/')) return handleAction(req, res, ctx, readBody);
