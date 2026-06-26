@@ -156,7 +156,7 @@ function renderTaskPanel(path) {
 
 async function doAction(act, ds) {
   const path = decodeURIComponent(ds.path);
-  if (act === 'launch') { await api('/api/launch', { path }); toast('Launching Claude…'); return; }
+  if (act === 'launch') { const r = await api('/api/launch', { path }); toast(r && r.ok ? 'Launching Claude…' : `Launch failed: ${r.error || 'server unreachable'}`); return; }
   if (act === 'open-cursor') { await api('/api/open', { path, target: 'cursor' }); return; }
   if (act === 'task') {
     const prompt = state.mode === 'auto' ? window.prompt('Task for Claude (headless):') : null;
