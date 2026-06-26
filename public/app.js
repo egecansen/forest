@@ -176,9 +176,39 @@ async function doAction(act, ds) {
   }
 }
 
+function openNewWorktree() {
+  const sel = $('#nw-repo');
+  sel.innerHTML = state.snapshot.repos.map((r) => `<option value="${esc(r.repoPath)}">${esc(r.repo)}</option>`).join('');
+  $('#nw-branch').value = '';
+  $('#nw-base').value = '';
+  $('#nw-newbranch').checked = true;
+  $('#newwt').classList.remove('hidden');
+  $('#nw-branch').focus();
+}
+function closeNewWorktree() { $('#newwt').classList.add('hidden'); }
+async function submitNewWorktree() {
+  const repoPath = $('#nw-repo').value;
+  const branch = $('#nw-branch').value.trim();
+  if (!branch) { toast('Enter a branch or ticket name'); $('#nw-branch').focus(); return; }
+  const newBranch = $('#nw-newbranch').checked;
+  const base = $('#nw-base').value.trim() || undefined;
+  const btn = $('#nw-create');
+  btn.disabled = true;
+  const r = await api('/api/worktree/create', { repoPath, branch, newBranch, base, mode: state.mode });
+  btn.disabled = false;
+  if (r && r.error) { toast(`Error: ${r.error}`); return; }
+  closeNewWorktree();
+  toast(state.mode === 'guided' ? 'Create sent to terminal' : 'Worktree created');
+}
+
 function wireEvents() {
   $('#mode-toggle').onclick = () => setMode(state.mode === 'auto' ? 'guided' : 'auto');
   $('#theme-toggle').onclick = toggleTheme;
+  $('#new-wt').onclick = openNewWorktree;
+  $('#nw-cancel').onclick = closeNewWorktree;
+  $('#nw-create').onclick = submitNewWorktree;
+  $('#newwt').addEventListener('click', (e) => { if (e.target.id === 'newwt') closeNewWorktree(); });
+  $('#nw-branch').addEventListener('keydown', (e) => { if (e.key === 'Enter') submitNewWorktree(); });
   $('#search').oninput = (e) => { state.filter = e.target.value; render(); };
   $('#fetch-all').onclick = async () => { const r = await api('/api/fetch-all', { mode: state.mode }); toast(state.mode === 'guided' ? 'Sent to terminal' : 'Fetched all'); };
 
@@ -191,7 +221,7 @@ function wireEvents() {
 
   document.addEventListener('keydown', (e) => {
     if ((e.metaKey || e.ctrlKey) && e.key === 'k') { e.preventDefault(); togglePalette(); }
-    if (e.key === 'Escape') { $('#palette').classList.add('hidden'); $('#drawer').classList.add('hidden'); }
+    if (e.key === 'Escape') { $('#palette').classList.add('hidden'); $('#drawer').classList.add('hidden'); $('#newwt').classList.add('hidden'); }
   });
 }
 

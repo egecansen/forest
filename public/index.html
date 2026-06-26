@@ -20,6 +20,7 @@
     <div class="brand"><span class="brand-mark">🌲</span> Forest</div>
     <div id="readout" class="readout"></div>
     <input id="search" type="search" placeholder="Filter by repo, branch, or ticket…" />
+    <button id="new-wt" title="Create a worktree">+ New</button>
     <button id="fetch-all" title="git fetch all repos">Fetch all</button>
     <button id="mode-toggle" class="mode-guided" title="Toggle guided / auto">Guided</button>
     <button id="theme-toggle" title="Toggle light / dark">☾</button>
@@ -48,6 +49,28 @@
   <div id="palette" class="palette hidden">
     <input id="palette-input" type="text" placeholder="Jump to worktree or action…" />
     <ul id="palette-list"></ul>
+  </div>
+
+  <div id="newwt" class="modal hidden">
+    <div class="modal-card">
+      <h3>New worktree</h3>
+      <label>Repository
+        <select id="nw-repo"></select>
+      </label>
+      <label>Branch / ticket
+        <input id="nw-branch" type="text" placeholder="tech/SUI-99999" autocomplete="off" spellcheck="false" />
+      </label>
+      <label class="row-inline">
+        <input id="nw-newbranch" type="checkbox" checked /> Create a new branch
+      </label>
+      <label>Base <span class="hint">— optional, defaults to the repo's current HEAD</span>
+        <input id="nw-base" type="text" placeholder="master" autocomplete="off" spellcheck="false" />
+      </label>
+      <div class="modal-actions">
+        <button id="nw-cancel" class="btn-ghost">Cancel</button>
+        <button id="nw-create" class="btn-accent">Create</button>
+      </div>
+    </div>
   </div>
 
   <div id="toast" class="toast hidden"></div>
