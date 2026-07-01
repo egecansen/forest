@@ -1,0 +1,48 @@
+#!/bin/bash
+# core/apply.sh — apply a fix to the WORKING TREE (git-tracked), show the diff.
+#
+# Enforces: I3 (clean tree; confined to source_roots; git-reversible) · I8 (NEVER commit) · I10 (rev-pin)
+# Contract: stdin JSON {file, old, new} → literal-replace unique `old`→`new` in `file`, print `git diff`.
+#           Refuses if file ∉ source_roots, the tree is dirty (unless APPLY_ALLOW_DIRTY=1), or `old` not unique.
+set -uo pipefail
+HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"; CFG="$HERE/config.json"
+for t in jq git python3; do command -v "$t" >/dev/null || { echo "apply: $t required" >&2; exit 69; }; done
+REPO="$(git -C "$HERE" rev-parse --show-toplevel)"   # repo from the script's own dir, not the caller's cwd
+
+REQ="$(cat)"
+FILE="$(jq -r '.file // empty' <<<"$REQ")"; OLD="$(jq -r '.old // empty' <<<"$REQ")"; NEW="$(jq -r '.new // ""' <<<"$REQ")"
+[ -n "$FILE" ] && [ -n "$OLD" ] || { echo "apply: need stdin JSON {file, old, new}" >&2; exit 64; }
+
+case "$FILE" in /*) abs="$FILE";; *) abs="$REPO/$FILE";; esac
+[ -f "$abs" ] || { echo "apply: no such file: $FILE" >&2; exit 66; }
+# I3 (V-2): canonicalize BEFORE confinement. A string `startswith` on a raw path is
+# ../-bypassable — web-ui-test/src/test/java/../../../../etc/shadow passes the prefix test
+# yet resolves outside source_roots. realpath() collapses .. and symlinks first.
+abs="$(REPO="$REPO" CFG="$CFG" python3 - "$abs" <<'PY'
+import os,sys,json
+t=os.path.realpath(sys.argv[1])
+repo=os.path.realpath(os.environ["REPO"])
+roots=[os.path.realpath(os.path.join(repo,r)) for r in (json.load(open(os.environ["CFG"])).get("source_roots") or [])]
+if not any(t==r or t.startswith(r+os.sep) for r in roots):
+    sys.stderr.write("I3: target outside source_roots (post-canonicalize): %s\n"%t); sys.exit(77)
+print(t)
+PY
+)" || exit $?
+rel="${abs#$REPO/}"
+# I3: clean tree — don't tangle with WIP
+if [ "${APPLY_ALLOW_DIRTY:-0}" != "1" ] && [ -n "$(git -C "$REPO" status --porcelain -- "$abs")" ]; then
+  echo "I3: $rel has uncommitted changes — refusing (set APPLY_ALLOW_DIRTY=1 to override)" >&2; exit 75
+fi
+REV="$(git -C "$REPO" rev-parse --short HEAD)"   # I10: pin
+
+OLD="$OLD" NEW="$NEW" python3 - "$abs" <<'PY' || exit $?
+import os,sys
+p=sys.argv[1]; s=open(p).read(); old=os.environ["OLD"]
+c=s.count(old)
+if c!=1:
+    sys.stderr.write("apply: 'old' must match exactly once (found %d)\n"%c); sys.exit(65)
+open(p,"w").write(s.replace(old,os.environ["NEW"],1))
+PY
+
+echo "apply: edited $rel at rev $REV — kit does NOT commit (I8); review the diff + commit yourself:" >&2
+git -C "$REPO" --no-pager diff -- "$abs"

@@ -1,0 +1,9 @@
+# macOS
+.DS_Store
+
+# Hektor runtime state (written into installed projects, not the pack)
+docs/hektor/.hook-audit.log
+docs/hektor/.cursor-hook-payload.log
+docs/hektor/observations.jsonl
+docs/hektor/memory-proposals.md
+docs/hektor/skill-stocktake.json

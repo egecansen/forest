@@ -1,0 +1,46 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "hektor/subagent-returns/reviewer.schema.json",
+  "title": "Reviewer return",
+  "description": "Return shape for workflow-reviewer-* / phase-validator-* dispatches. Pairs with reviewer-brief-gate (PreToolUse) and reviewer-attestation-gate (PostToolUse): an approve verdict must carry an attestation citing real on-disk files.",
+  "type": "object",
+  "additionalProperties": true,
+  "required": ["handover", "verdict"],
+  "properties": {
+    "handover": { "$ref": "handover.schema.json" },
+    "verdict": {
+      "type": "string",
+      "enum": ["approve", "reject", "escalate"]
+    },
+    "attestation": {
+      "type": "string",
+      "description": "What was verified on disk, citing the files read. Required when verdict is approve."
+    },
+    "checklist": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "criterion": { "type": "string" },
+          "met": { "type": "boolean" },
+          "evidence": { "type": "string" }
+        }
+      }
+    },
+    "findings": {
+      "type": "array",
+      "items": { "type": "string" },
+      "description": "Required reasons when verdict is reject or escalate."
+    }
+  },
+  "allOf": [
+    {
+      "if": { "properties": { "verdict": { "const": "approve" } } },
+      "then": { "required": ["attestation"] }
+    },
+    {
+      "if": { "properties": { "verdict": { "const": "reject" } } },
+      "then": { "required": ["findings"] }
+    }
+  ]
+}

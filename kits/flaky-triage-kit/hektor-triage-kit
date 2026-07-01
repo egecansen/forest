@@ -1,0 +1,40 @@
+#!/bin/bash
+# hektor-triage-kit — the kit's command-line entrypoint.
+#
+#   hektor-triage-kit install [--harness all|claude|cursor|agents|both] [--project <dir>] [--no-autoconfig]
+#       Install into a repo and wire EVERY harness (Claude Code + Cursor + AGENTS.md) in one shot, and
+#       auto-detect JDK 17 + source_roots so there is no manual config step. Idempotent.
+#   hektor-triage-kit lock | unlock | status
+#       OS-level self-protection wall for an installed kit (proxies core/lock-kit.sh in the target repo).
+#   hektor-triage-kit link [<bindir>]
+#       Symlink this command onto PATH (default ~/.local/bin) so `hektor-triage-kit` works from anywhere.
+#   hektor-triage-kit help
+set -uo pipefail
+HERE="$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")" && pwd)"
+sub="${1:-help}"; [ $# -gt 0 ] && shift
+
+case "$sub" in
+  install)
+    exec "$HERE/install.sh" "$@" ;;
+
+  lock|unlock|status)
+    PROJ="$(pwd)"
+    # allow: hektor-triage-kit lock --project <dir>
+    [ "${1:-}" = "--project" ] && { PROJ="${2:-$PROJ}"; }
+    LK="$PROJ/.claude/skills/hektor-flaky-triage/core/lock-kit.sh"
+    [ -f "$LK" ] || { echo "hektor-triage-kit: kit not installed in $PROJ — run: hektor-triage-kit install" >&2; exit 66; }
+    exec "$LK" "$sub" ;;
+
+  link)
+    BINDIR="${1:-$HOME/.local/bin}"; mkdir -p "$BINDIR"
+    ln -sf "$HERE/hektor-triage-kit" "$BINDIR/hektor-triage-kit"
+    echo "linked -> $BINDIR/hektor-triage-kit"
+    case ":$PATH:" in *":$BINDIR:"*) ;; *) echo "note: add $BINDIR to PATH to call 'hektor-triage-kit' from anywhere" ;; esac ;;
+
+  -h|--help|help)
+    sed -n '2,11p' "${BASH_SOURCE[0]:-$0}" | sed 's/^# \{0,1\}//' ;;
+
+  *)
+    echo "hektor-triage-kit: unknown subcommand '$sub' (try: install | lock | unlock | status | link | help)" >&2
+    exit 64 ;;
+esac
