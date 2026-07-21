@@ -2,7 +2,7 @@
   "name": "hektor-console",
   "version": "0.1.0",
   "private": true,
-  "description": "\u015fahika \u2014 autonomous QA console.",
+  "description": "hektor \u2014 flaky triage console.",
   "scripts": {
     "dev": "concurrently -n server,client -c green,magenta \"npm:dev:server\" \"npm:dev:client\"",
     "dev:server": "npm --prefix server run dev",
