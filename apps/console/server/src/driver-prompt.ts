@@ -14,6 +14,7 @@ export function buildPrompt(config: RunConfig, opts: { resume: boolean }): strin
     '',
     'You are running under Hektor Console (a GUI) — there is no terminal user. Rules:',
     '- ALL user interaction goes through the AskUserQuestion tool (the console renders it). Never wait for free-text input.',
+    '- The user may answer any question with free text instead of (or in addition to) the offered options — treat such text as the authoritative answer.',
     '- After you build the meaning-bucket clusters table and BEFORE asking the pick, call mcp__hektor-console__set_clusters with the full table.',
     '- Ask the cluster pick as ONE AskUserQuestion (multiSelect: true, one option per cluster; option label = cluster id).',
     '- On every cluster state change (fixing / verifying pass n of N / green / app-bug / error) call mcp__hektor-console__cluster_status.',

@@ -3959,6 +3959,25 @@ button.tree-line.file {
 .question-option.is-picked .question-option-desc {
   color: var(--accent-ink);
 }
+.question-freetext {
+  width: 100%;
+  background: var(--surface-2);
+  border: 1px solid var(--border-strong);
+  color: var(--text);
+  padding: 9px 12px;
+  border-radius: 8px;
+  font-family: var(--mono);
+  font-size: 12px;
+  outline: none;
+  transition: border-color 0.15s, box-shadow 0.15s;
+}
+.question-freetext::placeholder {
+  color: var(--muted-2);
+}
+.question-freetext:focus {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px rgba(255, 212, 0, 0.15);
+}
 .question-submit {
   align-self: flex-end;
   margin-top: 4px;
