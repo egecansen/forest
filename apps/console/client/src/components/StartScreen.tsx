@@ -26,11 +26,14 @@ interface Props {
     testbox: string,
     permissionPolicy: RunConfig['permissionPolicy']
   ) => Promise<void>;
+  /** Seeds the report-URL field — set when arriving from the builds board
+   *  ("triage" on a row) or a `?triage=<url>` deep link. */
+  prefillReportUrl?: string;
 }
 
-export function StartScreen({ onStart }: Props) {
+export function StartScreen({ onStart, prefillReportUrl }: Props) {
   const [projectPath, setProjectPath] = useState('');
-  const [targetUrl, setTargetUrl] = useState('https://');
+  const [targetUrl, setTargetUrl] = useState(prefillReportUrl || 'https://');
   const [testbox, setTestbox] = useState('');
   const [permissionPolicy, setPermissionPolicy] = useState<RunConfig['permissionPolicy']>('confirm-applies');
   const [submitting, setSubmitting] = useState(false);

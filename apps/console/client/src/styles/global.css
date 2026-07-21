@@ -5029,3 +5029,181 @@ button.tree-line.file {
 :root[data-theme='light'] .record-toggle-box:checked {
   background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 12 12'%3E%3Cpath d='M2.6 6.2 L4.9 8.5 L9.4 3.4' fill='none' stroke='%235d7a12' stroke-width='1.6' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E");
 }
+
+/* ─── Builds board (landing view — recent Jenkins builds to triage) ──── */
+
+/* Widens the shared start-card frame — a build table needs more room than
+   the triage form's single input column. Both light and dark values come
+   from the surface/border/shadow tokens already flipped by [data-theme]. */
+.start-card.builds-board {
+  max-width: 920px;
+}
+
+.board-header {
+  display: flex;
+  align-items: baseline;
+  gap: 14px;
+  margin-bottom: 22px;
+  flex-wrap: wrap;
+}
+
+/* "hektor" wordmark atop the board — same italic display face as the start
+   screen's title, just dialed down since it now shares the header row. */
+.brand {
+  font-family: var(--font-display);
+  font-weight: 300;
+  font-style: italic;
+  font-size: 28px;
+  letter-spacing: -0.02em;
+  line-height: 1;
+  color: var(--text);
+}
+
+.board-header .field-note {
+  flex: 1;
+  min-width: 160px;
+  margin: 0;
+}
+
+.board-filters {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  margin-bottom: 16px;
+  flex-wrap: wrap;
+}
+
+.board-filters input {
+  background: var(--surface-2);
+  border: 1px solid var(--border-strong);
+  color: var(--text);
+  padding: 9px 12px;
+  border-radius: 8px;
+  font-family: var(--mono);
+  font-size: 12.5px;
+  outline: none;
+  transition: border-color 0.15s, box-shadow 0.15s;
+}
+
+.board-filters input::placeholder {
+  color: var(--muted-2);
+}
+
+.board-filters input:focus {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px rgba(255, 212, 0, 0.15);
+}
+
+.board-filters label {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  font-family: var(--mono);
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.board-filters input[type='checkbox'] {
+  accent-color: var(--accent);
+}
+
+.board-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-family: var(--mono);
+  font-size: 12.5px;
+  margin-bottom: 18px;
+}
+
+.board-table td {
+  padding: 10px;
+  border-bottom: 1px solid var(--border);
+  color: var(--text);
+  vertical-align: middle;
+}
+
+.board-table tr:hover td {
+  background: rgba(var(--raise-rgb), 0.04);
+}
+
+.board-table a {
+  color: var(--accent-ink);
+  text-decoration: none;
+}
+
+.board-table a:hover {
+  text-decoration: underline;
+}
+
+.board-table .btn {
+  padding: 6px 12px;
+  font-size: 11.5px;
+}
+
+/* Red build row (FAILURE/UNSTABLE) — yellow-accent card frame, err-toned row
+   so a flaky build reads as "pick me" without shouting over the rest. */
+.board-table tr.is-red td {
+  background: rgba(239, 68, 68, 0.06);
+  color: var(--err);
+}
+
+.board-table tr.is-red td:first-child {
+  box-shadow: inset 2px 0 0 var(--err);
+}
+
+/* In-progress build — accent-tinted, no err coloring (not a failure yet). */
+.board-table tr.is-running td {
+  background: var(--accent-tint);
+  color: var(--accent-ink);
+}
+
+.board-table tr.is-running td:first-child {
+  box-shadow: inset 2px 0 0 var(--accent);
+}
+
+/* Small pill noting a build was already triaged (spec: board doubles as
+   history-at-a-glance) — neutral tone, doesn't compete with the row's own
+   red/accent highlight. */
+.board-chip {
+  display: inline-flex;
+  align-items: center;
+  margin-left: 8px;
+  padding: 2px 8px;
+  border-radius: 999px;
+  font-family: var(--font);
+  font-size: 10px;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  font-weight: 600;
+  color: var(--muted);
+  background: rgba(var(--raise-rgb), 0.05);
+  border: 1px solid var(--border-strong);
+  white-space: nowrap;
+}
+
+.board-paste {
+  display: flex;
+  gap: 10px;
+}
+
+.board-paste input {
+  flex: 1;
+  background: var(--surface-2);
+  border: 1px solid var(--border-strong);
+  color: var(--text);
+  padding: 11px 14px;
+  border-radius: 10px;
+  font-family: var(--mono);
+  font-size: 13px;
+  outline: none;
+  transition: border-color 0.15s, box-shadow 0.15s;
+}
+
+.board-paste input::placeholder {
+  color: var(--muted-2);
+}
+
+.board-paste input:focus {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px rgba(255, 212, 0, 0.15);
+}
