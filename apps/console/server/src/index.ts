@@ -135,8 +135,8 @@ async function main() {
       return;
     }
     // Continue requires an existing project dir; New doesn't check here, but a
-    // non-existent path still fails fast once the driver hands it to the SDK
-    // as `cwd` — no mkdir happens anywhere in this codebase.
+    // non-existent 'new' project path is not created by the console — the run
+    // fails at the SDK cwd; (persistence's RUNS_DIR mkdir is unrelated).
     // Demo runs are exempt — the demo stream never touches the filesystem, and the
     // demo project path is synthetic, so a real-directory check would wrongly reject
     // "continue this run" on a demo run.

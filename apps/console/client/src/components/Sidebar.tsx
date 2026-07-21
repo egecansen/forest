@@ -39,7 +39,7 @@ export function Sidebar({ phases, telemetry, outputs, status }: Props) {
 }
 
 function OutputsCard({ outputs }: { outputs: Outputs }) {
-  const total = outputs.files + outputs.tests;
+  const total = outputs.files;
   return (
     <div className="card outputs-card">
       <div className="card-label">
@@ -48,7 +48,6 @@ function OutputsCard({ outputs }: { outputs: Outputs }) {
       </div>
       <div className="outputs-grid">
         <OutputStat n={outputs.files} label="files" tone="accent" />
-        <OutputStat n={outputs.tests} label="tests" tone="info" />
       </div>
     </div>
   );

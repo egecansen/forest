@@ -6,7 +6,7 @@ import type { Telemetry } from '../types';
 const TELEMETRY: Telemetry = { startedAt: null, elapsedMs: 0, tokens: 0, thinking: false };
 
 describe('Sidebar outputs card', () => {
-  it('does not render a findings stat — nothing ever populates findings in triage', () => {
+  it('does not render a tests stat — nothing in production driver code ever calls run.addTest', () => {
     render(
       <Sidebar
         phases={[]}
@@ -16,7 +16,7 @@ describe('Sidebar outputs card', () => {
         status="running"
       />
     );
-    expect(screen.queryByText('findings')).not.toBeInTheDocument();
+    expect(screen.queryByText('tests')).not.toBeInTheDocument();
   });
 
   it('still renders the files stat', () => {

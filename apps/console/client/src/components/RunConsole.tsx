@@ -149,7 +149,7 @@ export function RunConsole({ config, onStop, onPause, onResume, onNew, backLabel
     log: snapshot.log.length,
     clusters: snapshot.clusters.length,
     timeline: snapshot.phases.filter((p) => p.startedAt).length,
-    files: snapshot.files.length + snapshot.tests.length,
+    files: snapshot.files.length,
     report: snapshot.reportUrl ? 1 : 0,
   };
   // When the user opens a tab, reset its seen counter.
