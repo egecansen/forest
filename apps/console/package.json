@@ -1,0 +1,20 @@
+{
+  "name": "hektor-console",
+  "version": "0.1.0",
+  "private": true,
+  "description": "\u015fahika \u2014 autonomous QA console.",
+  "scripts": {
+    "dev": "concurrently -n server,client -c green,magenta \"npm:dev:server\" \"npm:dev:client\"",
+    "dev:server": "npm --prefix server run dev",
+    "dev:client": "npm --prefix client run dev",
+    "build": "npm --prefix client run build",
+    "start": "npm --prefix server start",
+    "install:all": "npm install && npm --prefix client install && npm --prefix server install"
+  },
+  "devDependencies": {
+    "concurrently": "^9.1.0"
+  },
+  "engines": {
+    "node": ">=20"
+  }
+}

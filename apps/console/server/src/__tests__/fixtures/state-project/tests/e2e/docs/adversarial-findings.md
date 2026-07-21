@@ -1,0 +1,2 @@
+- **login-p1-01** [critical] — Race condition allows double-charge
+  - scope: checkout
