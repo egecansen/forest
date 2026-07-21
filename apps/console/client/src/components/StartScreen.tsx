@@ -110,7 +110,10 @@ export function StartScreen({ onStart, prefillReportUrl }: Props) {
   const projectPathValid = projectPath.trim().length > 0;
   // The demo report URL/testbox are synthetic (a scripted run, no real
   // Jenkins/ES lookup happens) — don't block a demo submission on the same
-  // shape checks a real triage session's URL/testbox must satisfy.
+  // shape checks a real triage session's URL/testbox must satisfy. The
+  // server (validate.ts's normalizeRunBody) also skips these shape checks
+  // for `demo: true` bodies, so a malformed demo submission isn't blocked
+  // here only to 400 server-side.
   const testboxValid = demo || isValidTestbox(testbox);
   const urlValid = demo || isValidReportUrl(targetUrl);
   const canSubmit = projectPathValid && testboxValid && urlValid && !submitting;

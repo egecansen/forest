@@ -86,4 +86,52 @@ describe('driver core', () => {
     await done;
     expect(run.snapshot.status).toBe('paused');
   });
+
+  it('advancePhase is forward-only: a repeated core script never regresses an already-done phase', async () => {
+    const run = runStore.create(cfg);
+    const phaseEvents: Array<{ phaseId: string; status: string }> = [];
+    const activeSet = new Set<string>();
+    let sawConcurrentActive = false;
+    run.on('event', (e: any) => {
+      if (e.type !== 'phase') return;
+      phaseEvents.push({ phaseId: e.phaseId, status: e.status });
+      if (e.status === 'active') {
+        if (activeSet.size > 0 && !activeSet.has(e.phaseId)) sawConcurrentActive = true;
+        activeSet.add(e.phaseId);
+      } else {
+        activeSet.delete(e.phaseId);
+      }
+    });
+
+    const done = new Promise<void>((r) => run.on('event', (e) => { if (e.type === 'status' && e.status === 'completed') r(); }));
+    // init -> ingest.sh -> cluster.sh -> apply.sh (fix cluster-a) -> rerun.sh (verify cluster-a)
+    // -> apply.sh (fix cluster-b, a SECOND core-script fix run interleaved after verify started) -> result
+    startDriver(run, scripted([
+      msg({ type: 'system', subtype: 'init', session_id: 'sess-fwd' }),
+      msg({ type: 'assistant', message: { content: [
+        { type: 'tool_use', name: 'Bash', input: { command: '"$KIT/ingest.sh" "https://r.example/…" > fails.json' } },
+      ] } }),
+      msg({ type: 'assistant', message: { content: [
+        { type: 'tool_use', name: 'Bash', input: { command: '"$KIT/cluster.sh" < fails.json' } },
+      ] } }),
+      msg({ type: 'assistant', message: { content: [
+        { type: 'tool_use', name: 'Bash', input: { command: '"$KIT/apply.sh" cluster-a' } },
+      ] } }),
+      msg({ type: 'assistant', message: { content: [
+        { type: 'tool_use', name: 'Bash', input: { command: '"$KIT/rerun.sh" cluster-a tb161' } },
+      ] } }),
+      msg({ type: 'assistant', message: { content: [
+        { type: 'tool_use', name: 'Bash', input: { command: '"$KIT/apply.sh" cluster-b' } },
+      ] } }),
+      msg({ type: 'result', subtype: 'success', total_cost_usd: 0.1, usage: { output_tokens: 10 }, result: 'done' }),
+    ]));
+    await done;
+
+    // No two phases were ever simultaneously 'active'.
+    expect(sawConcurrentActive).toBe(false);
+    // 'fix' was set active exactly once — the second apply.sh (target already
+    // 'done' by then) must be a no-op, not a regression back to 'active'.
+    const fixActiveCount = phaseEvents.filter((e) => e.phaseId === 'fix' && e.status === 'active').length;
+    expect(fixActiveCount).toBe(1);
+  });
 });

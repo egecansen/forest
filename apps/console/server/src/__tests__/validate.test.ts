@@ -36,4 +36,31 @@ describe('normalizeRunBody (triage)', () => {
     );
     expect(r.ok).toBe(false);
   });
+
+  it('accepts a demo body with malformed testbox, a non-allowlisted URL, and no fullTestBuildName', () => {
+    const r = normalizeRunBody(
+      {
+        projectPath: '/tmp/demo',
+        targetUrl: 'https://not-allowlisted.example/report',
+        testbox: 'not-a-real-testbox!!',
+        demo: true,
+      },
+      ALLOW
+    );
+    expect(r.ok).toBe(true);
+    if (r.ok) {
+      expect(r.value.demo).toBe(true);
+      expect(r.value.testbox).toBe('not-a-real-testbox!!');
+      expect(r.value.targetUrl).toBe('https://not-allowlisted.example/report');
+    }
+  });
+
+  it('defaults testbox to tb0 for a demo body with no testbox given', () => {
+    const r = normalizeRunBody(
+      { projectPath: '/tmp/demo', targetUrl: 'https://demo.example/report', demo: true },
+      ALLOW
+    );
+    expect(r.ok).toBe(true);
+    if (r.ok) expect(r.value.testbox).toBe('tb0');
+  });
 });

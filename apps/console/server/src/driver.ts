@@ -25,15 +25,26 @@ export function inferPhase(command: string): PhaseId | null {
   return null;
 }
 
-/** Advance the pipeline: mark `next` active and every earlier phase done. */
+/**
+ * Advance the pipeline: mark `next` active and every earlier phase done.
+ *
+ * Forward-only: if `next` is already 'done', this is a complete no-op. Core
+ * scripts can interleave (apply.sh -> fix, rerun.sh -> verify, then a second
+ * apply.sh for the next cluster) — without this guard, that second apply.sh
+ * would regress the already-'done' `fix` phase back to 'active' while
+ * `verify` stayed 'active', producing a backwards jump and two active phases
+ * at once.
+ */
 function advancePhase(run: Run, next: PhaseId) {
   const order = PHASE_ORDER;
   const target = order.indexOf(next);
-  for (let i = 0; i < order.length; i++) {
+  const targetPhase = run.snapshot.phases.find((p) => p.id === next)!;
+  if (targetPhase.status === 'done') return;
+  for (let i = 0; i < target; i++) {
     const cur = run.snapshot.phases.find((p) => p.id === order[i])!;
-    if (i < target && (cur.status === 'active' || cur.status === 'queued')) run.setPhase(order[i], 'done');
-    if (i === target && cur.status !== 'active') run.setPhase(order[i], 'active');
+    if (cur.status === 'active' || cur.status === 'queued') run.setPhase(order[i], 'done');
   }
+  if (targetPhase.status !== 'active') run.setPhase(next, 'active');
 }
 
 // The real SDK's `query()` takes a strongly-typed `Options` (and returns a
