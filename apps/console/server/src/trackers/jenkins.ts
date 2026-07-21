@@ -73,3 +73,26 @@ export async function fetchBuildStages(
     return null;
   }
 }
+
+/** GET `${cfg.baseUrl}/me/api/json` — the currently-authenticated Jenkins
+ *  identity, used to power the board's "only mine" filter. Returns the `id`
+ *  field, or null on any HTTP/parse/network failure (including anonymous
+ *  access, which Jenkins reports as a 401/403 or an id-less response) — the
+ *  caller (index.ts) treats null as "only-mine filtering unavailable" and
+ *  the client hides the checkbox rather than surfacing an error. */
+export async function fetchJenkinsUser(
+  cfg: ConsoleConfig['jenkins'], fetchImpl: typeof fetch = fetch
+): Promise<string | null> {
+  const base = cfg.baseUrl.replace(/\/+$/, '');
+  const headers: Record<string, string> = { Accept: 'application/json' };
+  if (cfg.username && cfg.apiToken)
+    headers.Authorization = `Basic ${Buffer.from(`${cfg.username}:${cfg.apiToken}`).toString('base64')}`;
+  try {
+    const res = await fetchImpl(`${base}/me/api/json`, { headers });
+    if (!res.ok) return null;
+    const data = (await res.json()) as { id?: string };
+    return data.id ?? null;
+  } catch {
+    return null;
+  }
+}

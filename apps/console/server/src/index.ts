@@ -13,6 +13,7 @@ import { isAllowedHost } from './host-guard.js';
 import { saveRun, listRuns, loadRun, isSafeRunId, resolveInsideRoot, resolveRunsDirSync } from './persistence.js';
 import { loadConsoleConfig, kitAllowlist } from './console-config.js';
 import { BuildsPoller } from './trackers/poller.js';
+import { fetchJenkinsUser } from './trackers/jenkins.js';
 import { notifyTerminal } from './notify.js';
 import type { RunSnapshot, ServerEvent } from './types.js';
 import type { WebSocket } from 'ws';
@@ -77,6 +78,11 @@ async function main() {
     return null;
   });
   const allowlist = consoleConfig ? await kitAllowlist(consoleConfig.repoPath).catch(() => []) : [];
+  // Best-effort — an unreachable/anonymous Jenkins just means the board's
+  // "only mine" filter stays unavailable, not a hard startup failure.
+  const jenkinsUser = consoleConfig
+    ? await fetchJenkinsUser(consoleConfig.jenkins).catch(() => null)
+    : null;
   poller = consoleConfig ? new BuildsPoller(consoleConfig) : null;
   // WS clients on /ws-board — a live connection is the sole "poll while
   // watched" signal (see setClientCount below), and each gets pushed the
@@ -110,6 +116,9 @@ async function main() {
       repoPath: consoleConfig.repoPath,
       testbox: consoleConfig.testbox,
       reportBase: consoleConfig.reportBase,
+      // An identity, not a secret — the client uses it purely to power the
+      // builds board's "only mine" filter (see BuildsBoard.tsx).
+      jenkinsUser,
     });
   });
 

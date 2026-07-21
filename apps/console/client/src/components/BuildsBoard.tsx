@@ -56,6 +56,13 @@ const formatDuration = (ms: number): string => {
 
 const formatMinutes = (ms: number): number => Math.max(0, Math.round(ms / 60000));
 
+/** Terse headline shown everywhere a build title appears — this Jenkins sets
+ *  verbose custom `displayName`s (e.g. "Build : 2164 | Branch :
+ *  tech/WEBT-251268 | TB : 85") that duplicate the meta line and overflow
+ *  cards/rows, so the headline is built from the numeric `number` field
+ *  instead. The full `displayName` is kept as a hover `title`. */
+const headline = (b: BuildRow): string => `#${b.number} · ${b.jobName}`;
+
 /** Status-rail tone — drives the left-edge inset border across all three
  *  sections (cards + compact/ledger rows) instead of per-row status chips. */
 const railTone = (b: BuildRow): string => {
@@ -78,7 +85,7 @@ function BuildCard({ b, onTriage }: { b: BuildRow } & TriageProps) {
   return (
     <article className={`build-card tone-${tone}`}>
       <div className="build-card-info">
-        <div className="build-card-title">{b.displayName} · {b.jobName}</div>
+        <div className="build-card-title" title={b.displayName}>{headline(b)}</div>
         {meta && <div className="build-card-meta">{meta}</div>}
         <div className="build-card-timing">started {formatClock(b.timestamp)} · took {formatDuration(b.duration)}</div>
         {b.stage?.failed && (
@@ -117,7 +124,7 @@ function RunningRow({ b }: { b: BuildRow }) {
     <div className={`build-row build-row-running tone-${tone}`}>
       <div className="build-row-main">
         <div className="build-row-title-row">
-          <span className="build-row-title">{b.displayName} · {b.jobName}</span>
+          <span className="build-row-title" title={b.displayName}>{headline(b)}</span>
           <span className="board-chip board-chip-running">running</span>
         </div>
         {b.stage && (
@@ -150,7 +157,7 @@ function DoneRow({ b, triagedStatus }: { b: BuildRow; triagedStatus?: string }) 
           <span className="build-row-status-text is-muted">{(b.result ?? 'unknown').toLowerCase()}</span>
         )}
       </span>
-      <span className="build-row-title">{b.displayName} · {b.jobName}</span>
+      <span className="build-row-title" title={b.displayName}>{headline(b)}</span>
       <span className="build-row-timing">took {formatDuration(b.duration)}</span>
       <div className="build-row-links">
         <a className="btn btn-ghost" href={b.url} target="_blank" rel="noreferrer">build ↗</a>
@@ -168,6 +175,13 @@ export function BuildsBoard({ onTriage }: TriageProps) {
   const [tagFilter, setTagFilter] = useState('');
   const [mineOnly, setMineOnly] = useState(false);
   const [pasted, setPasted] = useState('');
+  // The console's own Jenkins identity (GET /api/config's `jenkinsUser`) —
+  // null until resolved, and it stays null when Jenkins auth isn't
+  // configured/reachable or the session is anonymous. The "only mine"
+  // checkbox is meaningless without it, so it's hidden entirely in that case
+  // (see the board-filters render below) rather than left as a filter that
+  // silently can't work.
+  const [jenkinsUser, setJenkinsUser] = useState<string | null>(null);
   // reportUrl -> latest history status, so a row already triaged (however it
   // resolved) shows a small "triaged · <status>" chip instead of leaving the
   // board looking untouched. The board doubles as history-at-a-glance, and
@@ -217,9 +231,28 @@ export function BuildsBoard({ onTriage }: TriageProps) {
     return () => { ignore = true; };
   }, []);
 
+  useEffect(() => {
+    let ignore = false;
+    (async () => {
+      try {
+        const res = await fetch('/api/config');
+        if (!res.ok) return;
+        const json = (await res.json()) as { jenkinsUser?: string | null };
+        if (!ignore) setJenkinsUser(json.jenkinsUser ?? null);
+      } catch {
+        // Best-effort: the board still works with "only mine" just unavailable.
+      }
+    })();
+    return () => { ignore = true; };
+  }, []);
+
   const rows = useMemo(() => (data?.builds ?? [])
     .filter((b) => !tagFilter || (b.params.TAG ?? '').toLowerCase().includes(tagFilter.toLowerCase()))
-    .filter((b) => !mineOnly || !!b.buildUser), [data, tagFilter, mineOnly]);
+    // jenkinsUser === null means the filter can't work (no checkbox is even
+    // shown in that case) — ignore a stale/leftover mineOnly=true rather
+    // than filtering everything out.
+    .filter((b) => !mineOnly || jenkinsUser === null || b.buildUser === jenkinsUser),
+    [data, tagFilter, mineOnly, jenkinsUser]);
 
   // `rows` is already newest-first (server-sorted) — filtering preserves that
   // order, so each section (and each job within NEEDS TRIAGE) stays
@@ -245,7 +278,9 @@ export function BuildsBoard({ onTriage }: TriageProps) {
         </div>
         <div className="board-filters">
           <input placeholder="filter TAG" value={tagFilter} onChange={(e) => setTagFilter(e.target.value)} />
-          <label><input type="checkbox" checked={mineOnly} onChange={(e) => setMineOnly(e.target.checked)} /> only mine</label>
+          {jenkinsUser !== null && (
+            <label><input type="checkbox" checked={mineOnly} onChange={(e) => setMineOnly(e.target.checked)} /> only mine</label>
+          )}
         </div>
 
         <div className="board-section board-section-needs-triage">

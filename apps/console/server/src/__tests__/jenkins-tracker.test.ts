@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
-import { fetchJobBuilds, fetchBuildStages } from '../trackers/jenkins.js';
+import { fetchJobBuilds, fetchBuildStages, fetchJenkinsUser } from '../trackers/jenkins.js';
 
 const FIXTURE = {
   builds: [{
@@ -98,5 +98,52 @@ describe('fetchBuildStages', () => {
     const fetchImpl = vi.fn(async () => new Response('not json', { status: 200 })) as unknown as typeof fetch;
     const info = await fetchBuildStages(CFG, 'https://jenkins.example/job/x/1/', fetchImpl);
     expect(info).toBeNull();
+  });
+});
+
+describe('fetchJenkinsUser', () => {
+  const CFG = { baseUrl: 'https://jenkins.example', jobUrls: [] };
+
+  it('returns the id field from /me/api/json', async () => {
+    const fetchImpl = vi.fn(async (url: string) => {
+      expect(url).toBe('https://jenkins.example/me/api/json');
+      return new Response(JSON.stringify({ id: 'egecan.sen' }), { status: 200 });
+    }) as unknown as typeof fetch;
+    expect(await fetchJenkinsUser(CFG, fetchImpl)).toBe('egecan.sen');
+  });
+
+  it('normalizes a trailing slash on baseUrl before joining', async () => {
+    const fetchImpl = vi.fn(async (url: string) => {
+      expect(url).toBe('https://jenkins.example/me/api/json');
+      return new Response(JSON.stringify({ id: 'egecan.sen' }), { status: 200 });
+    }) as unknown as typeof fetch;
+    await fetchJenkinsUser({ ...CFG, baseUrl: 'https://jenkins.example/' }, fetchImpl);
+  });
+
+  it('sends basic auth when apiToken configured', async () => {
+    const fetchImpl = vi.fn(async () => new Response(JSON.stringify({ id: 'u' }), { status: 200 })) as unknown as typeof fetch;
+    await fetchJenkinsUser({ ...CFG, username: 'u', apiToken: 't' }, fetchImpl);
+    const init = (fetchImpl as unknown as { mock: { calls: [[string, RequestInit]] } }).mock.calls[0][1];
+    expect((init.headers as Record<string, string>).Authorization).toMatch(/^Basic /);
+  });
+
+  it('returns null on HTTP failure (e.g. anonymous access)', async () => {
+    const fetchImpl = vi.fn(async () => new Response('nope', { status: 401 })) as unknown as typeof fetch;
+    expect(await fetchJenkinsUser(CFG, fetchImpl)).toBeNull();
+  });
+
+  it('returns null on malformed JSON', async () => {
+    const fetchImpl = vi.fn(async () => new Response('not json', { status: 200 })) as unknown as typeof fetch;
+    expect(await fetchJenkinsUser(CFG, fetchImpl)).toBeNull();
+  });
+
+  it('returns null when the response has no id field', async () => {
+    const fetchImpl = vi.fn(async () => new Response(JSON.stringify({}), { status: 200 })) as unknown as typeof fetch;
+    expect(await fetchJenkinsUser(CFG, fetchImpl)).toBeNull();
+  });
+
+  it('returns null when fetch itself rejects (network failure)', async () => {
+    const fetchImpl = vi.fn(async () => { throw new Error('boom'); }) as unknown as typeof fetch;
+    expect(await fetchJenkinsUser(CFG, fetchImpl)).toBeNull();
   });
 });

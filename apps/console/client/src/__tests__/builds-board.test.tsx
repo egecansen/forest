@@ -3,11 +3,16 @@ import { render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { BuildsBoard } from '../components/BuildsBoard';
 
+// This Jenkins sets verbose custom displayNames (real example from live
+// data) — the board must render a terse "#<number> · <job>" headline from
+// the numeric `number` field instead, keeping the verbose text only as a
+// hover `title` (see Fix 1 in the console builds-board task).
 // #2127 — red (FAILURE), has a report, NOT yet triaged → NEEDS TRIAGE.
 const NEEDS_TRIAGE = {
   jobName: 'web-test-s4-flaky', number: 2127, building: false, result: 'FAILURE', timestamp: Date.now(),
   duration: 125000, estimatedDuration: 600000, url: 'https://jenkins.example/job/web-test-s4-flaky/2127/',
-  displayName: '#2127', params: { TAG: 'Bireysel', TESTBOX: '307', BRANCH: 'master', JIRA_TICKET: 'CI-123' },
+  displayName: 'Build : 2127 | Branch : tech/WEBT-251268 | TB : 307',
+  params: { TAG: 'Bireysel', TESTBOX: '307', BRANCH: 'master', JIRA_TICKET: 'CI-123' },
   buildUser: 'egecan.sen', failedCount: 12,
   reportUrl: 'https://report.example/web-test-s4-flaky/2127?buildStartTime=1&fullTestBuildName=x',
   stage: { current: null, failed: 'assert-flow', done: 3, total: 5 },
@@ -17,7 +22,8 @@ const NEEDS_TRIAGE = {
 const RUNNING = {
   jobName: 'web-test-s4-flaky', number: 2128, building: true, result: null, timestamp: Date.now(),
   duration: 0, estimatedDuration: 600000, url: 'https://jenkins.example/job/web-test-s4-flaky/2128/',
-  displayName: '#2128', params: {}, buildUser: null, failedCount: 0, reportUrl: null,
+  displayName: 'Build : 2128 | Branch : tech/WEBT-251300 | TB : 161',
+  params: {}, buildUser: null, failedCount: 0, reportUrl: null,
   stage: { current: 'test', failed: null, done: 2, total: 5 },
 };
 
@@ -25,9 +31,19 @@ const RUNNING = {
 const TRIAGED = {
   jobName: 'web-test-s4-flaky', number: 2126, building: false, result: 'FAILURE', timestamp: Date.now(),
   duration: 90000, estimatedDuration: 600000, url: 'https://jenkins.example/job/web-test-s4-flaky/2126/',
-  displayName: '#2126', params: {}, buildUser: 'egecan.sen', failedCount: 4,
+  displayName: 'Build : 2126 | Branch : master | TB : 307',
+  params: {}, buildUser: 'egecan.sen', failedCount: 4,
   reportUrl: 'https://report.example/web-test-s4-flaky/2126?buildStartTime=1&fullTestBuildName=y',
   stage: null,
+};
+
+// #2125 — clean, but belongs to a DIFFERENT Jenkins user → proves the
+// "only mine" filter actually excludes non-matching builds (Fix 2).
+const OTHER_USER = {
+  jobName: 'web-test-s4-flaky', number: 2125, building: false, result: 'SUCCESS', timestamp: Date.now(),
+  duration: 60000, estimatedDuration: 600000, url: 'https://jenkins.example/job/web-test-s4-flaky/2125/',
+  displayName: 'Build : 2125 | Branch : master | TB : 307',
+  params: {}, buildUser: 'someone.else', failedCount: 0, reportUrl: null, stage: null,
 };
 
 const ROWS = { fetchedAt: Date.now(), stale: false, builds: [NEEDS_TRIAGE, RUNNING, TRIAGED] };
@@ -35,11 +51,14 @@ const ROWS = { fetchedAt: Date.now(), stale: false, builds: [NEEDS_TRIAGE, RUNNI
 const HISTORY = [{ runId: 'r1', projectPath: '/x', targetUrl: TRIAGED.reportUrl, mode: 'triage',
   status: 'completed', startedAt: 1, findings: 0, tests: 0 }];
 
-function stubFetch() {
+/** `jenkinsUser` defaults to null (unconfigured/anonymous) — matching most
+ *  existing tests, which don't care about the "only mine" filter. */
+function stubFetch(jenkinsUser: string | null = null, builds: unknown = ROWS) {
   vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => {
     const url = String(input);
     if (url.includes('/api/history')) return new Response(JSON.stringify(HISTORY), { status: 200 });
-    return new Response(JSON.stringify(ROWS), { status: 200 });
+    if (url.includes('/api/config')) return new Response(JSON.stringify({ configured: true, jenkinsUser }), { status: 200 });
+    return new Response(JSON.stringify(builds), { status: 200 });
   }));
 }
 
@@ -65,6 +84,29 @@ describe('BuildsBoard', () => {
     expect(triageBtn).toBeEnabled();
     await userEvent.click(triageBtn);
     expect(onTriage).toHaveBeenCalledWith(NEEDS_TRIAGE.reportUrl, 'tb307');
+  });
+
+  it('renders terse "#<number> · <job>" headlines everywhere, keeping the full displayName only as a hover title', async () => {
+    stubFetch();
+    render(<BuildsBoard onTriage={vi.fn()} />);
+    await waitFor(() => expect(screen.getByText(/needs triage \(1\)/i)).toBeInTheDocument());
+    await waitFor(() => expect(screen.getByText(/running \(1\)/i)).toBeInTheDocument());
+    await waitFor(() => expect(screen.getByText(/done \(1\)/i)).toBeInTheDocument());
+
+    // NEEDS TRIAGE card headline.
+    const cardTitle = screen.getByText('#2127 · web-test-s4-flaky');
+    expect(cardTitle).toHaveAttribute('title', NEEDS_TRIAGE.displayName);
+
+    // RUNNING row headline.
+    const runningTitle = screen.getByText('#2128 · web-test-s4-flaky');
+    expect(runningTitle).toHaveAttribute('title', RUNNING.displayName);
+
+    // DONE row headline.
+    const doneTitle = screen.getByText('#2126 · web-test-s4-flaky');
+    expect(doneTitle).toHaveAttribute('title', TRIAGED.displayName);
+
+    // The verbose custom displayName must never render as visible text.
+    expect(screen.queryByText(/Build : \d+ \| Branch/)).not.toBeInTheDocument();
   });
 
   it('renders open-build and s-report actions with correct hrefs/targets', async () => {
@@ -149,5 +191,33 @@ describe('BuildsBoard', () => {
     }));
     render(<BuildsBoard onTriage={vi.fn()} />);
     await waitFor(() => expect(screen.getByText(/stale — jenkins unreachable/i)).toBeInTheDocument());
+  });
+
+  it('hides the "only mine" checkbox when jenkinsUser is unknown (no Jenkins auth / anonymous)', async () => {
+    stubFetch(null);
+    render(<BuildsBoard onTriage={vi.fn()} />);
+    await waitFor(() => expect(screen.getByText(/needs triage \(1\)/i)).toBeInTheDocument());
+    expect(screen.queryByLabelText(/only mine/i)).not.toBeInTheDocument();
+  });
+
+  it('"only mine" checkbox filters rows to the authenticated Jenkins user\'s builds only', async () => {
+    stubFetch('egecan.sen', { fetchedAt: Date.now(), stale: false, builds: [NEEDS_TRIAGE, RUNNING, TRIAGED, OTHER_USER] });
+    render(<BuildsBoard onTriage={vi.fn()} />);
+    const checkbox = await screen.findByLabelText(/only mine/i);
+
+    // Before filtering: OTHER_USER ('someone.else') sits alongside TRIAGED
+    // ('egecan.sen') in DONE, and NEEDS TRIAGE/RUNNING are both present.
+    await waitFor(() => expect(screen.getByText(/done \(2\)/i)).toBeInTheDocument());
+    expect(screen.getByText(/needs triage \(1\)/i)).toBeInTheDocument();
+    expect(screen.getByText(/running \(1\)/i)).toBeInTheDocument();
+
+    await userEvent.click(checkbox);
+
+    // Only builds whose buildUser === 'egecan.sen' remain: OTHER_USER drops
+    // out of DONE, and RUNNING (buildUser: null) drops out entirely.
+    await waitFor(() => expect(screen.getByText(/done \(1\)/i)).toBeInTheDocument());
+    expect(screen.queryByText(/#2125 · web-test-s4-flaky/)).not.toBeInTheDocument();
+    expect(screen.queryByText(/running \(/i)).not.toBeInTheDocument();
+    expect(screen.getByText(/needs triage \(1\)/i)).toBeInTheDocument();
   });
 });
