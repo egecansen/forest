@@ -407,6 +407,14 @@ export class Run extends EventEmitter {
     this.emitEvent({ type: 'report', reportUrl: url });
   }
 
+  /** Records the agent's final result message (SDK `result` on a successful
+   *  run) so the Report tab can render the actual triage summary instead of
+   *  a stylized preview. */
+  setReportText(text: string) {
+    this.snapshot.reportText = text;
+    this.emitEvent({ type: 'reportText', reportText: text });
+  }
+
   setSubStage(subStage: string | null) {
     const redacted = this.redact(subStage ?? undefined) ?? null;
     this.snapshot.currentSubStage = redacted;

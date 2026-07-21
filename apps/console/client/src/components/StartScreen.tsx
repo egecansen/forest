@@ -45,7 +45,6 @@ interface ConsoleConfigResponse {
   configured: boolean;
   repoPath?: string;
   testbox?: string;
-  reportBase?: string;
 }
 
 interface Props {

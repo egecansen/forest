@@ -63,3 +63,21 @@ describe('RunConsole clusters tab', () => {
     expect(screen.getByRole('tab', { name: /timeline/i })).toHaveAttribute('aria-selected', 'true');
   });
 });
+
+describe('RunConsole files tab badge', () => {
+  it('counts only files — a populated tests array never inflates the badge', () => {
+    const snap = snapshot({
+      files: [
+        { id: 'f1', ts: 1, path: 'tests/e2e/specs/a.spec.ts', kind: 'created' },
+        { id: 'f2', ts: 2, path: 'tests/e2e/specs/b.spec.ts', kind: 'created' },
+      ],
+      tests: [
+        { id: 't1', ts: 1, path: 'tests/e2e/specs/a.spec.ts', name: 'a.spec.ts', status: 'wrote' },
+        { id: 't2', ts: 2, path: 'tests/e2e/specs/b.spec.ts', name: 'b.spec.ts', status: 'wrote' },
+        { id: 't3', ts: 3, path: 'tests/e2e/specs/c.spec.ts', name: 'c.spec.ts', status: 'wrote' },
+      ],
+    });
+    render(<RunConsole config={CONFIG} onNew={() => {}} readOnly staticSnapshot={snap} />);
+    expect(screen.getByRole('tab', { name: /files/i })).toHaveTextContent('2');
+  });
+});

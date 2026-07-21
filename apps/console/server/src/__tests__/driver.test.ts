@@ -34,6 +34,10 @@ describe('driver core', () => {
     expect(run.snapshot.telemetry.costUsd).toBe(0.42);
     expect(run.snapshot.status).toBe('completed');
     expect(run.snapshot.log.some((l) => l.text.includes('ingest'))).toBe(true);
+    // The agent's final result text lands on reportText (for the Report tab),
+    // in addition to the existing success log entry.
+    expect(run.snapshot.reportText).toBe('done');
+    expect(run.snapshot.log.some((l) => l.kind === 'success' && l.text === 'done')).toBe(true);
   });
 
   it('a result with subtype error → run failed', async () => {

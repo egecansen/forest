@@ -117,7 +117,10 @@ export function startDriver(run: Run, queryFn: QueryFn = realQueryFn, opts: { re
           if (r.subtype === 'success') {
             advancePhase(run, 'report');
             run.setPhase('report', 'done');
-            if (r.result) run.log({ kind: 'success', text: r.result.slice(0, 2000) });
+            if (r.result) {
+              run.log({ kind: 'success', text: r.result.slice(0, 2000) });
+              run.setReportText(r.result);
+            }
             run.finish(true);
           } else if (pausing) {
             run.setStatus('paused');

@@ -18,7 +18,6 @@ function useSpinner(active: boolean) {
 interface Outputs {
   files: number;
   tests: number;
-  findings: number;
 }
 
 interface Props {
@@ -40,7 +39,7 @@ export function Sidebar({ phases, telemetry, outputs, status }: Props) {
 }
 
 function OutputsCard({ outputs }: { outputs: Outputs }) {
-  const total = outputs.files + outputs.tests + outputs.findings;
+  const total = outputs.files + outputs.tests;
   return (
     <div className="card outputs-card">
       <div className="card-label">
@@ -50,7 +49,6 @@ function OutputsCard({ outputs }: { outputs: Outputs }) {
       <div className="outputs-grid">
         <OutputStat n={outputs.files} label="files" tone="accent" />
         <OutputStat n={outputs.tests} label="tests" tone="info" />
-        <OutputStat n={outputs.findings} label="findings" tone="warn" />
       </div>
     </div>
   );

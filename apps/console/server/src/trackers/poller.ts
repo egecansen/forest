@@ -8,7 +8,6 @@ export class BuildsPoller {
   private builds: BuildRow[] = [];
   private fetchedAt: number | null = null;
   private stale = false;
-  private clients = 0;
   private timer: NodeJS.Timeout | null = null;
   /** Finished builds' ES info never changes — cache by jobName#number. */
   private esCache = new Map<string, { failedCount: number; reportUrl: string | null }>();
@@ -19,7 +18,6 @@ export class BuildsPoller {
   constructor(private cfg: ConsoleConfig, private fetchImpl: typeof fetch = fetch) {}
 
   setClientCount(n: number) {
-    this.clients = n;
     if (n > 0 && !this.timer) {
       this.timer = setInterval(() => void this.refreshNow(), this.cfg.pollMs);
       void this.refreshNow();

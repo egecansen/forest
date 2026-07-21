@@ -166,13 +166,12 @@ export function RunConsole({ config, onStop, onPause, onResume, onNew, backLabel
 
   const reportReady = snapshot.phases.find((p) => p.id === 'report')?.status === 'done';
   const filesPhase = snapshot.phases.find((p) => p.id === 'fix');
-  const reportPhase = snapshot.phases.find((p) => p.id === 'report');
 
   const tabs: TabDef[] = [
     { id: 'log',      label: 'Log',      icon: '›', badge: null },
     { id: 'clusters', label: 'Clusters', icon: '◫', badge: snapshot.clusters.length || null },
     { id: 'timeline', label: 'Timeline', icon: '╱', badge: null },
-    { id: 'files',    label: 'Files',    icon: '⌗', badge: (snapshot.files.length + snapshot.tests.length) || null },
+    { id: 'files',    label: 'Files',    icon: '⌗', badge: snapshot.files.length || null },
     { id: 'report',   label: 'Report',   icon: '◈', badge: reportReady ? 1 : null, disabled: !reportReady && snapshot.status !== 'running' && snapshot.status !== 'completed' && snapshot.status !== 'idle' },
   ];
 
@@ -180,9 +179,8 @@ export function RunConsole({ config, onStop, onPause, onResume, onNew, backLabel
     () => ({
       files: snapshot.files.length,
       tests: snapshot.tests.length,
-      findings: snapshot.findings.length,
     }),
-    [snapshot.files.length, snapshot.tests.length, snapshot.findings.length]
+    [snapshot.files.length, snapshot.tests.length]
   );
 
   const projectName = config.projectPath.split('/').filter(Boolean).pop() ?? 'project';
@@ -322,11 +320,8 @@ export function RunConsole({ config, onStop, onPause, onResume, onNew, backLabel
                   reportUrl={snapshot.reportUrl}
                   reportReady={reportReady}
                   reportIsReal={(snapshot.reportUrl ?? '').startsWith('/api/')}
-                  tests={snapshot.tests}
-                  findings={snapshot.findings}
-                  filesCount={snapshot.files.length}
-                  elapsedMs={snapshot.telemetry.elapsedMs}
-                  phase={reportPhase}
+                  clusters={snapshot.clusters}
+                  reportText={snapshot.reportText}
                 />
               </div>
             )}

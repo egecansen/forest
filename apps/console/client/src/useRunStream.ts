@@ -204,6 +204,8 @@ export function applyEvent(prev: RunSnapshot, ev: ServerEvent): RunSnapshot {
       return { ...prev, tests: [...prev.tests, ev.test] };
     case 'report':
       return { ...prev, reportUrl: ev.reportUrl };
+    case 'reportText':
+      return { ...prev, reportText: ev.reportText };
     case 'pipelineStatus':
       return { ...prev, pipelineStatus: ev.pipelineStatus };
     case 'question':

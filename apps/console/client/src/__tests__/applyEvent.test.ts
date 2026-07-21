@@ -226,6 +226,15 @@ describe('applyEvent: report', () => {
   });
 });
 
+describe('applyEvent: reportText', () => {
+  it('sets reportText and a later reportText replaces it (scalar, not appended)', () => {
+    let s = applyEvent(base, { type: 'reportText', reportText: 'first draft' });
+    expect(s.reportText).toBe('first draft');
+    s = applyEvent(s, { type: 'reportText', reportText: 'final result' });
+    expect(s.reportText).toBe('final result');
+  });
+});
+
 describe('applyEvent: pipelineStatus', () => {
   it('sets and clears pipelineStatus', () => {
     let s = applyEvent(base, { type: 'pipelineStatus', pipelineStatus: 'phase-3-active' });

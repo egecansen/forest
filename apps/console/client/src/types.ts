@@ -150,6 +150,10 @@ export interface RunSnapshot {
   files: FileChange[];
   tests: TestArtifact[];
   reportUrl: string | null;
+  /** The agent's final result message (SDK `result` field on a successful
+   *  run) — the triage report's actual content, rendered mono/preformatted
+   *  by the Report tab. Unset until the run finishes successfully. */
+  reportText?: string;
   clusters: Cluster[];
   currentSubStage: string | null;
   pipelineStatus: string | null;
@@ -189,6 +193,7 @@ export type ServerEvent =
   | { type: 'file'; file: FileChange }
   | { type: 'test'; test: TestArtifact }
   | { type: 'report'; reportUrl: string }
+  | { type: 'reportText'; reportText: string }
   | { type: 'pipelineStatus'; pipelineStatus: string | null }
   | { type: 'question'; question: PendingQuestion }
   | { type: 'questionResolved'; questionId: string }

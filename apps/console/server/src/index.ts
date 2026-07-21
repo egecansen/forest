@@ -11,7 +11,7 @@ import { normalizeRunBody } from './validate.js';
 import { listDirectories } from './browse.js';
 import { isAllowedHost } from './host-guard.js';
 import { saveRun, listRuns, loadRun, isSafeRunId, resolveInsideRoot, resolveRunsDirSync } from './persistence.js';
-import { loadConsoleConfig, kitAllowlist, type ConsoleConfig } from './console-config.js';
+import { loadConsoleConfig, kitAllowlist } from './console-config.js';
 import { BuildsPoller } from './trackers/poller.js';
 import { notifyTerminal } from './notify.js';
 import type { RunSnapshot, ServerEvent } from './types.js';
@@ -134,7 +134,9 @@ async function main() {
       res.status(409).json({ error: 'a triage run is already active' });
       return;
     }
-    // Continue requires an existing project dir; New may create it (driver mkdir -p's).
+    // Continue requires an existing project dir; New doesn't check here, but a
+    // non-existent path still fails fast once the driver hands it to the SDK
+    // as `cwd` — no mkdir happens anywhere in this codebase.
     // Demo runs are exempt — the demo stream never touches the filesystem, and the
     // demo project path is synthetic, so a real-directory check would wrongly reject
     // "continue this run" on a demo run.
