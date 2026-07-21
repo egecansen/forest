@@ -13,6 +13,7 @@ import { isAllowedHost } from './host-guard.js';
 import { saveRun, listRuns, loadRun, isSafeRunId, resolveInsideRoot, resolveRunsDirSync } from './persistence.js';
 import { loadConsoleConfig, kitAllowlist, type ConsoleConfig } from './console-config.js';
 import { BuildsPoller } from './trackers/poller.js';
+import { notifyTerminal } from './notify.js';
 import type { RunSnapshot, ServerEvent } from './types.js';
 import type { WebSocket } from 'ws';
 
@@ -163,6 +164,7 @@ async function main() {
         // shows up in run history. Fire-and-forget — a write failure (e.g.
         // unwritable home dir) shouldn't affect the live run.
         void saveRun(RUNS_DIR, run.snapshot);
+        notifyTerminal('hektor — run finished', `${ev.status}: ${run.snapshot.clusters.filter(c => c.state === 'green').length} green / ${run.snapshot.clusters.filter(c => c.state === 'app-bug').length} app-bug`);
         setTimeout(() => {
           drivers.delete(runId);
         }, 30_000);
