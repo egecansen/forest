@@ -1,8 +1,13 @@
 import type { ConsoleConfig } from '../console-config.js';
-import { fetchJobBuilds, type JenkinsBuild } from './jenkins.js';
+import { fetchJobBuilds, fetchBuildStages, type JenkinsBuild, type StageInfo } from './jenkins.js';
 import { fetchBuildFailInfo, sReportUrl } from './es.js';
 
-export interface BuildRow extends JenkinsBuild { failedCount: number; reportUrl: string | null; }
+export interface BuildRow extends JenkinsBuild { failedCount: number; reportUrl: string | null; stage: StageInfo | null; }
+
+/** A build is worth a wfapi/describe round-trip only while it's still in
+ *  motion (building) or landed red (FAILURE/UNSTABLE) — a green/aborted
+ *  build's stage list is never shown on the board. */
+const wantsStage = (b: JenkinsBuild) => b.building || b.result === 'FAILURE' || b.result === 'UNSTABLE';
 
 export class BuildsPoller {
   private builds: BuildRow[] = [];
@@ -11,6 +16,9 @@ export class BuildsPoller {
   private timer: NodeJS.Timeout | null = null;
   /** Finished builds' ES info never changes — cache by jobName#number. */
   private esCache = new Map<string, { failedCount: number; reportUrl: string | null }>();
+  /** Finished (non-building) builds' stage list never changes either — same
+   *  key. A still-building build's stages are re-fetched every poll. */
+  private stageCache = new Map<string, StageInfo | null>();
 
   /** Set by index.ts; called at the end of every successful/failed refreshNow(). */
   onRefresh: ((data: ReturnType<BuildsPoller['getBuilds']>) => void) | null = null;
@@ -48,7 +56,16 @@ export class BuildsPoller {
           };
           if (!b.building && info.testBuildName) this.esCache.set(key, es);
         }
-        return { ...b, ...es };
+        let stage: StageInfo | null = null;
+        if (wantsStage(b)) {
+          if (!b.building && this.stageCache.has(key)) {
+            stage = this.stageCache.get(key)!;
+          } else {
+            stage = await fetchBuildStages(this.cfg.jenkins, b.url, this.fetchImpl);
+            if (!b.building) this.stageCache.set(key, stage);
+          }
+        }
+        return { ...b, ...es, stage };
       }));
       this.fetchedAt = Date.now();
       this.stale = false;

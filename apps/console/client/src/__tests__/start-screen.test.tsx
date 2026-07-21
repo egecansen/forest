@@ -34,6 +34,15 @@ describe('StartScreen', () => {
     expect(screen.getByLabelText(/report url/i)).toHaveValue(GOOD_URL);
   });
 
+  it('prefills the testbox from prefillTestbox, taking precedence over the config default', async () => {
+    stubConfigFetch(); // config default testbox is 'tb161'
+    render(<StartScreen onStart={vi.fn()} prefillTestbox="tb307" />);
+    expect(screen.getByLabelText(/testbox/i)).toHaveValue('tb307');
+    // Let the config fetch resolve — its untouched-guard must not clobber the prefill.
+    await waitFor(() => expect(screen.getByLabelText(/project path/i)).toHaveValue('/repo/web-test'));
+    expect(screen.getByLabelText(/testbox/i)).toHaveValue('tb307');
+  });
+
   it('disables submit and shows a hint for a malformed testbox', async () => {
     stubConfigFetch({ configured: false });
     render(<StartScreen onStart={vi.fn()} prefillReportUrl={GOOD_URL} />);

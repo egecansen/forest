@@ -17,7 +17,7 @@ import type { RunConfig, RunSnapshot } from './types';
  */
 type View =
   | { kind: 'board' }
-  | { kind: 'start'; prefillReportUrl?: string }
+  | { kind: 'start'; prefillReportUrl?: string; prefillTestbox?: string }
   | { kind: 'console'; config: RunConfig }
   | { kind: 'history'; runId: string; snapshot: RunSnapshot };
 
@@ -215,10 +215,12 @@ export function App() {
       )}
       <div className="view-switch" key={viewKey}>
         {view.kind === 'board' && (
-          <BuildsBoard onTriage={(url) => setView({ kind: 'start', prefillReportUrl: url })} />
+          <BuildsBoard
+            onTriage={(url, testbox) => setView({ kind: 'start', prefillReportUrl: url, prefillTestbox: testbox })}
+          />
         )}
         {view.kind === 'start' && (
-          <StartScreen onStart={startRun} prefillReportUrl={view.prefillReportUrl} />
+          <StartScreen onStart={startRun} prefillReportUrl={view.prefillReportUrl} prefillTestbox={view.prefillTestbox} />
         )}
         {view.kind === 'console' && (
           <RunConsole

@@ -543,6 +543,9 @@ textarea {
   display: inline-flex;
   align-items: center;
   gap: 8px;
+  /* .btn is also used on <a> (build/report links rendered as buttons) —
+     kill the browser's default anchor underline. */
+  text-decoration: none;
   transition: transform 0.18s cubic-bezier(0.22, 1, 0.36, 1),
     background 0.2s, border-color 0.2s, box-shadow 0.25s;
   position: relative;
@@ -573,6 +576,12 @@ textarea {
 
 .btn:active {
   transform: translateY(1px);
+}
+
+/* Visible keyboard focus — same accent ring the fields already use. */
+.btn:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
 }
 
 .btn-primary {
@@ -5074,58 +5083,311 @@ button.tree-line.file {
   accent-color: var(--accent);
 }
 
-.board-table {
-  width: 100%;
-  border-collapse: collapse;
+/* ─── Board sections — partitioned by decision state, not chronology.
+   NEEDS TRIAGE (untriaged red builds) gets the full card treatment since
+   it's the page's thesis; RUNNING/DONE are compact — density where no
+   decision is needed. ─────────────────────────────────────────────────── */
+.board-section {
+  margin-bottom: 22px;
+}
+
+.board-section-title {
+  font-family: var(--mono);
+  font-size: 11px;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--muted);
+  font-weight: 600;
+  margin-bottom: 10px;
+}
+
+.board-section-empty {
   font-family: var(--mono);
   font-size: 12.5px;
-  margin-bottom: 18px;
+  color: var(--muted-2);
+  padding: 4px 0 8px;
 }
 
-.board-table td {
-  padding: 10px;
-  border-bottom: 1px solid var(--border);
-  color: var(--text);
-  vertical-align: middle;
+/* ─── NEEDS TRIAGE — full build cards ──────────────────────────────────── */
+.build-cards {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
 }
 
-.board-table tr:hover td {
-  background: rgba(var(--raise-rgb), 0.04);
+.build-card {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding: 14px 16px;
+  border-radius: 10px;
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  box-shadow: inset 2px 0 0 transparent;
+  font-family: var(--mono);
 }
 
-.board-table a {
-  color: var(--accent-ink);
-  text-decoration: none;
-}
-
-.board-table a:hover {
-  text-decoration: underline;
-}
-
-.board-table .btn {
-  padding: 6px 12px;
-  font-size: 11.5px;
-}
-
-/* Red build row (FAILURE/UNSTABLE) — yellow-accent card frame, err-toned row
-   so a flaky build reads as "pick me" without shouting over the rest. */
-.board-table tr.is-red td {
-  background: rgba(239, 68, 68, 0.06);
-  color: var(--err);
-}
-
-.board-table tr.is-red td:first-child {
+.build-card.tone-failure {
   box-shadow: inset 2px 0 0 var(--err);
 }
 
-/* In-progress build — accent-tinted, no err coloring (not a failure yet). */
-.board-table tr.is-running td {
-  background: var(--accent-tint);
-  color: var(--accent-ink);
+.build-card.tone-unstable {
+  box-shadow: inset 2px 0 0 var(--warn);
 }
 
-.board-table tr.is-running td:first-child {
+.build-card-info {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 0;
+}
+
+.build-card-title {
+  font-size: 15px;
+  font-weight: 600;
+  color: var(--text);
+  letter-spacing: -0.01em;
+}
+
+.build-card-meta {
+  font-size: 12px;
+  color: var(--muted);
+  overflow-wrap: anywhere;
+}
+
+.build-card-timing {
+  font-size: 11.5px;
+  color: var(--muted-2);
+}
+
+.build-card-stage {
+  font-size: 11.5px;
+  color: var(--muted-2);
+}
+
+.build-card-stage.is-failed {
+  color: var(--err);
+}
+
+.build-card-footer {
+  display: flex;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: 16px;
+  flex-wrap: wrap;
+}
+
+/* The fail count is the card's one bold element — an oversized numeral +
+   uppercase label, with a hairline bar underneath echoing the run
+   console's `.progress-bar` idiom (reused as a static tone-filled rule,
+   since a fail count has no natural "percent of" denominator). */
+.fail-meter {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  min-width: 76px;
+}
+
+.fail-meter-top {
+  display: flex;
+  align-items: baseline;
+  gap: 7px;
+}
+
+.fail-meter-num {
+  font-family: var(--mono);
+  font-size: 28px;
+  font-weight: 800;
+  line-height: 1;
+  color: var(--err);
+  font-variant-numeric: tabular-nums;
+  letter-spacing: -0.02em;
+}
+
+.fail-meter.tone-unstable .fail-meter-num {
+  color: var(--warn);
+}
+
+.fail-meter-label {
+  font-size: 10px;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--muted-2);
+  font-weight: 600;
+}
+
+.fail-meter-bar {
+  height: 3px;
+  width: 84px;
+  max-width: 100%;
+  border-radius: 2px;
+  overflow: hidden;
+  background: rgba(239, 68, 68, 0.15);
+}
+
+.fail-meter-bar-fill {
+  height: 100%;
+  width: 100%;
+  background: var(--err);
+}
+
+.fail-meter.tone-unstable .fail-meter-bar {
+  background: rgba(245, 158, 11, 0.15);
+}
+
+.fail-meter.tone-unstable .fail-meter-bar-fill {
+  background: var(--warn);
+}
+
+.build-card-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.build-card-actions .btn {
+  padding: 8px 14px;
+  font-size: 12px;
+}
+
+/* ─── RUNNING / DONE — compact single-line entries ─────────────────────── */
+.build-rows {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.build-row {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  padding: 9px 14px;
+  border-radius: 8px;
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  box-shadow: inset 2px 0 0 transparent;
+  font-family: var(--mono);
+  font-size: 12px;
+  flex-wrap: wrap;
+}
+
+/* Running build's rail is the accent, with a subtle pulse (reduced-motion
+   gated below) — the board's one "matches the console header's RUNNING
+   chip" tone, without adding a duplicate status chip. */
+.build-row-running {
   box-shadow: inset 2px 0 0 var(--accent);
+  animation: buildRailPulse 1.8s ease-in-out infinite;
+}
+
+@keyframes buildRailPulse {
+  0%, 100% {
+    box-shadow: inset 2px 0 0 rgba(255, 212, 0, 0.5);
+  }
+  50% {
+    box-shadow: inset 2px 0 0 rgba(255, 212, 0, 1);
+  }
+}
+
+.build-row-done.tone-failure {
+  box-shadow: inset 2px 0 0 var(--err);
+}
+
+.build-row-done.tone-unstable {
+  box-shadow: inset 2px 0 0 var(--warn);
+}
+
+.build-row-done.tone-success {
+  box-shadow: inset 2px 0 0 var(--ok);
+}
+
+.build-row-done.tone-aborted,
+.build-row-done.tone-muted {
+  box-shadow: inset 2px 0 0 var(--muted-3);
+}
+
+.build-row-main {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  flex: 1 1 240px;
+  min-width: 0;
+}
+
+.build-row-title {
+  color: var(--text);
+  font-weight: 600;
+}
+
+.build-row-done .build-row-title {
+  flex: 1 1 160px;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.build-row-timing {
+  color: var(--muted-2);
+  font-size: 11px;
+}
+
+.build-row-stage {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.mini-bar {
+  width: 60px;
+  height: 3px;
+  border-radius: 2px;
+  overflow: hidden;
+  background: rgba(255, 212, 0, 0.15);
+  flex-shrink: 0;
+}
+
+.mini-bar-fill {
+  height: 100%;
+  background: var(--accent);
+}
+
+.build-row-stage-text {
+  color: var(--muted-2);
+  font-size: 11px;
+}
+
+.build-row-status {
+  flex-shrink: 0;
+  min-width: 80px;
+}
+
+.build-row-status-text {
+  color: var(--ok);
+  font-size: 11px;
+  letter-spacing: 0.04em;
+}
+
+.build-row-status-text.is-muted {
+  color: var(--muted-2);
+}
+
+.build-row-links {
+  display: flex;
+  gap: 6px;
+  margin-left: auto;
+  flex-shrink: 0;
+}
+
+.build-row .btn {
+  padding: 6px 11px;
+  font-size: 11px;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .build-row-running {
+    animation: none !important;
+  }
 }
 
 /* Small pill noting a build was already triaged (spec: board doubles as

@@ -59,6 +59,11 @@ interface Props {
   /** Seeds the report-URL field — set when arriving from the builds board
    *  ("triage" on a row) or a `?triage=<url>` deep link. */
   prefillReportUrl?: string;
+  /** Seeds the testbox field — set when the builds-board build being
+   *  triaged carries a `params.TESTBOX`. Same untouched-guard precedence as
+   *  prefillReportUrl: wins over the GET /api/config default, loses to
+   *  anything the user has already typed. */
+  prefillTestbox?: string;
 }
 
 /** The demo toggle is dev/demo-only surface — only shown when there's a
@@ -72,10 +77,10 @@ function computeShowDemoToggle(prefillReportUrl: string | undefined): boolean {
   return !!prefillReportUrl && prefillReportUrl.includes('fullTestBuildName=demo');
 }
 
-export function StartScreen({ onStart, prefillReportUrl }: Props) {
+export function StartScreen({ onStart, prefillReportUrl, prefillTestbox }: Props) {
   const [projectPath, setProjectPath] = useState('');
   const [targetUrl, setTargetUrl] = useState(prefillReportUrl || 'https://');
-  const [testbox, setTestbox] = useState('');
+  const [testbox, setTestbox] = useState(prefillTestbox || '');
   const [permissionPolicy, setPermissionPolicy] = useState<RunConfig['permissionPolicy']>('confirm-applies');
   const [demo, setDemo] = useState(false);
   const [submitting, setSubmitting] = useState(false);

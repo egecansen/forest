@@ -1,10 +1,15 @@
 import { useEffect, useMemo, useState } from 'react';
 
+/** Mirrors server/src/trackers/jenkins.ts's `StageInfo` — a wfapi/describe
+ *  digest. `null` when the poller couldn't fetch/parse it (board degrades:
+ *  the stage line is simply omitted). */
+interface StageInfo { current: string | null; failed: string | null; done: number; total: number }
+
 interface BuildRow {
   jobName: string; number: number; building: boolean; result: string | null;
-  timestamp: number; duration: number; url: string; displayName: string;
+  timestamp: number; duration: number; estimatedDuration: number; url: string; displayName: string;
   params: Record<string, string>; buildUser: string | null;
-  failedCount: number; reportUrl: string | null;
+  failedCount: number; reportUrl: string | null; stage: StageInfo | null;
 }
 interface BoardData { builds: BuildRow[]; fetchedAt: number | null; stale: boolean }
 
@@ -17,7 +22,143 @@ interface HistorySummary {
 
 const isRed = (b: BuildRow) => !b.building && (b.result === 'FAILURE' || b.result === 'UNSTABLE');
 
-export function BuildsBoard({ onTriage }: { onTriage: (reportUrl: string) => void }) {
+/** A red build only counts as "needs triage" while it hasn't already been
+ *  triaged (its reportUrl doesn't show up in run history) — the board's
+ *  three sections partition every build into exactly one of NEEDS
+ *  TRIAGE / RUNNING / DONE. */
+const isUntriagedRed = (b: BuildRow, triaged: Map<string, string>) =>
+  isRed(b) && !!b.reportUrl && !triaged.has(b.reportUrl);
+
+/** `params.TESTBOX` carries the raw testbox number (e.g. "307") — the
+ *  board (meta line + triage prefill) always renders/passes the `tb307`
+ *  form the start screen's testbox field expects. */
+const testboxOf = (b: BuildRow): string | undefined => (b.params.TESTBOX ? `tb${b.params.TESTBOX}` : undefined);
+
+/** Single aligned meta string for a NEEDS TRIAGE card — empty segments
+ *  (missing build parameters) are omitted rather than left as stray dots. */
+function metaLine(b: BuildRow): string {
+  const parts: string[] = [];
+  if (b.params.TAG) parts.push(`TAG ${b.params.TAG}`);
+  if (b.params.TESTBOX) parts.push(`tb${b.params.TESTBOX}`);
+  if (b.params.BRANCH) parts.push(b.params.BRANCH);
+  if (b.params.JIRA_TICKET) parts.push(b.params.JIRA_TICKET);
+  if (b.buildUser) parts.push(b.buildUser);
+  return parts.join(' · ');
+}
+
+const formatClock = (ts: number): string =>
+  new Date(ts).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', hour12: false });
+
+const formatDuration = (ms: number): string => {
+  const totalSec = Math.max(0, Math.round(ms / 1000));
+  return `${Math.floor(totalSec / 60)}m ${totalSec % 60}s`;
+};
+
+const formatMinutes = (ms: number): number => Math.max(0, Math.round(ms / 60000));
+
+/** Status-rail tone — drives the left-edge inset border across all three
+ *  sections (cards + compact/ledger rows) instead of per-row status chips. */
+const railTone = (b: BuildRow): string => {
+  if (b.building) return 'running';
+  if (b.result === 'FAILURE') return 'failure';
+  if (b.result === 'UNSTABLE') return 'unstable';
+  if (b.result === 'SUCCESS') return 'success';
+  if (b.result === 'ABORTED') return 'aborted';
+  return 'muted';
+};
+
+interface TriageProps { onTriage: (reportUrl: string, testbox?: string) => void }
+
+/** NEEDS TRIAGE — full card. The fail count is the card's one bold
+ *  element (the "fail meter"); a failed-stage line surfaces the stage that
+ *  actually broke, when the poller has it. */
+function BuildCard({ b, onTriage }: { b: BuildRow } & TriageProps) {
+  const tone = railTone(b);
+  const meta = metaLine(b);
+  return (
+    <article className={`build-card tone-${tone}`}>
+      <div className="build-card-info">
+        <div className="build-card-title">{b.displayName} · {b.jobName}</div>
+        {meta && <div className="build-card-meta">{meta}</div>}
+        <div className="build-card-timing">started {formatClock(b.timestamp)} · took {formatDuration(b.duration)}</div>
+        {b.stage?.failed && (
+          <div className="build-card-stage is-failed">failed stage: {b.stage.failed}</div>
+        )}
+      </div>
+      <div className="build-card-footer">
+        <div className={`fail-meter tone-${tone}`}>
+          <div className="fail-meter-top">
+            <span className="fail-meter-num">{b.failedCount}</span>
+            <span className="fail-meter-label">failed</span>
+          </div>
+          <div className="fail-meter-bar"><div className="fail-meter-bar-fill" /></div>
+        </div>
+        <div className="build-card-actions">
+          <a className="btn btn-ghost" href={b.url} target="_blank" rel="noreferrer">open build ↗</a>
+          {b.reportUrl && (
+            <a className="btn btn-ghost" href={b.reportUrl} target="_blank" rel="noreferrer">s-report ↗</a>
+          )}
+          <button type="button" className="btn btn-primary"
+            onClick={() => b.reportUrl && onTriage(b.reportUrl, testboxOf(b))}>
+            triage
+          </button>
+        </div>
+      </div>
+    </article>
+  );
+}
+
+/** RUNNING — compact single-row entry. No fail meter (nothing has failed
+ *  yet) and no triage action (nothing to triage while it's still moving). */
+function RunningRow({ b }: { b: BuildRow }) {
+  const pct = b.stage && b.stage.total > 0 ? Math.round((b.stage.done / b.stage.total) * 100) : 0;
+  return (
+    <div className="build-row build-row-running">
+      <div className="build-row-main">
+        <span className="build-row-title">{b.displayName} · {b.jobName}</span>
+        {b.stage && (
+          <div className="build-row-stage">
+            <div className="mini-bar"><div className="mini-bar-fill" style={{ width: `${pct}%` }} /></div>
+            <span className="build-row-stage-text">stage: {b.stage.current ?? '—'} · {b.stage.done}/{b.stage.total}</span>
+          </div>
+        )}
+        <span className="build-row-timing">started {formatClock(b.timestamp)} · ~{formatMinutes(b.estimatedDuration)}m expected</span>
+      </div>
+      <a className="btn btn-ghost" href={b.url} target="_blank" rel="noreferrer">open build ↗</a>
+    </div>
+  );
+}
+
+/** DONE — one-line ledger row: every build that's neither still running nor
+ *  waiting to be triaged (a triaged red, a clean green, an aborted run). */
+function DoneRow({ b, triagedStatus }: { b: BuildRow; triagedStatus?: string }) {
+  const tone = railTone(b);
+  return (
+    <div className={`build-row build-row-done tone-${tone}`}>
+      <span className="build-row-status">
+        {triagedStatus ? (
+          <span className="board-chip">triaged · {triagedStatus}</span>
+        ) : b.result === 'SUCCESS' ? (
+          <span className="build-row-status-text">clear</span>
+        ) : b.result === 'ABORTED' ? (
+          <span className="build-row-status-text is-muted">aborted</span>
+        ) : (
+          <span className="build-row-status-text is-muted">{(b.result ?? 'unknown').toLowerCase()}</span>
+        )}
+      </span>
+      <span className="build-row-title">{b.displayName} · {b.jobName}</span>
+      <span className="build-row-timing">took {formatDuration(b.duration)}</span>
+      <div className="build-row-links">
+        <a className="btn btn-ghost" href={b.url} target="_blank" rel="noreferrer">build ↗</a>
+        {b.reportUrl && (
+          <a className="btn btn-ghost" href={b.reportUrl} target="_blank" rel="noreferrer">s-report ↗</a>
+        )}
+      </div>
+    </div>
+  );
+}
+
+export function BuildsBoard({ onTriage }: TriageProps) {
   const [data, setData] = useState<BoardData | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [tagFilter, setTagFilter] = useState('');
@@ -25,7 +166,8 @@ export function BuildsBoard({ onTriage }: { onTriage: (reportUrl: string) => voi
   const [pasted, setPasted] = useState('');
   // reportUrl -> latest history status, so a row already triaged (however it
   // resolved) shows a small "triaged · <status>" chip instead of leaving the
-  // board looking untouched. The board doubles as history-at-a-glance.
+  // board looking untouched. The board doubles as history-at-a-glance, and
+  // (via isUntriagedRed) is what moves a red build out of NEEDS TRIAGE.
   const [triaged, setTriaged] = useState<Map<string, string>>(new Map());
 
   useEffect(() => {
@@ -74,7 +216,15 @@ export function BuildsBoard({ onTriage }: { onTriage: (reportUrl: string) => voi
   const rows = useMemo(() => (data?.builds ?? [])
     .filter((b) => !tagFilter || (b.params.TAG ?? '').toLowerCase().includes(tagFilter.toLowerCase()))
     .filter((b) => !mineOnly || !!b.buildUser), [data, tagFilter, mineOnly]);
-  const latestRed = rows.find((b) => isRed(b) && b.reportUrl);
+
+  // `rows` is already newest-first (server-sorted) — filtering preserves that
+  // order, so each section (and each job within NEEDS TRIAGE) stays
+  // newest-first with no extra sort needed.
+  const needsTriage = useMemo(() => rows.filter((b) => isUntriagedRed(b, triaged)), [rows, triaged]);
+  const running = useMemo(() => rows.filter((b) => b.building), [rows]);
+  const done = useMemo(() => rows.filter((b) => !b.building && !isUntriagedRed(b, triaged)), [rows, triaged]);
+
+  const latestRed = needsTriage[0];
 
   if (error) return <div className="start-screen"><div className="start-card"><p className="field-note">{error}</p></div></div>;
 
@@ -85,7 +235,7 @@ export function BuildsBoard({ onTriage }: { onTriage: (reportUrl: string) => voi
           <h1 className="brand">hektor</h1>
           <span className="field-note">flaky triage — latest builds{data?.stale ? ' · stale' : ''}</span>
           <button type="button" className="btn btn-primary" disabled={!latestRed}
-            onClick={() => latestRed?.reportUrl && onTriage(latestRed.reportUrl)}>
+            onClick={() => latestRed?.reportUrl && onTriage(latestRed.reportUrl, testboxOf(latestRed))}>
             triage latest
           </button>
         </div>
@@ -93,28 +243,41 @@ export function BuildsBoard({ onTriage }: { onTriage: (reportUrl: string) => voi
           <input placeholder="filter TAG" value={tagFilter} onChange={(e) => setTagFilter(e.target.value)} />
           <label><input type="checkbox" checked={mineOnly} onChange={(e) => setMineOnly(e.target.checked)} /> only mine</label>
         </div>
-        <table className="board-table">
-          <tbody>
-            {rows.map((b) => (
-              <tr key={`${b.jobName}-${b.number}`} className={isRed(b) ? 'is-red' : b.building ? 'is-running' : ''}>
-                <td>{b.displayName}</td>
-                <td>{b.building ? 'RUNNING' : b.result}</td>
-                <td>{b.params.TAG ?? ''}</td>
-                <td>{b.buildUser ?? ''}</td>
-                <td>{b.failedCount > 0 ? `${b.failedCount} failed` : ''}</td>
-                <td><a href={b.url} target="_blank" rel="noreferrer">jenkins</a></td>
-                <td>{b.reportUrl && <a href={b.reportUrl} target="_blank" rel="noreferrer">report</a>}</td>
-                <td>
-                  <button type="button" className="btn" disabled={!isRed(b) || !b.reportUrl}
-                    onClick={() => b.reportUrl && onTriage(b.reportUrl)}>triage</button>
-                  {b.reportUrl && triaged.has(b.reportUrl) && (
-                    <span className="board-chip">triaged · {triaged.get(b.reportUrl)}</span>
-                  )}
-                </td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
+
+        <div className="board-section board-section-needs-triage">
+          <div className="board-section-title">needs triage ({needsTriage.length})</div>
+          {needsTriage.length === 0 ? (
+            <p className="board-section-empty">nothing needs triage — board is clean</p>
+          ) : (
+            <div className="build-cards">
+              {needsTriage.map((b) => (
+                <BuildCard key={`${b.jobName}-${b.number}`} b={b} onTriage={onTriage} />
+              ))}
+            </div>
+          )}
+        </div>
+
+        {running.length > 0 && (
+          <div className="board-section board-section-running">
+            <div className="board-section-title">running ({running.length})</div>
+            <div className="build-rows">
+              {running.map((b) => <RunningRow key={`${b.jobName}-${b.number}`} b={b} />)}
+            </div>
+          </div>
+        )}
+
+        {done.length > 0 && (
+          <div className="board-section board-section-done">
+            <div className="board-section-title">done ({done.length})</div>
+            <div className="build-rows">
+              {done.map((b) => (
+                <DoneRow key={`${b.jobName}-${b.number}`} b={b}
+                  triagedStatus={b.reportUrl ? triaged.get(b.reportUrl) : undefined} />
+              ))}
+            </div>
+          </div>
+        )}
+
         <div className="board-paste">
           <input placeholder="…or paste an s-report URL" value={pasted} onChange={(e) => setPasted(e.target.value)} />
           <button type="button" className="btn" disabled={!pasted.trim()} onClick={() => onTriage(pasted.trim())}>triage url</button>
