@@ -64,6 +64,9 @@ interface Props {
    *  prefillReportUrl: wins over the GET /api/config default, loses to
    *  anything the user has already typed. */
   prefillTestbox?: string;
+  /** Navigates to the builds board — the form is the landing view, this is
+   *  its escape hatch to browse/triage from live Jenkins state instead. */
+  onBrowseBuilds: () => void;
 }
 
 /** The demo toggle is dev/demo-only surface — only shown when there's a
@@ -77,7 +80,7 @@ function computeShowDemoToggle(prefillReportUrl: string | undefined): boolean {
   return !!prefillReportUrl && prefillReportUrl.includes('fullTestBuildName=demo');
 }
 
-export function StartScreen({ onStart, prefillReportUrl, prefillTestbox }: Props) {
+export function StartScreen({ onStart, prefillReportUrl, prefillTestbox, onBrowseBuilds }: Props) {
   const [projectPath, setProjectPath] = useState('');
   const [targetUrl, setTargetUrl] = useState(prefillReportUrl || 'https://');
   const [testbox, setTestbox] = useState(prefillTestbox || '');
@@ -216,6 +219,9 @@ export function StartScreen({ onStart, prefillReportUrl, prefillTestbox }: Props
           <div className="start-actions">
             <button className="btn btn-primary" type="submit" disabled={!canSubmit}>
               {submitting ? 'starting…' : 'start triage'}
+            </button>
+            <button type="button" className="btn btn-ghost" onClick={onBrowseBuilds}>
+              latest builds →
             </button>
           </div>
 

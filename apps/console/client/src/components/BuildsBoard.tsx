@@ -76,6 +76,12 @@ const railTone = (b: BuildRow): string => {
 
 interface TriageProps { onTriage: (reportUrl: string, testbox?: string) => void }
 
+interface BoardProps extends TriageProps {
+  /** Navigates back to the triage start form without picking a build —
+   *  the board's own escape hatch, mirroring the form's "latest builds →". */
+  onBack: () => void;
+}
+
 /** NEEDS TRIAGE — full card. The fail count is the card's one bold
  *  element (the "fail meter"); a failed-stage line surfaces the stage that
  *  actually broke, when the poller has it. */
@@ -169,7 +175,7 @@ function DoneRow({ b, triagedStatus }: { b: BuildRow; triagedStatus?: string }) 
   );
 }
 
-export function BuildsBoard({ onTriage }: TriageProps) {
+export function BuildsBoard({ onTriage, onBack }: BoardProps) {
   const [data, setData] = useState<BoardData | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [tagFilter, setTagFilter] = useState('');
@@ -271,6 +277,9 @@ export function BuildsBoard({ onTriage }: TriageProps) {
         <div className="board-header">
           <h1 className="brand">hektor</h1>
           <span className="field-note">flaky triage — latest builds{data?.stale ? ' · stale — jenkins unreachable' : ''}</span>
+          <button type="button" className="btn btn-ghost" onClick={onBack}>
+            ← new triage
+          </button>
           <button type="button" className="btn btn-primary" disabled={!latestRed}
             onClick={() => latestRed?.reportUrl && onTriage(latestRed.reportUrl, testboxOf(latestRed))}>
             triage latest

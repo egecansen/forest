@@ -66,7 +66,7 @@ describe('BuildsBoard', () => {
   it('partitions an untriaged red build into NEEDS TRIAGE with a working triage button + testbox prefill', async () => {
     stubFetch();
     const onTriage = vi.fn();
-    render(<BuildsBoard onTriage={onTriage} />);
+    render(<BuildsBoard onTriage={onTriage} onBack={vi.fn()} />);
     await waitFor(() => expect(screen.getByText(/needs triage \(1\)/i)).toBeInTheDocument());
     expect(screen.getByText(/#2127.*web-test-s4-flaky/)).toBeInTheDocument();
     // fail meter shows the count
@@ -88,7 +88,7 @@ describe('BuildsBoard', () => {
 
   it('renders terse "#<number> · <job>" headlines everywhere, keeping the full displayName only as a hover title', async () => {
     stubFetch();
-    render(<BuildsBoard onTriage={vi.fn()} />);
+    render(<BuildsBoard onTriage={vi.fn()} onBack={vi.fn()} />);
     await waitFor(() => expect(screen.getByText(/needs triage \(1\)/i)).toBeInTheDocument());
     await waitFor(() => expect(screen.getByText(/running \(1\)/i)).toBeInTheDocument());
     await waitFor(() => expect(screen.getByText(/done \(1\)/i)).toBeInTheDocument());
@@ -111,7 +111,7 @@ describe('BuildsBoard', () => {
 
   it('renders open-build and s-report actions with correct hrefs/targets', async () => {
     stubFetch();
-    render(<BuildsBoard onTriage={vi.fn()} />);
+    render(<BuildsBoard onTriage={vi.fn()} onBack={vi.fn()} />);
     await waitFor(() => expect(screen.getByText(/needs triage \(1\)/i)).toBeInTheDocument());
     const card = screen.getByText(/#2127.*web-test-s4-flaky/).closest('article')!;
     const openBuild = within(card).getByRole('link', { name: /open build/i });
@@ -126,7 +126,7 @@ describe('BuildsBoard', () => {
 
   it('renders a building build as a compact RUNNING row with a stage line and no triage button', async () => {
     stubFetch();
-    render(<BuildsBoard onTriage={vi.fn()} />);
+    render(<BuildsBoard onTriage={vi.fn()} onBack={vi.fn()} />);
     await waitFor(() => expect(screen.getByText(/running \(1\)/i)).toBeInTheDocument());
     const runningRow = screen.getByText(/#2128.*web-test-s4-flaky/).closest('.build-row-running') as HTMLElement;
     expect(runningRow).toBeInTheDocument();
@@ -143,7 +143,7 @@ describe('BuildsBoard', () => {
 
   it('renders an already-triaged red build as a DONE ledger row with its chip, not in NEEDS TRIAGE', async () => {
     stubFetch();
-    render(<BuildsBoard onTriage={vi.fn()} />);
+    render(<BuildsBoard onTriage={vi.fn()} onBack={vi.fn()} />);
     await waitFor(() => expect(screen.getByText(/done \(1\)/i)).toBeInTheDocument());
     expect(screen.getByText(/triaged · completed/)).toBeInTheDocument();
     expect(screen.getByText(/#2126.*web-test-s4-flaky/)).toBeInTheDocument();
@@ -154,10 +154,19 @@ describe('BuildsBoard', () => {
   it('"triage latest" targets the first NEEDS TRIAGE build and passes its testbox', async () => {
     stubFetch();
     const onTriage = vi.fn();
-    render(<BuildsBoard onTriage={onTriage} />);
+    render(<BuildsBoard onTriage={onTriage} onBack={vi.fn()} />);
     await waitFor(() => expect(screen.getByText(/needs triage \(1\)/i)).toBeInTheDocument());
     await userEvent.click(screen.getByRole('button', { name: /triage latest/i }));
     expect(onTriage).toHaveBeenCalledWith(NEEDS_TRIAGE.reportUrl, 'tb307');
+  });
+
+  it('"← new triage" navigates back to the start form without picking a build', async () => {
+    stubFetch();
+    const onBack = vi.fn();
+    render(<BuildsBoard onTriage={vi.fn()} onBack={onBack} />);
+    await waitFor(() => expect(screen.getByText(/needs triage \(1\)/i)).toBeInTheDocument());
+    await userEvent.click(screen.getByRole('button', { name: /new triage/i }));
+    expect(onBack).toHaveBeenCalledTimes(1);
   });
 
   it('shows the clean-board message when nothing needs triage', async () => {
@@ -166,7 +175,7 @@ describe('BuildsBoard', () => {
       if (url.includes('/api/history')) return new Response(JSON.stringify([]), { status: 200 });
       return new Response(JSON.stringify({ fetchedAt: Date.now(), stale: false, builds: [RUNNING] }), { status: 200 });
     }));
-    render(<BuildsBoard onTriage={vi.fn()} />);
+    render(<BuildsBoard onTriage={vi.fn()} onBack={vi.fn()} />);
     await waitFor(() => expect(screen.getByText(/nothing needs triage/i)).toBeInTheDocument());
     expect(screen.getByRole('button', { name: /triage latest/i })).toBeDisabled();
   });
@@ -174,7 +183,7 @@ describe('BuildsBoard', () => {
   it('paste-URL triage passes no testbox', async () => {
     stubFetch();
     const onTriage = vi.fn();
-    render(<BuildsBoard onTriage={onTriage} />);
+    render(<BuildsBoard onTriage={onTriage} onBack={vi.fn()} />);
     await waitFor(() => expect(screen.getByText(/needs triage \(1\)/i)).toBeInTheDocument());
     const input = screen.getByPlaceholderText(/paste an s-report url/i);
     await userEvent.type(input, 'https://report.example/pasted?fullTestBuildName=z');
@@ -189,20 +198,20 @@ describe('BuildsBoard', () => {
       // Return stale data (server encountered an error but is serving cached builds)
       return new Response(JSON.stringify({ ...ROWS, stale: true }), { status: 200 });
     }));
-    render(<BuildsBoard onTriage={vi.fn()} />);
+    render(<BuildsBoard onTriage={vi.fn()} onBack={vi.fn()} />);
     await waitFor(() => expect(screen.getByText(/stale — jenkins unreachable/i)).toBeInTheDocument());
   });
 
   it('hides the "only mine" checkbox when jenkinsUser is unknown (no Jenkins auth / anonymous)', async () => {
     stubFetch(null);
-    render(<BuildsBoard onTriage={vi.fn()} />);
+    render(<BuildsBoard onTriage={vi.fn()} onBack={vi.fn()} />);
     await waitFor(() => expect(screen.getByText(/needs triage \(1\)/i)).toBeInTheDocument());
     expect(screen.queryByLabelText(/only mine/i)).not.toBeInTheDocument();
   });
 
   it('"only mine" checkbox filters rows to the authenticated Jenkins user\'s builds only', async () => {
     stubFetch('egecan.sen', { fetchedAt: Date.now(), stale: false, builds: [NEEDS_TRIAGE, RUNNING, TRIAGED, OTHER_USER] });
-    render(<BuildsBoard onTriage={vi.fn()} />);
+    render(<BuildsBoard onTriage={vi.fn()} onBack={vi.fn()} />);
     const checkbox = await screen.findByLabelText(/only mine/i);
 
     // Before filtering: OTHER_USER ('someone.else') sits alongside TRIAGED

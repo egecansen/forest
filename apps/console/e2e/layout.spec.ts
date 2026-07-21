@@ -9,6 +9,10 @@ import { expect, test, type Page } from '@playwright/test';
  * "how does it work?"), at any window width — and the page itself must
  * never scroll horizontally.
  *
+ * The console now lands on the triage start form (client/src/App.tsx) —
+ * the board is reached from there via its "latest builds →" button — so
+ * each measurement first navigates the form → board before measuring.
+ *
  * The board's own network calls (`/api/builds`, `/api/history`,
  * `/api/config`, `/api/runs`) are mocked directly rather than relying on
  * the fixture's unreachable Jenkins/ES stand-ins — that gives a real,
@@ -68,11 +72,27 @@ async function mockBoardApis(page: Page) {
 const intersects = (a: DOMRect, b: DOMRect) =>
   a.left < b.right && a.right > b.left && a.top < b.bottom && a.bottom > b.top;
 
+test('/ with no params lands on the triage form, and its nav button reaches the board', async ({ page }) => {
+  await mockBoardApis(page);
+  await page.goto('/', { waitUntil: 'domcontentloaded' });
+
+  await expect(page.getByRole('button', { name: /start triage/i })).toBeVisible();
+
+  await page.getByRole('button', { name: /latest builds/i }).click();
+
+  // The NEEDS TRIAGE section title (e.g. "needs triage (2)") — distinct from
+  // the info-drawer copy elsewhere on the page that also mentions the phrase.
+  await expect(page.locator('.board-section-title', { hasText: /needs triage/i })).toBeVisible();
+});
+
 for (const width of [1920, 1280, 690]) {
   test(`builds board stays capped, centered, and clear of the info triggers @ ${width}px`, async ({ page }) => {
     await mockBoardApis(page);
     await page.setViewportSize({ width, height: 1000 });
     await page.goto('/', { waitUntil: 'domcontentloaded' });
+
+    // Lands on the triage form — reach the board via its nav button.
+    await page.getByRole('button', { name: /latest builds/i }).click();
 
     const card = page.locator('.builds-board');
     await expect(card).toBeVisible();

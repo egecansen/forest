@@ -23,20 +23,20 @@ const GOOD_URL = 'https://report.example/web-test-s4-flaky/2127?buildStartTime=1
 describe('StartScreen', () => {
   it('prefills project path + testbox from GET /api/config', async () => {
     stubConfigFetch();
-    render(<StartScreen onStart={vi.fn()} />);
+    render(<StartScreen onStart={vi.fn()} onBrowseBuilds={vi.fn()} />);
     await waitFor(() => expect(screen.getByLabelText(/project path/i)).toHaveValue('/repo/web-test'));
     expect(screen.getByLabelText(/testbox/i)).toHaveValue('tb161');
   });
 
   it('prefills the report URL from prefillReportUrl over any config default', async () => {
     stubConfigFetch();
-    render(<StartScreen onStart={vi.fn()} prefillReportUrl={GOOD_URL} />);
+    render(<StartScreen onStart={vi.fn()} onBrowseBuilds={vi.fn()} prefillReportUrl={GOOD_URL} />);
     expect(screen.getByLabelText(/report url/i)).toHaveValue(GOOD_URL);
   });
 
   it('prefills the testbox from prefillTestbox, taking precedence over the config default', async () => {
     stubConfigFetch(); // config default testbox is 'tb161'
-    render(<StartScreen onStart={vi.fn()} prefillTestbox="tb307" />);
+    render(<StartScreen onStart={vi.fn()} onBrowseBuilds={vi.fn()} prefillTestbox="tb307" />);
     expect(screen.getByLabelText(/testbox/i)).toHaveValue('tb307');
     // Let the config fetch resolve — its untouched-guard must not clobber the prefill.
     await waitFor(() => expect(screen.getByLabelText(/project path/i)).toHaveValue('/repo/web-test'));
@@ -45,7 +45,7 @@ describe('StartScreen', () => {
 
   it('disables submit and shows a hint for a malformed testbox', async () => {
     stubConfigFetch({ configured: false });
-    render(<StartScreen onStart={vi.fn()} prefillReportUrl={GOOD_URL} />);
+    render(<StartScreen onStart={vi.fn()} onBrowseBuilds={vi.fn()} prefillReportUrl={GOOD_URL} />);
     const user = userEvent.setup();
     await user.type(screen.getByLabelText(/^project path$/i), '/tmp/x');
     const testboxInput = screen.getByLabelText(/testbox/i);
@@ -56,7 +56,7 @@ describe('StartScreen', () => {
 
   it('disables submit and shows a hint for a report URL missing fullTestBuildName', async () => {
     stubConfigFetch({ configured: false });
-    render(<StartScreen onStart={vi.fn()} />);
+    render(<StartScreen onStart={vi.fn()} onBrowseBuilds={vi.fn()} />);
     const user = userEvent.setup();
     await user.type(screen.getByLabelText(/^project path$/i), '/tmp/x');
     await user.type(screen.getByLabelText(/testbox/i), 'tb161');
@@ -69,7 +69,7 @@ describe('StartScreen', () => {
   it('enables submit once every field is valid, and posts the full body on submit', async () => {
     stubConfigFetch({ configured: false });
     const onStart = vi.fn().mockResolvedValue(undefined);
-    render(<StartScreen onStart={onStart} />);
+    render(<StartScreen onStart={onStart} onBrowseBuilds={vi.fn()} />);
     const user = userEvent.setup();
     await user.type(screen.getByLabelText(/^project path$/i), '/tmp/web-test');
     await user.type(screen.getByLabelText(/testbox/i), 'tb161');
@@ -86,7 +86,7 @@ describe('StartScreen', () => {
   it('maps the policy dropdown labels to the right permissionPolicy values', async () => {
     stubConfigFetch({ configured: false });
     const onStart = vi.fn().mockResolvedValue(undefined);
-    render(<StartScreen onStart={onStart} />);
+    render(<StartScreen onStart={onStart} onBrowseBuilds={vi.fn()} />);
     const user = userEvent.setup();
     await user.type(screen.getByLabelText(/^project path$/i), '/tmp/web-test');
     await user.type(screen.getByLabelText(/testbox/i), 'tb161');
@@ -101,6 +101,14 @@ describe('StartScreen', () => {
     expect(onStart).toHaveBeenCalledWith('/tmp/web-test', GOOD_URL, 'tb161', 'autonomous', 'new', false);
   });
 
+  it('renders a "latest builds →" button that navigates to the builds board', async () => {
+    stubConfigFetch({ configured: false });
+    const onBrowseBuilds = vi.fn();
+    render(<StartScreen onStart={vi.fn()} onBrowseBuilds={onBrowseBuilds} />);
+    await userEvent.click(screen.getByRole('button', { name: /latest builds/i }));
+    expect(onBrowseBuilds).toHaveBeenCalledTimes(1);
+  });
+
   describe('demo toggle', () => {
     const DEMO_URL = 'https://report.example/web-test-s4-flaky/2127?buildStartTime=1&fullTestBuildName=demo';
 
@@ -110,27 +118,27 @@ describe('StartScreen', () => {
 
     it('is not rendered for an ordinary triage session', async () => {
       stubConfigFetch({ configured: false });
-      render(<StartScreen onStart={vi.fn()} prefillReportUrl={GOOD_URL} />);
+      render(<StartScreen onStart={vi.fn()} onBrowseBuilds={vi.fn()} prefillReportUrl={GOOD_URL} />);
       expect(screen.queryByRole('checkbox', { name: /demo/i })).not.toBeInTheDocument();
     });
 
     it('renders when the deep-linked report URL carries fullTestBuildName=demo', async () => {
       stubConfigFetch({ configured: false });
-      render(<StartScreen onStart={vi.fn()} prefillReportUrl={DEMO_URL} />);
+      render(<StartScreen onStart={vi.fn()} onBrowseBuilds={vi.fn()} prefillReportUrl={DEMO_URL} />);
       expect(screen.getByRole('checkbox', { name: /demo/i })).toBeInTheDocument();
     });
 
     it('renders when the page URL carries ?demo', async () => {
       window.history.pushState(null, '', '/?demo');
       stubConfigFetch({ configured: false });
-      render(<StartScreen onStart={vi.fn()} />);
+      render(<StartScreen onStart={vi.fn()} onBrowseBuilds={vi.fn()} />);
       expect(screen.getByRole('checkbox', { name: /demo/i })).toBeInTheDocument();
     });
 
     it('checking it relaxes URL/testbox validation and posts demo: true', async () => {
       stubConfigFetch({ configured: false });
       const onStart = vi.fn().mockResolvedValue(undefined);
-      render(<StartScreen onStart={onStart} prefillReportUrl={DEMO_URL} />);
+      render(<StartScreen onStart={onStart} onBrowseBuilds={vi.fn()} prefillReportUrl={DEMO_URL} />);
       const user = userEvent.setup();
 
       await user.type(screen.getByLabelText(/^project path$/i), '/tmp/demo-project');

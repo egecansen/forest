@@ -8,12 +8,12 @@ import { ThemeToggle } from './components/ThemeToggle';
 import type { RunConfig, RunSnapshot } from './types';
 
 /**
- * The app has exactly four views: the builds board (the landing view — a
- * live snapshot of recent Jenkins builds to triage from), the triage start
- * form (reached from the board, or via a `?triage=<url>` deep link), a live
- * run console (backed by a WS stream), and a read-only console for a past,
- * persisted run opened from the history list. Only 'console' ever has a
- * stoppable/interruptible run behind it.
+ * The app has exactly four views: the triage start form (the landing view —
+ * reached on load, or via a `?triage=<url>` deep link), the builds board (a
+ * live snapshot of recent Jenkins builds to triage from, reached from the
+ * form's "latest builds →" button), a live run console (backed by a WS
+ * stream), and a read-only console for a past, persisted run opened from the
+ * history list. Only 'console' ever has a stoppable/interruptible run behind it.
  */
 type View =
   | { kind: 'board' }
@@ -24,7 +24,7 @@ type View =
 export function App() {
   const [view, setView] = useState<View>(() => {
     const deep = new URLSearchParams(location.search).get('triage');
-    return deep ? { kind: 'start', prefillReportUrl: deep } : { kind: 'board' };
+    return { kind: 'start', prefillReportUrl: deep ?? undefined };
   });
   // The live/current run's config, kept even while browsing a past run in the
   // history view so "back" can return to the running session (not the start
@@ -131,7 +131,7 @@ export function App() {
       await fetch(`/api/runs/${view.config.runId}/stop`, { method: 'POST' }).catch(() => {});
     }
     setActiveConfig(null);
-    setView({ kind: 'board' });
+    setView({ kind: 'start' });
   }, [view]);
 
   // "back" from a read-only history run: return to the live/current session if
@@ -217,10 +217,16 @@ export function App() {
         {view.kind === 'board' && (
           <BuildsBoard
             onTriage={(url, testbox) => setView({ kind: 'start', prefillReportUrl: url, prefillTestbox: testbox })}
+            onBack={() => setView({ kind: 'start' })}
           />
         )}
         {view.kind === 'start' && (
-          <StartScreen onStart={startRun} prefillReportUrl={view.prefillReportUrl} prefillTestbox={view.prefillTestbox} />
+          <StartScreen
+            onStart={startRun}
+            prefillReportUrl={view.prefillReportUrl}
+            prefillTestbox={view.prefillTestbox}
+            onBrowseBuilds={() => setView({ kind: 'board' })}
+          />
         )}
         {view.kind === 'console' && (
           <RunConsole
