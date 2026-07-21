@@ -1,6 +1,7 @@
 import { EventEmitter } from 'node:events';
 import { randomUUID } from 'node:crypto';
 import type {
+  Cluster,
   FileChange,
   Finding,
   LogEntry,
@@ -359,6 +360,19 @@ export class Run extends EventEmitter {
     };
     this.snapshot.findings.push(finding);
     this.emitEvent({ type: 'finding', finding });
+  }
+
+  setClusters(clusters: Cluster[]) {
+    this.snapshot.clusters = clusters;
+    this.emitEvent({ type: 'clusters', clusters });
+  }
+
+  updateCluster(id: string, patch: Partial<Cluster>) {
+    const idx = this.snapshot.clusters.findIndex((c) => c.id === id);
+    if (idx < 0) return;
+    const merged = { ...this.snapshot.clusters[idx], ...patch, id };
+    this.snapshot.clusters[idx] = merged;
+    this.emitEvent({ type: 'cluster', cluster: merged });
   }
 
   addFile(f: Omit<FileChange, 'id' | 'ts'> & Partial<Pick<FileChange, 'id' | 'ts'>>) {
