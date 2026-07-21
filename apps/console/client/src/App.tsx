@@ -79,9 +79,10 @@ export function App() {
       projectPath: string,
       targetUrl: string,
       testbox: string,
-      permissionPolicy: RunConfig['permissionPolicy']
+      permissionPolicy: RunConfig['permissionPolicy'],
+      projectMode: RunConfig['projectMode']
     ) => {
-      const body: Record<string, unknown> = { projectPath, targetUrl, testbox, permissionPolicy };
+      const body: Record<string, unknown> = { projectPath, targetUrl, testbox, permissionPolicy, projectMode };
 
       const res = await fetch('/api/runs', {
         method: 'POST',
@@ -99,6 +100,7 @@ export function App() {
         testbox,
         mode: 'triage',
         permissionPolicy,
+        projectMode,
         runId: json.runId,
       };
       setActiveConfig(config);

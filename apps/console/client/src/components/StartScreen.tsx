@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import type { RunConfig } from '../types';
 import { SelectDropdown } from './SelectDropdown';
 import type { DropdownOption } from './SelectDropdown';
@@ -13,18 +13,48 @@ const PERMISSION_OPTIONS: DropdownOption<RunConfig['permissionPolicy']>[] = [
   },
   {
     value: 'autonomous',
-    label: 'autonomous',
+    label: 'auto-approve recipe fixes',
     badge: 'accept edits',
     description: 'Applies picked-cluster fixes unattended.',
   },
 ];
+
+/** Mirrors server/src/validate.ts's `TB_RE = /^tb[0-9]{1,4}$/` — a client-side
+ *  quick check so the form can disable submit + hint before round-tripping
+ *  to the server for the authoritative validation. */
+const TESTBOX_RE = /^tb[0-9]{1,4}$/;
+export function isValidTestbox(testbox: string): boolean {
+  return TESTBOX_RE.test(testbox.trim());
+}
+
+/** Mirrors server/src/validate.ts's report-URL checks: must parse as a URL
+ *  and carry a `fullTestBuildName` query param. (The server additionally
+ *  checks the host allowlist + `buildStartTime`, which need server-side kit
+ *  config — those surface as a proper error from the POST /api/runs call.) */
+export function isValidReportUrl(url: string): boolean {
+  let u: URL;
+  try {
+    u = new URL(url.trim());
+  } catch {
+    return false;
+  }
+  return !!u.searchParams.get('fullTestBuildName');
+}
+
+interface ConsoleConfigResponse {
+  configured: boolean;
+  repoPath?: string;
+  testbox?: string;
+  reportBase?: string;
+}
 
 interface Props {
   onStart: (
     projectPath: string,
     targetUrl: string,
     testbox: string,
-    permissionPolicy: RunConfig['permissionPolicy']
+    permissionPolicy: RunConfig['permissionPolicy'],
+    projectMode: RunConfig['projectMode']
   ) => Promise<void>;
   /** Seeds the report-URL field — set when arriving from the builds board
    *  ("triage" on a row) or a `?triage=<url>` deep link. */
@@ -40,16 +70,40 @@ export function StartScreen({ onStart, prefillReportUrl }: Props) {
   const [err, setErr] = useState<string | null>(null);
   const [pickerOpen, setPickerOpen] = useState(false);
 
+  // Seed project path + testbox from the console's configured defaults
+  // (GET /api/config) — only when the field hasn't already been filled in
+  // (e.g. by the user typing ahead of the response, or a future deep link).
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        const res = await fetch('/api/config');
+        if (!res.ok) return;
+        const cfg = (await res.json()) as ConsoleConfigResponse;
+        if (cancelled || !cfg.configured) return;
+        if (cfg.repoPath) setProjectPath((p) => (p ? p : cfg.repoPath!));
+        if (cfg.testbox) setTestbox((t) => (t ? t : cfg.testbox!));
+      } catch {
+        // offline / not yet configured — leave the fields blank, user fills them in
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  const projectPathValid = projectPath.trim().length > 0;
+  const testboxValid = isValidTestbox(testbox);
+  const urlValid = isValidReportUrl(targetUrl);
+  const canSubmit = projectPathValid && testboxValid && urlValid && !submitting;
+
   const submit = async (ev: React.FormEvent) => {
     ev.preventDefault();
     setErr(null);
-    if (!projectPath.trim()) {
-      setErr('project path is required');
-      return;
-    }
+    if (!canSubmit) return;
     setSubmitting(true);
     try {
-      await onStart(projectPath.trim(), targetUrl.trim(), testbox.trim(), permissionPolicy);
+      await onStart(projectPath.trim(), targetUrl.trim(), testbox.trim(), permissionPolicy, 'new');
     } catch (e) {
       setErr((e as Error).message);
       setSubmitting(false);
@@ -93,6 +147,9 @@ export function StartScreen({ onStart, prefillReportUrl }: Props) {
               spellCheck={false}
               autoComplete="off"
             />
+            {!urlValid && (
+              <p className="field-note">must be a valid link that includes fullTestBuildName</p>
+            )}
           </div>
 
           <div className="field">
@@ -105,6 +162,7 @@ export function StartScreen({ onStart, prefillReportUrl }: Props) {
               spellCheck={false}
               autoComplete="off"
             />
+            {!testboxValid && <p className="field-note">must look like tb161 (tb + 1-4 digits)</p>}
           </div>
 
           <div className="field">
@@ -120,7 +178,7 @@ export function StartScreen({ onStart, prefillReportUrl }: Props) {
           {err && <p className="start-error">{err}</p>}
 
           <div className="start-actions">
-            <button className="btn btn-primary" type="submit" disabled={submitting}>
+            <button className="btn btn-primary" type="submit" disabled={!canSubmit}>
               {submitting ? 'starting…' : 'start triage'}
             </button>
           </div>

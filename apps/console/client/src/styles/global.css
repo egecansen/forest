@@ -2896,6 +2896,90 @@ textarea {
   transition: max-height 0.3s ease, color 0.25s ease;
 }
 
+/* ─── Clusters tab ────────────────────────────────────────────────────── */
+.clusters-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-family: var(--mono);
+  font-size: 12.5px;
+}
+
+.clusters-table th {
+  text-align: left;
+  padding: 8px 10px;
+  font-size: 10.5px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--muted-2);
+  border-bottom: 1px solid var(--border-strong);
+  font-weight: 600;
+}
+
+.clusters-table td {
+  padding: 10px;
+  border-bottom: 1px solid var(--border);
+  color: var(--text);
+  vertical-align: middle;
+}
+
+.clusters-table tr:hover td {
+  background: rgba(var(--raise-rgb), 0.04);
+}
+
+.cluster-id {
+  color: var(--muted-2);
+  font-size: 11.5px;
+  margin-right: 2px;
+}
+
+/* Row tints mirror the builds board (`.board-table tr.is-*`): a tinted
+   background + an inset left rail in the row's tone, so a cluster's
+   disposition reads at a glance down the whole table. */
+.clusters-table tr.cluster-green td {
+  background: rgba(163, 193, 48, 0.08);
+  color: var(--ok);
+}
+.clusters-table tr.cluster-green td:first-child {
+  box-shadow: inset 2px 0 0 var(--ok);
+}
+
+.clusters-table tr.cluster-app-bug td {
+  background: rgba(239, 68, 68, 0.06);
+  color: var(--err);
+}
+.clusters-table tr.cluster-app-bug td:first-child {
+  box-shadow: inset 2px 0 0 var(--err);
+}
+
+.clusters-table tr.cluster-error td {
+  background: rgba(245, 158, 11, 0.08);
+  color: var(--warn);
+}
+.clusters-table tr.cluster-error td:first-child {
+  box-shadow: inset 2px 0 0 var(--warn);
+}
+
+/* Active work (fixing/verifying) — accent-tinted like the board's in-progress row. */
+.clusters-table tr.cluster-fixing td,
+.clusters-table tr.cluster-verifying td {
+  background: var(--accent-tint);
+  color: var(--accent-ink);
+}
+.clusters-table tr.cluster-fixing td:first-child,
+.clusters-table tr.cluster-verifying td:first-child {
+  box-shadow: inset 2px 0 0 var(--accent);
+}
+
+/* Picked (queued to work) — a faint hint of the same accent, no full tint. */
+.clusters-table tr.cluster-picked td:first-child {
+  box-shadow: inset 2px 0 0 var(--border-strong);
+}
+
+/* Skipped — dimmed, out of the running. */
+.clusters-table tr.cluster-skipped td {
+  color: var(--muted-3);
+}
+
 /* ─── Files & Tests tab ───────────────────────────────────────────────── */
 .files-tab {
   display: grid;

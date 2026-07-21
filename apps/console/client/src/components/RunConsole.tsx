@@ -6,6 +6,7 @@ import { TerminalLog } from './TerminalLog';
 import { Sidebar } from './Sidebar';
 import { Footer } from './Footer';
 import { TabBar, type TabDef, type TabId } from './TabBar';
+import { ClustersTab } from './ClustersTab';
 import { TimelineTab } from './TimelineTab';
 import { FilesTab } from './FilesTab';
 import { ReportTab } from './ReportTab';
@@ -64,7 +65,31 @@ export function RunConsole({ config, onStop, onPause, onResume, onNew, backLabel
     [snapshot.status, snapshot.log]
   );
 
-  const [activeTab, setActiveTab] = useState<TabId>('log');
+  const [activeTab, setActiveTabState] = useState<TabId>('log');
+  // Tracks whether the user has ever manually picked a tab, so the Clusters
+  // auto-switch (below) never fights a deliberate choice — once the user has
+  // clicked a tab, hektor stops steering.
+  const [userPickedTab, setUserPickedTab] = useState(false);
+  const selectTab = (id: TabId) => {
+    setUserPickedTab(true);
+    setActiveTabState(id);
+  };
+  // Auto-switch to Clusters the first time a non-empty cluster list shows up
+  // (live event or an already-populated static/history snapshot) — but only
+  // once, and only if the user hasn't picked a tab of their own yet.
+  const autoSwitchedToClustersRef = useRef(false);
+  useEffect(() => {
+    if (
+      shouldAutoSwitchToClusters({
+        clusterCount: snapshot.clusters.length,
+        userPickedTab,
+        alreadyAutoSwitched: autoSwitchedToClustersRef.current,
+      })
+    ) {
+      autoSwitchedToClustersRef.current = true;
+      setActiveTabState('clusters');
+    }
+  }, [snapshot.clusters.length, userPickedTab]);
   // Auto-scroll behavior for the live log — three triggers (finding F3):
   // (1) Jump to newest whenever the Log tab becomes active. The pane remounts at
   //     scrollTop 0 on tab switch, so a `near`-gated scroll would never fire and
@@ -115,12 +140,14 @@ export function RunConsole({ config, onStop, onPause, onResume, onNew, backLabel
   // Unseen-content indicators on inactive tabs.
   const [seen, setSeen] = useState<Record<TabId, number>>({
     log: 0,
+    clusters: 0,
     timeline: 0,
     files: 0,
     report: 0,
   });
   const counts: Record<TabId, number> = {
     log: snapshot.log.length,
+    clusters: snapshot.clusters.length,
     timeline: snapshot.phases.filter((p) => p.startedAt).length,
     files: snapshot.files.length + snapshot.tests.length,
     report: snapshot.reportUrl ? 1 : 0,
@@ -131,6 +158,7 @@ export function RunConsole({ config, onStop, onPause, onResume, onNew, backLabel
   }, [activeTab, counts[activeTab]]);
   const unseen: Partial<Record<TabId, boolean>> = {
     log: counts.log > seen.log,
+    clusters: counts.clusters > seen.clusters,
     timeline: counts.timeline > seen.timeline,
     files: counts.files > seen.files,
     report: counts.report > seen.report,
@@ -142,6 +170,7 @@ export function RunConsole({ config, onStop, onPause, onResume, onNew, backLabel
 
   const tabs: TabDef[] = [
     { id: 'log',      label: 'Log',      icon: '›', badge: null },
+    { id: 'clusters', label: 'Clusters', icon: '◫', badge: snapshot.clusters.length || null },
     { id: 'timeline', label: 'Timeline', icon: '╱', badge: null },
     { id: 'files',    label: 'Files',    icon: '⌗', badge: (snapshot.files.length + snapshot.tests.length) || null },
     { id: 'report',   label: 'Report',   icon: '◈', badge: reportReady ? 1 : null, disabled: !reportReady && snapshot.status !== 'running' && snapshot.status !== 'completed' && snapshot.status !== 'idle' },
@@ -261,7 +290,7 @@ export function RunConsole({ config, onStop, onPause, onResume, onNew, backLabel
           tabs={tabs}
           active={activeTab}
           unseen={unseen}
-          onSelect={setActiveTab}
+          onSelect={selectTab}
         />
 
         <div className="term-body">
@@ -270,6 +299,11 @@ export function RunConsole({ config, onStop, onPause, onResume, onNew, backLabel
             {activeTab === 'log' && (
               <div className="term-log" ref={logScrollRef} onScroll={handleLogScroll}>
                 <TerminalLog entries={snapshot.log} />
+              </div>
+            )}
+            {activeTab === 'clusters' && (
+              <div className="term-pane-inner">
+                <ClustersTab clusters={snapshot.clusters} />
               </div>
             )}
             {activeTab === 'timeline' && (
@@ -327,6 +361,19 @@ export function RunConsole({ config, onStop, onPause, onResume, onNew, backLabel
       )}
     </div>
   );
+}
+
+/** Decides whether the Clusters tab should auto-activate: only on the first
+ *  time a non-empty cluster list is seen, and only if the user hasn't picked
+ *  a tab of their own — so the auto-switch never fights a manual choice, and
+ *  never re-fires on every subsequent cluster update. Pure — testable
+ *  without mounting the live WS stream. */
+export function shouldAutoSwitchToClusters(opts: {
+  clusterCount: number;
+  userPickedTab: boolean;
+  alreadyAutoSwitched: boolean;
+}): boolean {
+  return !opts.userPickedTab && !opts.alreadyAutoSwitched && opts.clusterCount > 0;
 }
 
 function shortPath(p: string): string {
