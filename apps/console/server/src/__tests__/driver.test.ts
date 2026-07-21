@@ -52,4 +52,38 @@ describe('driver core', () => {
     expect(inferPhase('"$KIT/summary.sh" < ledger.json')).toBe('report');
     expect(inferPhase('ls -la')).toBe(null);
   });
+
+  it('pause + resultless stream end lands on paused status', async () => {
+    const run = runStore.create(cfg);
+    let pauseResolve: () => void;
+    const pausePromise = new Promise<void>((r) => { pauseResolve = r; });
+
+    const handle = startDriver(run, () => {
+      async function* gen() {
+        yield msg({ type: 'system', subtype: 'init', session_id: 'sess-pause-test' });
+        // Wait until pause() is called, then end stream without result
+        await pausePromise;
+      }
+      return Object.assign(gen(), { interrupt: vi.fn(async () => {}) });
+    });
+
+    // Wait for run to enter 'running' state, then call pause, then verify final status
+    const done = new Promise<void>((r) => {
+      const handleStatus = (e: any) => {
+        if (e.type === 'status' && e.status === 'paused') {
+          run.off('event', handleStatus);
+          r();
+        }
+      };
+      run.on('event', handleStatus);
+    });
+
+    // Give init a moment to set status to 'running', then pause and resolve the stream
+    await new Promise((r) => setTimeout(r, 50));
+    handle.pause();
+    pauseResolve!();
+
+    await done;
+    expect(run.snapshot.status).toBe('paused');
+  });
 });

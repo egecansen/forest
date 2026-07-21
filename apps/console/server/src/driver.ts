@@ -117,6 +117,7 @@ export function startDriver(run: Run, queryFn: QueryFn = realQueryFn, opts: { re
       }
       // Stream ended without a result (abort/stop): leave status as set by stop()/pause.
       if (!run.isStopped() && run.snapshot.status === 'running' && !pausing) run.finish(false);
+      if (!run.isStopped() && pausing && run.snapshot.status === 'running') run.setStatus('paused');
     } catch (err) {
       if (!run.isStopped()) {
         run.log({ kind: 'error', text: `driver error: ${(err as Error).message}` });
