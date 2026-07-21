@@ -7,6 +7,7 @@ import { buildPrompt } from './driver-prompt.js';
 import { makeCanUseTool } from './driver-can-use-tool.js';
 import { hektorMcpServer } from './driver-mcp.js';
 import { pendingAnswers } from './pending-answers.js';
+import { startLedgerWatcher } from './ledger-watcher.js';
 
 export type QueryFn = (args: { prompt: string; options: Record<string, unknown> }) =>
   AsyncIterable<Record<string, unknown>> & { interrupt?: () => Promise<void> };
@@ -78,8 +79,20 @@ export function startDriver(run: Run, queryFn: QueryFn = realQueryFn, opts: { re
 
   const stream = queryFn({ prompt: buildPrompt(config, { resume: !!opts.resume }), options });
 
+  // Ledger-watcher lifecycle (leak-proof): started once this run is actually
+  // 'running' (real sessions only — a scripted demo has no ledger.json to
+  // read), stopped on every exit path below (stream end, driver error,
+  // explicit stop(), explicit pause()). `stopLedgerWatcher` is idempotent —
+  // safe to call from more than one of those paths for the same run.
+  let stopWatcher: (() => void) | null = null;
+  const startLedgerWatcherOnce = () => {
+    if (!stopWatcher && !config.demo) stopWatcher = startLedgerWatcher(run, config.projectPath);
+  };
+  const stopLedgerWatcher = () => { stopWatcher?.(); stopWatcher = null; };
+
   void (async () => {
     run.setStatus(opts.resume ? 'running' : 'preparing');
+    if (opts.resume) startLedgerWatcherOnce();
     try {
       for await (const m of stream) {
         if (run.isStopped()) break;
@@ -88,6 +101,7 @@ export function startDriver(run: Run, queryFn: QueryFn = realQueryFn, opts: { re
           run.setSessionId((m as { session_id: string }).session_id);
           run.setStatus('running');
           run.setTelemetry({ thinking: true });
+          startLedgerWatcherOnce();
         } else if (type === 'assistant') {
           const content = ((m as { message?: { content?: Array<Record<string, unknown>> } }).message?.content ?? []);
           for (const block of content) {
@@ -138,12 +152,17 @@ export function startDriver(run: Run, queryFn: QueryFn = realQueryFn, opts: { re
         run.log({ kind: 'error', text: `driver error: ${(err as Error).message}` });
         if (pausing) run.setStatus('paused'); else run.finish(false);
       }
+    } finally {
+      // Every path out of this stream loop (success, failure, pause, abort,
+      // thrown error) lands here — the watcher must never outlive the
+      // stream it was started alongside.
+      stopLedgerWatcher();
     }
   })();
 
-  const stop = () => { abort.abort(); run.stop(); };
+  const stop = () => { abort.abort(); run.stop(); stopLedgerWatcher(); };
   return Object.assign(stop, {
-    pause: () => { pausing = true; void stream.interrupt?.().catch(() => abort.abort()); },
+    pause: () => { pausing = true; stopLedgerWatcher(); void stream.interrupt?.().catch(() => abort.abort()); },
   });
 }
 
