@@ -34,7 +34,11 @@ describe('BuildsBoard', () => {
     const rowBtn = buttons.find((b) => !b.textContent?.includes('latest'))!;
     await userEvent.click(rowBtn);
     expect(onTriage).toHaveBeenCalledWith(ROWS.builds[0].reportUrl);
-    expect(screen.getByText(/triaged · completed/)).toBeInTheDocument();
+    await waitFor(() => expect(screen.getByText(/triaged · completed/)).toBeInTheDocument());
+    // Assert the running/no-report row's triage button is disabled
+    const runningRow = screen.getByText('#2128').closest('tr')!;
+    const runningRowBtn = runningRow.querySelector('button')!;
+    expect(runningRowBtn).toBeDisabled();
   });
 
   it('"Triage latest" picks the newest red build with a report', async () => {

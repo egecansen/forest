@@ -34,14 +34,21 @@ export function BuildsBoard({ onTriage }: { onTriage: (reportUrl: string) => voi
     (async () => {
       try {
         const res = await fetch('/api/builds');
-        if (!res.ok) { setError((await res.json()).error ?? `HTTP ${res.status}`); return; }
-        setData(await res.json());
+        if (!res.ok) {
+          const json = await res.json();
+          if (!closed) setError(json.error ?? `HTTP ${res.status}`);
+          return;
+        }
+        const json = await res.json();
+        if (!closed) setData(json);
         ws = new WebSocket(`ws://${location.host}/ws-board`);
         ws.onmessage = (ev) => {
           const msg = JSON.parse(ev.data);
           if (msg.type === 'builds' && !closed) setData(msg);
         };
-      } catch { setError('server unreachable'); }
+      } catch {
+        if (!closed) setError('server unreachable');
+      }
     })();
     return () => { closed = true; ws?.close(); };
   }, []);
