@@ -62,7 +62,7 @@ export class BuildsPoller {
             stage = this.stageCache.get(key)!;
           } else {
             stage = await fetchBuildStages(this.cfg.jenkins, b.url, this.fetchImpl);
-            if (!b.building) this.stageCache.set(key, stage);
+            if (!b.building && stage !== null) this.stageCache.set(key, stage);
           }
         }
         return { ...b, ...es, stage };

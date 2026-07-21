@@ -55,6 +55,11 @@ describe('BuildsBoard', () => {
     expect(screen.getByText('failed')).toBeInTheDocument();
     // failed-stage line
     expect(screen.getByText(/failed stage: assert-flow/i)).toBeInTheDocument();
+    // timing: 125000ms = 2m 5s
+    expect(screen.getByText(/took 2m 5s/i)).toBeInTheDocument();
+    // Check timing in the card context to avoid matching the running row
+    const card = screen.getByText(/#2127.*web-test-s4-flaky/).closest('article')!;
+    expect(within(card).getByText(/started \d{2}:\d{2}/)).toBeInTheDocument();
 
     const triageBtn = screen.getByRole('button', { name: /^triage$/i });
     expect(triageBtn).toBeEnabled();
@@ -81,12 +86,16 @@ describe('BuildsBoard', () => {
     stubFetch();
     render(<BuildsBoard onTriage={vi.fn()} />);
     await waitFor(() => expect(screen.getByText(/running \(1\)/i)).toBeInTheDocument());
-    expect(screen.getByText(/#2128.*web-test-s4-flaky/)).toBeInTheDocument();
-    expect(screen.getByText(/stage: test.*2\/5/)).toBeInTheDocument();
+    const runningRow = screen.getByText(/#2128.*web-test-s4-flaky/).closest('.build-row-running') as HTMLElement;
+    expect(runningRow).toBeInTheDocument();
+    expect(within(runningRow).getByText(/stage: test.*2\/5/)).toBeInTheDocument();
+    expect(within(runningRow).getByText('running', { selector: '.board-chip' })).toBeInTheDocument();
+    // timing: estimatedDuration: 600000ms = 10m
+    expect(within(runningRow).getByText(/~10m expected/)).toBeInTheDocument();
+    expect(within(runningRow).getByText(/started \d{2}:\d{2}/)).toBeInTheDocument();
     // No per-row triage action for a running build — the row itself has no
     // "triage" button (only the card in NEEDS TRIAGE, and the header's
     // "triage latest", offer one).
-    const runningRow = screen.getByText(/#2128.*web-test-s4-flaky/).closest('.build-row-running') as HTMLElement;
     expect(within(runningRow).queryAllByRole('button', { name: /triage/i })).toHaveLength(0);
   });
 
@@ -129,5 +138,16 @@ describe('BuildsBoard', () => {
     await userEvent.type(input, 'https://report.example/pasted?fullTestBuildName=z');
     await userEvent.click(screen.getByRole('button', { name: /triage url/i }));
     expect(onTriage).toHaveBeenCalledWith('https://report.example/pasted?fullTestBuildName=z');
+  });
+
+  it('displays stale badge when data is stale', async () => {
+    vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes('/api/history')) return new Response(JSON.stringify(HISTORY), { status: 200 });
+      // Return stale data (server encountered an error but is serving cached builds)
+      return new Response(JSON.stringify({ ...ROWS, stale: true }), { status: 200 });
+    }));
+    render(<BuildsBoard onTriage={vi.fn()} />);
+    await waitFor(() => expect(screen.getByText(/stale — jenkins unreachable/i)).toBeInTheDocument());
   });
 });

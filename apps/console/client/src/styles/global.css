@@ -5222,7 +5222,7 @@ button.tree-line.file {
   max-width: 100%;
   border-radius: 2px;
   overflow: hidden;
-  background: rgba(239, 68, 68, 0.15);
+  background: color-mix(in srgb, var(--err) 15%, transparent);
 }
 
 .fail-meter-bar-fill {
@@ -5232,7 +5232,7 @@ button.tree-line.file {
 }
 
 .fail-meter.tone-unstable .fail-meter-bar {
-  background: rgba(245, 158, 11, 0.15);
+  background: color-mix(in srgb, var(--warn) 15%, transparent);
 }
 
 .fail-meter.tone-unstable .fail-meter-bar-fill {
@@ -5272,12 +5272,13 @@ button.tree-line.file {
   flex-wrap: wrap;
 }
 
-/* Running build's rail is the accent, with a subtle pulse (reduced-motion
-   gated below) — the board's one "matches the console header's RUNNING
-   chip" tone, without adding a duplicate status chip. */
+/* Running build — uses shared tone-* rail pattern, with accent pulse */
 .build-row-running {
-  box-shadow: inset 2px 0 0 var(--accent);
   animation: buildRailPulse 1.8s ease-in-out infinite;
+}
+
+.build-row-running.tone-running {
+  box-shadow: inset 2px 0 0 var(--accent);
 }
 
 @keyframes buildRailPulse {
@@ -5317,6 +5318,21 @@ button.tree-line.file {
 .build-row-title {
   color: var(--text);
   font-weight: 600;
+}
+
+.build-row-title-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.build-row-title-row .build-row-title {
+  flex: 1 1 160px;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .build-row-done .build-row-title {
@@ -5408,6 +5424,13 @@ button.tree-line.file {
   background: rgba(var(--raise-rgb), 0.05);
   border: 1px solid var(--border-strong);
   white-space: nowrap;
+}
+
+/* RUNNING chip — accent tone to match the console header */
+.board-chip-running {
+  color: var(--accent-ink);
+  background: var(--accent-tint);
+  border-color: var(--accent);
 }
 
 .board-paste {

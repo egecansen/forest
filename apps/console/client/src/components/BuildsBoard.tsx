@@ -112,10 +112,14 @@ function BuildCard({ b, onTriage }: { b: BuildRow } & TriageProps) {
  *  yet) and no triage action (nothing to triage while it's still moving). */
 function RunningRow({ b }: { b: BuildRow }) {
   const pct = b.stage && b.stage.total > 0 ? Math.round((b.stage.done / b.stage.total) * 100) : 0;
+  const tone = railTone(b);
   return (
-    <div className="build-row build-row-running">
+    <div className={`build-row build-row-running tone-${tone}`}>
       <div className="build-row-main">
-        <span className="build-row-title">{b.displayName} · {b.jobName}</span>
+        <div className="build-row-title-row">
+          <span className="build-row-title">{b.displayName} · {b.jobName}</span>
+          <span className="board-chip board-chip-running">running</span>
+        </div>
         {b.stage && (
           <div className="build-row-stage">
             <div className="mini-bar"><div className="mini-bar-fill" style={{ width: `${pct}%` }} /></div>
@@ -233,7 +237,7 @@ export function BuildsBoard({ onTriage }: TriageProps) {
       <div className="start-card builds-board">
         <div className="board-header">
           <h1 className="brand">hektor</h1>
-          <span className="field-note">flaky triage — latest builds{data?.stale ? ' · stale' : ''}</span>
+          <span className="field-note">flaky triage — latest builds{data?.stale ? ' · stale — jenkins unreachable' : ''}</span>
           <button type="button" className="btn btn-primary" disabled={!latestRed}
             onClick={() => latestRed?.reportUrl && onTriage(latestRed.reportUrl, testboxOf(latestRed))}>
             triage latest

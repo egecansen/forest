@@ -123,4 +123,35 @@ describe('BuildsPoller', () => {
     expect(wfapiCalls).toHaveLength(0);
     p.stop();
   });
+
+  it('does not cache null stage on transient wfapi failure — retries next poll', async () => {
+    const wfapi = { stages: [{ name: 'checkout', status: 'SUCCESS' }, { name: 'test', status: 'FAILED' }] };
+    let fail = true;
+    const f = vi.fn(async (url: string) => {
+      const u = String(url);
+      if (u.includes('_search')) return new Response(JSON.stringify(esResp), { status: 200 });
+      if (u.includes('wfapi/describe')) {
+        if (fail) return new Response('x', { status: 500 });
+        return new Response(JSON.stringify(wfapi), { status: 200 });
+      }
+      return new Response(JSON.stringify(jenkinsResp), { status: 200 });
+    }) as unknown as typeof fetch;
+    const p = new BuildsPoller(CFG, f);
+    // First refresh: wfapi fails (transient), stage is null, should NOT be cached
+    await p.refreshNow();
+    let { builds } = p.getBuilds();
+    expect(builds[0].stage).toBeNull();
+    const wfapiCalls1 = (f as unknown as { mock: { calls: [[string]] } }).mock.calls
+      .filter(([u]) => String(u).includes('wfapi/describe')).length;
+    expect(wfapiCalls1).toBe(1);
+    // Second refresh: wfapi healthy — should call wfapi again (not cached null)
+    fail = false;
+    await p.refreshNow();
+    builds = p.getBuilds().builds;
+    expect(builds[0].stage).toEqual({ current: null, failed: 'test', done: 1, total: 2 });
+    const wfapiCalls2 = (f as unknown as { mock: { calls: [[string]] } }).mock.calls
+      .filter(([u]) => String(u).includes('wfapi/describe')).length;
+    expect(wfapiCalls2).toBe(2); // wfapi was called again (not cached null from first refresh)
+    p.stop();
+  });
 });
