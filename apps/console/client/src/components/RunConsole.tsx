@@ -7,17 +7,11 @@ import { Sidebar } from './Sidebar';
 import { Footer } from './Footer';
 import { TabBar, type TabDef, type TabId } from './TabBar';
 import { TimelineTab } from './TimelineTab';
-import { FindingsTab } from './FindingsTab';
 import { FilesTab } from './FilesTab';
 import { ReportTab } from './ReportTab';
-import { NowPlaying } from './NowPlaying';
-import { JourneysTab } from './JourneysTab';
-import { RecordingTab } from './RecordingTab';
 import { HistoryModal } from './HistoryModal';
 import { QuestionModal } from './QuestionModal';
-import { TerminalActionsPanel } from './TerminalActionsPanel';
 import { ThemeToggle } from './ThemeToggle';
-import { terminalActions } from '../terminal-actions';
 
 interface Props {
   config: RunConfig;
@@ -31,8 +25,6 @@ interface Props {
   backLabel?: string;
   /** Opens a past run read-only; when provided, a "recent runs" popup trigger is shown. */
   onOpenHistory?: (runId: string) => void;
-  /** Start a Continue run in the given mode using this run's config (terminal-state actions). */
-  onContinue?: (mode: RunConfig['mode']) => void | Promise<void>;
   /**
    * Renders a past, persisted run: no live WS connection is opened (a
    * `null` runId is passed to `useRunStream`), and the stop/interrupt
@@ -43,7 +35,7 @@ interface Props {
   staticSnapshot?: RunSnapshot;
 }
 
-export function RunConsole({ config, onStop, onPause, onResume, onNew, backLabel, onOpenHistory, onContinue, readOnly = false, staticSnapshot }: Props) {
+export function RunConsole({ config, onStop, onPause, onResume, onNew, backLabel, onOpenHistory, readOnly = false, staticSnapshot }: Props) {
   const { snapshot, conn } = useRunStream(readOnly ? null : config.runId, staticSnapshot ?? null);
   const logScrollRef = useRef<HTMLDivElement>(null);
   // Whether the log is pinned to the bottom. Driven by the user's own scrolling
@@ -56,7 +48,6 @@ export function RunConsole({ config, onStop, onPause, onResume, onNew, backLabel
     if (el) atBottomRef.current = el.scrollHeight - el.scrollTop - el.clientHeight < 120;
   };
   const [historyOpen, setHistoryOpen] = useState(false);
-  const [actionsDismissed, setActionsDismissed] = useState(false);
 
   // Rate-limit / credit banner: derived from the log itself (not a separate
   // event) so it works identically live and from a persisted read-only
@@ -125,21 +116,14 @@ export function RunConsole({ config, onStop, onPause, onResume, onNew, backLabel
   const [seen, setSeen] = useState<Record<TabId, number>>({
     log: 0,
     timeline: 0,
-    findings: 0,
     files: 0,
     report: 0,
-    journeys: 0,
-    recording: 0,
   });
   const counts: Record<TabId, number> = {
     log: snapshot.log.length,
     timeline: snapshot.phases.filter((p) => p.startedAt).length,
-    findings: snapshot.findings.length,
     files: snapshot.files.length + snapshot.tests.length,
     report: snapshot.reportUrl ? 1 : 0,
-    journeys: snapshot.journeys.length,
-    // RecordingTab owns its own fetch/poll; no live count is surfaced here.
-    recording: 0,
   };
   // When the user opens a tab, reset its seen counter.
   useEffect(() => {
@@ -148,32 +132,20 @@ export function RunConsole({ config, onStop, onPause, onResume, onNew, backLabel
   const unseen: Partial<Record<TabId, boolean>> = {
     log: counts.log > seen.log,
     timeline: counts.timeline > seen.timeline,
-    findings: counts.findings > seen.findings,
     files: counts.files > seen.files,
     report: counts.report > seen.report,
-    journeys: counts.journeys > seen.journeys,
-    recording: counts.recording > seen.recording,
   };
 
   const reportReady = snapshot.phases.find((p) => p.id === 'report')?.status === 'done';
-  const scaffoldPhase = snapshot.phases.find((p) => p.id === 'scaffold');
-  const journeyMappingPhase = snapshot.phases.find((p) => p.id === 'journey-mapping');
-  const bugDiscoveryPhase = snapshot.phases.find((p) => p.id === 'bug-discovery');
+  const filesPhase = snapshot.phases.find((p) => p.id === 'fix');
   const reportPhase = snapshot.phases.find((p) => p.id === 'report');
 
   const tabs: TabDef[] = [
     { id: 'log',      label: 'Log',      icon: '›', badge: null },
     { id: 'timeline', label: 'Timeline', icon: '╱', badge: null },
-    { id: 'findings', label: 'Findings', icon: '⚠', badge: snapshot.findings.length || null },
     { id: 'files',    label: 'Files',    icon: '⌗', badge: (snapshot.files.length + snapshot.tests.length) || null },
     { id: 'report',   label: 'Report',   icon: '◈', badge: reportReady ? 1 : null, disabled: !reportReady && snapshot.status !== 'running' && snapshot.status !== 'completed' && snapshot.status !== 'idle' },
-    { id: 'journeys', label: 'Journeys', icon: '⇶', badge: snapshot.journeys.length || null },
-    { id: 'recording', label: 'Recording', icon: '⏺', badge: null },
   ];
-
-  // The Recording tab is live while the run is (running/preparing); once it
-  // settles it falls back to replay (video/trace/screenshots).
-  const recordingLive = snapshot.status === 'running' || snapshot.status === 'preparing';
 
   const outputs = useMemo(
     () => ({
@@ -187,11 +159,6 @@ export function RunConsole({ config, onStop, onPause, onResume, onNew, backLabel
   const projectName = config.projectPath.split('/').filter(Boolean).pop() ?? 'project';
   const runTitle = `${projectName} · ${config.mode} run`;
   const path = `~/${shortPath(config.projectPath)} · zsh`;
-
-  const termView =
-    onContinue && !snapshot.pendingQuestion && !actionsDismissed
-      ? terminalActions(snapshot.status, config.mode, snapshot.pipelineStatus)
-      : null;
 
   return (
     <div className="console">
@@ -290,13 +257,6 @@ export function RunConsole({ config, onStop, onPause, onResume, onNew, backLabel
           </div>
         )}
 
-        <NowPlaying
-          activePhase={snapshot.activePhase}
-          phases={snapshot.phases}
-          currentSubStage={snapshot.currentSubStage}
-          nudging={snapshot.nudging}
-        />
-
         <TabBar
           tabs={tabs}
           active={activeTab}
@@ -314,17 +274,12 @@ export function RunConsole({ config, onStop, onPause, onResume, onNew, backLabel
             )}
             {activeTab === 'timeline' && (
               <div className="term-pane-inner">
-                <TimelineTab phases={snapshot.phases} telemetry={snapshot.telemetry} mode={config.mode} />
-              </div>
-            )}
-            {activeTab === 'findings' && (
-              <div className="term-pane-inner">
-                <FindingsTab findings={snapshot.findings} phase={bugDiscoveryPhase} />
+                <TimelineTab phases={snapshot.phases} telemetry={snapshot.telemetry} />
               </div>
             )}
             {activeTab === 'files' && (
               <div className="term-pane-inner">
-                <FilesTab files={snapshot.files} tests={snapshot.tests} phase={scaffoldPhase} runId={config.runId} />
+                <FilesTab files={snapshot.files} tests={snapshot.tests} phase={filesPhase} runId={config.runId} />
               </div>
             )}
             {activeTab === 'report' && (
@@ -338,20 +293,6 @@ export function RunConsole({ config, onStop, onPause, onResume, onNew, backLabel
                   filesCount={snapshot.files.length}
                   elapsedMs={snapshot.telemetry.elapsedMs}
                   phase={reportPhase}
-                />
-              </div>
-            )}
-            {activeTab === 'journeys' && (
-              <div className="term-pane-inner">
-                <JourneysTab journeys={snapshot.journeys} phase={journeyMappingPhase} />
-              </div>
-            )}
-            {activeTab === 'recording' && (
-              <div className="term-pane-inner">
-                <RecordingTab
-                  runId={config.runId}
-                  running={recordingLive}
-                  recordEnabled={config.record === true}
                 />
               </div>
             )}
@@ -369,20 +310,12 @@ export function RunConsole({ config, onStop, onPause, onResume, onNew, backLabel
               }}
             />
           )}
-          {termView && onContinue && (
-            <TerminalActionsPanel
-              view={termView}
-              onSelect={(mode) => onContinue(mode)}
-              onDismiss={() => setActionsDismissed(true)}
-            />
-          )}
           </div>
           <Sidebar
             phases={snapshot.phases}
             activePhase={snapshot.activePhase}
             telemetry={snapshot.telemetry}
             outputs={outputs}
-            mode={config.mode}
             status={snapshot.status}
           />
         </div>

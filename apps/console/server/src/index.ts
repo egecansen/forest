@@ -8,18 +8,17 @@ import { runStore } from './run-store.js';
 import { startDriver, type DriverHandle } from './driver.js';
 import { pendingAnswers } from './pending-answers.js';
 import { normalizeRunBody } from './validate.js';
-import { readProjectState } from './project-state.js';
 import { listDirectories } from './browse.js';
 import { isAllowedHost } from './host-guard.js';
-import { getAuthStatus } from './auth-status.js';
-import { startLogin, getLoginState, cancelLogin, logout } from './auth-login.js';
 import { saveRun, listRuns, loadRun, isSafeRunId, resolveInsideRoot, resolveRunsDirSync } from './persistence.js';
-import { findRecordings } from './recordings.js';
 import type { RunSnapshot, ServerEvent } from './types.js';
 
 const PORT = Number(process.env.PORT ?? 8765);
 const RUNS_DIR = resolveRunsDirSync();
 const app = express();
+
+// TODO(task3): read from kit config (es.host_allowlist) instead of hardcoding.
+const allowlist = ['https://report-with-elastic-data.apps.ocptbox.tzla.sahibindenlocal.net'];
 
 // DNS-rebinding defense: reject any /api request whose Host header doesn't
 // name this server's own loopback address, before any route handler runs.
@@ -45,42 +44,6 @@ const drivers = new Map<string, DriverHandle>();
 // guarded by `this.stopped` and set exactly one of these).
 const TERMINAL_RUN_STATUSES = new Set<RunSnapshot['status']>(['completed', 'failed', 'cancelled']);
 
-/**
- * Project-total active time + tokens across every finished run for
- * `projectPath`, used to seed "previous session" on a continued/resumed run.
- * Sums each prior run's OWN contribution (`elapsedMs − priorElapsedMs`, likewise
- * tokens) so a run that already carried a base isn't double-counted — the total
- * is correct whether or not the seed chain is intact. Returns zeros if none.
- */
-async function priorTotalsForProject(
-  projectPath: string,
-  excludeRunId: string
-): Promise<{ elapsedMs: number; tokens: number; costUsd: number; phases: RunSnapshot['phases'] }> {
-  const target = path.resolve(projectPath);
-  const summaries = await listRuns(RUNS_DIR); // newest-first
-  let elapsedMs = 0;
-  let tokens = 0;
-  let costUsd = 0;
-  let phases: RunSnapshot['phases'] = [];
-  for (const s of summaries) {
-    if (s.runId === excludeRunId) continue;
-    if (path.resolve(s.projectPath) !== target) continue;
-    if (!TERMINAL_RUN_STATUSES.has(s.status)) continue;
-    const snap = await loadRun(RUNS_DIR, s.runId);
-    if (!snap) continue;
-    const t = snap.telemetry ?? ({} as RunSnapshot['telemetry']);
-    elapsedMs += Math.max(0, (t.elapsedMs ?? 0) - (t.priorElapsedMs ?? 0));
-    tokens += Math.max(0, (t.tokens ?? 0) - (t.priorTokens ?? 0));
-    // Real per-run API-rate cost contribution; runs recorded before cost
-    // tracking simply contribute 0, so the prior-cost line is honest either way.
-    costUsd += Math.max(0, (t.costUsd ?? 0) - (t.priorCostUsd ?? 0));
-    // Per-phase durations come from the SINGLE most-recent prior run (it already
-    // carries the chain's accumulated activeMs), not a sum across runs. (#14)
-    if (phases.length === 0 && Array.isArray(snap.phases)) phases = snap.phases;
-  }
-  return { elapsedMs, tokens, costUsd, phases };
-}
-
 // Graceful shutdown: stop every running driver (which kills its child process
 // group) before exiting, so SIGINT/SIGTERM don't orphan spawned child
 // processes. Guarded + idempotent — safe if invoked more than once (e.g. a
@@ -105,38 +68,6 @@ app.get('/api/health', (_req, res) => {
   res.json({ ok: true });
 });
 
-app.get('/api/project-state', async (req, res) => {
-  const p = req.query.path;
-  if (typeof p !== 'string' || !p.trim()) {
-    res.status(400).json({ error: 'path is required' });
-    return;
-  }
-  try {
-    const state = await readProjectState(path.resolve(p.trim()));
-    res.json(state);
-  } catch (err) {
-    res.status(500).json({ error: `could not read project state: ${(err as Error).message}` });
-  }
-});
-
-app.get('/api/auth-status', async (_req, res) => {
-  res.json(await getAuthStatus());
-});
-
-app.post('/api/auth-login', (req, res) => {
-  const method = req.body?.method === 'console' ? 'console' : 'subscription';
-  res.json(startLogin(method));
-});
-
-app.get('/api/auth-login/state', (_req, res) => res.json(getLoginState()));
-
-app.post('/api/auth-login/cancel', (_req, res) => {
-  cancelLogin();
-  res.json({ ok: true });
-});
-
-app.post('/api/auth-logout', async (_req, res) => res.json(await logout()));
-
 app.get('/api/browse', async (req, res) => {
   const p = typeof req.query.path === 'string' ? req.query.path : undefined;
   try {
@@ -147,7 +78,7 @@ app.get('/api/browse', async (req, res) => {
 });
 
 app.post('/api/runs', async (req, res) => {
-  const parsed = normalizeRunBody(req.body);
+  const parsed = normalizeRunBody(req.body, allowlist);
   if (!parsed.ok) {
     res.status(400).json({ error: parsed.error });
     return;
@@ -165,27 +96,8 @@ app.post('/api/runs', async (req, res) => {
       return;
     }
   }
-  const run = runStore.create(parsed.value, parsed.secret);
+  const run = runStore.create(parsed.value);
   const runId = run.snapshot.config!.runId;
-  // Seed "previous session" time from the most-recent finished run of the same
-  // project, so a continued/resumed run shows prior + total from the first
-  // render (the chain accumulates because each run's elapsedMs carries its own
-  // base). Best-effort — a lookup failure just means no prior line.
-  try {
-    // Only a project that still carries a pipeline ledger is a continuation of
-    // prior work. A wiped/fresh project starts from zero — inheriting archive
-    // totals there labels dead history as "previous sessions" on a run that
-    // has none (F18). The archive itself is untouched; only the seed is gated.
-    await fsp.access(
-      path.join(parsed.value.projectPath, 'tests', 'e2e', 'docs', 'onboarding-status.json')
-    );
-    const prior = await priorTotalsForProject(parsed.value.projectPath, runId);
-    if (prior.elapsedMs > 0 || prior.tokens > 0 || prior.costUsd > 0)
-      run.seedPrior(prior.elapsedMs, prior.tokens, prior.costUsd);
-    if (prior.phases.length > 0) run.seedPriorPhases(prior.phases);
-  } catch {
-    /* fresh project (no ledger) or lookup failure — no prior line */
-  }
   const stop = startDriver(run);
   drivers.set(runId, stop);
 
@@ -198,9 +110,8 @@ app.post('/api/runs', async (req, res) => {
     if (ev.type === 'status' && TERMINAL_RUN_STATUSES.has(ev.status)) {
       run.off('event', onEvent);
       // Persist the final snapshot so this run survives a server restart and
-      // shows up in run history. Safe: `run.snapshot` never carries the
-      // secret (see Run.secret in run-store.ts). Fire-and-forget — a write
-      // failure (e.g. unwritable home dir) shouldn't affect the live run.
+      // shows up in run history. Fire-and-forget — a write failure (e.g.
+      // unwritable home dir) shouldn't affect the live run.
       void saveRun(RUNS_DIR, run.snapshot);
       setTimeout(() => {
         drivers.delete(runId);
@@ -295,29 +206,12 @@ app.get('/api/runs/:runId', (req, res) => {
   res.json(run.snapshot);
 });
 
-// Serve a completed run's report deck from the run's project root.
-app.get('/api/runs/:runId/report', (req, res) => {
-  const run = runStore.get(req.params.runId);
-  if (!run?.snapshot.config) {
-    res.status(404).json({ error: 'unknown run' });
-    return;
-  }
-  const deck = path.resolve(run.snapshot.config.projectPath, 'qa-summary-deck.html');
-  // Sandbox: the file must live directly in the run's project root.
-  if (path.dirname(deck) !== path.resolve(run.snapshot.config.projectPath)) {
-    res.status(400).json({ error: 'invalid report path' });
-    return;
-  }
-  res.sendFile(deck, (err) => {
-    if (err) res.status(404).json({ error: 'report not found' });
-  });
-});
-
 // Resolve a run's project root from the LIVE run first, else the persisted
-// history snapshot — so recordings work both during a run and shortly after it
-// finishes (once the driver map has dropped the live Run). Returns null when
-// neither source knows the run. `loadRun` already guards `isSafeRunId`
-// structurally, and the callers below guard it at the route layer too.
+// history snapshot — so the Files-tab viewer works both during a run and
+// shortly after it finishes (once the driver map has dropped the live Run).
+// Returns null when neither source knows the run. `loadRun` already guards
+// `isSafeRunId` structurally, and the callers below guard it at the route
+// layer too.
 async function projectPathForRun(runId: string): Promise<string | null> {
   const run = runStore.get(runId);
   if (run?.snapshot.config) return run.snapshot.config.projectPath;
@@ -325,60 +219,10 @@ async function projectPathForRun(runId: string): Promise<string | null> {
   return snap?.config?.projectPath ?? null;
 }
 
-// List every video/trace/screenshot artifact discovered under the run's
-// project. `findRecordings` is total (missing project/dirs → []).
-app.get('/api/runs/:runId/recordings', async (req, res) => {
-  if (!isSafeRunId(req.params.runId)) {
-    res.status(400).json({ error: 'invalid run id' });
-    return;
-  }
-  const projectPath = await projectPathForRun(req.params.runId);
-  if (!projectPath) {
-    res.status(404).json({ error: 'unknown run' });
-    return;
-  }
-  res.json(await findRecordings(projectPath));
-});
-
-// Serve one recording file by its project-relative `path` query. This is a
-// path-traversal-sensitive surface, so it is guarded three ways: (1) the runId
-// must be a bare safe token; (2) the resolved file must stay inside the run's
-// project root (mirrors the /report route sandbox); (3) only .webm/.zip/.png
-// extensions are served. A crafted `path` (e.g. `../../etc/passwd`,
-// `..%2f..`) resolves OUTSIDE resolvedRoot and is rejected by the startsWith
-// check before sendFile ever sees it.
-app.get('/api/runs/:runId/recording', async (req, res) => {
-  if (!isSafeRunId(req.params.runId)) {
-    res.status(400).json({ error: 'invalid run id' });
-    return;
-  }
-  const rel = typeof req.query.path === 'string' ? req.query.path : '';
-  const projectPath = await projectPathForRun(req.params.runId);
-  if (!projectPath || !rel) {
-    res.status(404).json({ error: 'not found' });
-    return;
-  }
-  const resolvedRoot = path.resolve(projectPath);
-  const file = path.resolve(resolvedRoot, rel);
-  // Sandbox: the resolved file must be the root itself or live beneath it.
-  if (!(file === resolvedRoot || file.startsWith(resolvedRoot + path.sep))) {
-    res.status(400).json({ error: 'invalid path' });
-    return;
-  }
-  // Only known media extensions may ever be served from the project tree.
-  if (!/\.(webm|zip|png)$/i.test(file)) {
-    res.status(400).json({ error: 'unsupported file' });
-    return;
-  }
-  res.sendFile(file, (err) => {
-    if (err) res.status(404).json({ error: 'not found' });
-  });
-});
-
 // Serve one project file's TEXT content for the Files-tab viewer. Path-traversal
-// sensitive, guarded exactly like /recording: (1) the runId must be a bare safe
-// token; (2) the resolved file must stay inside the run's project root. Caps the
-// payload and refuses binary so the client never has to render a blob. (F5)
+// sensitive, guarded: (1) the runId must be a bare safe token; (2) the resolved
+// file must stay inside the run's project root. Caps the payload and refuses
+// binary so the client never has to render a blob. (F5)
 const FILE_VIEW_CAP = 512 * 1024; // 512 KB
 app.get('/api/runs/:runId/file', async (req, res) => {
   if (!isSafeRunId(req.params.runId)) {

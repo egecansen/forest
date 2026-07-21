@@ -3,7 +3,6 @@ import { randomUUID } from 'node:crypto';
 import type {
   FileChange,
   Finding,
-  Journey,
   LogEntry,
   PendingQuestion,
   PhaseId,
@@ -30,54 +29,8 @@ const initialTelemetry = (): Telemetry => ({
   thinking: false,
 });
 
-/** Raw credential override for a single run. NEVER part of `RunSnapshot` — see `Run.secret`. */
-export interface RunSecret {
-  apiKey?: string;
-  oauthToken?: string;
-  /**
-   * Raw content of the uploaded prerequisite login-credentials file, if any.
-   * Held off-snapshot; both the whole blob and its individual tokens are added
-   * to the run's redaction list so an agent that echoes any of them into a log
-   * line gets scrubbed before it reaches the snapshot / WS stream / GET.
-   */
-  prereqCredentials?: string;
-}
-
-/**
- * Splits a credentials blob into candidate secret tokens for redaction. The
- * whole blob is redacted as one unit elsewhere; this additionally catches the
- * case where an agent echoes just a single field (a lone password, an email,
- * an API key) rather than the verbatim file. Splits on whitespace and common
- * key/value separators, keeps tokens of length ≥ 5 (shorter ones are too
- * generic to redact safely — they'd corrupt ordinary log text), and dedups.
- * Pure/total; exported for testing.
- */
-export function extractSecretTokens(content: string): string[] {
-  const seen = new Set<string>();
-  for (const tok of content.split(/[\s:=,|"']+/)) {
-    if (tok.length >= 5) seen.add(tok);
-  }
-  return [...seen];
-}
-
 export class Run extends EventEmitter {
   readonly snapshot: RunSnapshot;
-  /**
-   * The raw API key / OAuth token for this run, if any — held as a plain
-   * instance field OUTSIDE `this.snapshot` so it is never serialized into
-   * the WS stream, the GET /api/runs/:id response, or (future) persistence.
-   * Only the non-secret `config.usesCustomCredential` flag is ever exposed.
-   */
-  readonly secret?: RunSecret;
-  /**
-   * Every secret string that `redact()` must scrub, precomputed once at
-   * construction: the raw apiKey, oauthToken, the whole prereqCredentials blob,
-   * and each individual token extracted from that blob. Sorted longest-first so
-   * a longer value is replaced before any shorter value that is its substring
-   * (e.g. the whole blob before a lone token inside it), which keeps the
-   * placeholder from fragmenting a larger match.
-   */
-  private readonly redactList: string[];
   private stopped = false;
   private questionSeq = 0;
   // Cost accounting across context-boundary continuations. The SDK's
@@ -105,30 +58,10 @@ export class Run extends EventEmitter {
   // write is dropped. Only valid while its `id` is still the last log entry.
   private lastFileOp: { verb: 'write' | 'read' | 'edit' | 'refine'; file: string; id: string; count: number } | null =
     null;
-  // One-shot flag: the ledger-write-gate blocked a phase approval for lack of a
-  // freshly registered approver; the driver injects a corrective hint on the next
-  // resume (#10). `snapshot.nudging` mirrors it for the client's recovery chip.
-  private approverNudgePending = false;
 
-  constructor(config: RunConfig, secret?: RunSecret) {
+  constructor(config: RunConfig) {
     super();
     this.setMaxListeners(50);
-    this.secret = secret;
-    const secretValues: string[] = [];
-    if (secret?.apiKey) secretValues.push(secret.apiKey);
-    if (secret?.oauthToken) secretValues.push(secret.oauthToken);
-    if (secret?.prereqCredentials) {
-      secretValues.push(secret.prereqCredentials);
-      // Whole non-empty lines too, so a value split by an embedded separator
-      // (e.g. `P@ss:w0rd`) or a short field on a line (`admin : 1234`) is
-      // scrubbed as a unit even when the ≥5-char token split wouldn't catch it.
-      for (const line of secret.prereqCredentials.split(/\r?\n/)) {
-        const t = line.trim();
-        if (t.length >= 5) secretValues.push(t);
-      }
-      secretValues.push(...extractSecretTokens(secret.prereqCredentials));
-    }
-    this.redactList = [...new Set(secretValues)].sort((a, b) => b.length - a.length);
     this.snapshot = {
       config,
       phases: initialPhases(),
@@ -140,7 +73,7 @@ export class Run extends EventEmitter {
       files: [],
       tests: [],
       reportUrl: null,
-      journeys: [],
+      clusters: [],
       currentSubStage: null,
       pipelineStatus: null,
       pendingQuestion: null,
@@ -179,11 +112,9 @@ export class Run extends EventEmitter {
 
   /**
    * `question` is AGENT-authored (the engine writes the question/header/option
-   * text via the AskUserQuestion tool call), so — like every other agent-text
-   * mutator on this class — it must be redacted before it reaches the
-   * snapshot or is emitted to WS clients. Rebuilds the questions array with
-   * each text field passed through `redact()`; `redact()` is a no-op for a
-   * run with no secret, so plain runs are unaffected.
+   * text via the AskUserQuestion tool call). Rebuilds the questions array with
+   * each text field passed through `redact()` (currently a no-op passthrough —
+   * see the class-level note above).
    */
   setPendingQuestion(question: PendingQuestion) {
     const redacted: PendingQuestion = {
@@ -266,54 +197,14 @@ export class Run extends EventEmitter {
     this.emitEvent({ type: 'log', entry: full });
   }
 
-  /** The ledger-write-gate blocked a phase approval for lack of a fresh approver.
-   *  Flags a one-shot nudge the driver applies to the next resume, and lights the
-   *  client's recovery chip. Idempotent — won't spam the log while still blocked. (#10) */
-  flagApproverNudge() {
-    if (this.approverNudgePending) return;
-    this.approverNudgePending = true;
-    this.snapshot.nudging = true;
-    this.emitEvent({ type: 'nudging', nudging: true });
-    this.log({
-      kind: 'warn',
-      text: 'approver registration didn’t land — nudging the reviewer to re-dispatch in the required format',
-    });
-  }
-
-  /** Consume the one-shot nudge (driver calls this when building the resume
-   *  prompt); clears the recovery chip. Returns whether a nudge was pending. (#10) */
-  consumeApproverNudge(): boolean {
-    const pending = this.approverNudgePending;
-    this.approverNudgePending = false;
-    if (this.snapshot.nudging) {
-      this.snapshot.nudging = false;
-      this.emitEvent({ type: 'nudging', nudging: false });
-    }
-    return pending;
-  }
-
   /**
-   * Scrubs every one of this run's secret values — raw API key, OAuth token,
-   * the whole prerequisite-credentials blob, AND each individual token within
-   * that blob — out of a log string, replacing every occurrence with a fixed
-   * placeholder. This is the chokepoint that stops an autonomous bash-capable
-   * agent from leaking a credential by echoing it (e.g. `env`, `cat`ting the
-   * provided-credentials file, prompt injection from an adversarial target
-   * site) into a log line that would otherwise flow through `run.snapshot.log`
-   * / the emitted `log` event to WS clients, GET /api/runs/:id, and any future
-   * persistence — unredacted.
-   *
-   * Iterates the precomputed `redactList` (longest-first) and uses split/join
-   * (not regex) since the secrets may contain regex-special characters. Total:
-   * undefined → undefined; a run with no secret → string returned unchanged.
+   * No-op passthrough. The QA-pipeline RunSecret/redaction plumbing (raw API
+   * key / OAuth token / prerequisite-credentials scrubbing) doesn't apply to
+   * the triage shell and has been removed; `redact()` is kept as an identity
+   * function so the many call sites below don't need to change.
    */
   private redact(s: string | undefined): string | undefined {
-    if (s === undefined || this.redactList.length === 0) return s;
-    let out = s;
-    for (const value of this.redactList) {
-      out = out.split(value).join('«redacted-credential»');
-    }
-    return out;
+    return s;
   }
 
   /**
@@ -427,18 +318,6 @@ export class Run extends EventEmitter {
     this.activeSpanStartedAt = null;
   }
 
-  /** Carry per-phase active-work durations from the most-recent prior run of this
-   *  project onto a continued run, so completed phases show their real duration
-   *  instead of a clamped "0s"/"carried". Prior runs predating activeMs simply
-   *  carry nothing (honest — that time was never recorded). Create-time. (#14) */
-  seedPriorPhases(priorPhases: Array<Pick<PhaseState, 'id'> & Partial<PhaseState>>) {
-    for (const prior of priorPhases) {
-      if (prior.activeMs == null) continue;
-      const phase = this.snapshot.phases.find((p) => p.id === prior.id);
-      if (phase) phase.activeMs = prior.activeMs;
-    }
-  }
-
   /**
    * Applies ledger-authored (or otherwise externally resolved) start/end
    * timestamps to a phase and emits the update live — unlike mutating
@@ -518,55 +397,6 @@ export class Run extends EventEmitter {
     const redacted = this.redact(subStage ?? undefined) ?? null;
     this.snapshot.currentSubStage = redacted;
     this.emitEvent({ type: 'subStage', subStage: redacted });
-  }
-
-  addJourney(j: Journey) {
-    const redacted: Journey = {
-      ...j,
-      id: this.redact(j.id)!,
-      title: this.redact(j.title)!,
-    };
-    const idx = this.snapshot.journeys.findIndex((x) => x.id === redacted.id);
-    if (idx >= 0) this.snapshot.journeys[idx] = redacted;
-    else this.snapshot.journeys.push(redacted);
-    this.emitEvent({ type: 'journey', journey: redacted });
-  }
-
-  /** Seed banked active time + tokens from prior runs of the same project so a
-   *  continued/resumed run shows project-total "previous session" + total from
-   *  the start (before its own first session boundary). Called once, at create
-   *  time. Tokens are held as a display offset (priorTokens); this run's own
-   *  `tokens` stays the current-session figure, and the card sums them. */
-  seedPrior(elapsedMs: number, tokens: number, costUsd = 0) {
-    if (elapsedMs > 0) {
-      this.elapsedBase = elapsedMs;
-      this.snapshot.telemetry.priorElapsedMs = elapsedMs;
-      // Current session hasn't started, so total == prior for now.
-      this.snapshot.telemetry.elapsedMs = elapsedMs;
-    }
-    if (tokens > 0) {
-      this.snapshot.telemetry.priorTokens = tokens;
-    }
-    if (costUsd > 0) {
-      // Bank prior cost so the run total = prior + this session, and expose it so
-      // the Timeline can split previous / this-session / total from real SDK cost
-      // rather than a token-derived estimate. (#14)
-      this.costBase = costUsd;
-      this.snapshot.telemetry.priorCostUsd = costUsd;
-      this.snapshot.telemetry.costUsd = costUsd;
-    }
-    if (elapsedMs > 0 || tokens > 0 || costUsd > 0) {
-      this.emitEvent({
-        type: 'telemetry',
-        telemetry: {
-          priorElapsedMs: this.elapsedBase,
-          elapsedMs: this.elapsedBase,
-          priorTokens: tokens > 0 ? tokens : undefined,
-          priorCostUsd: costUsd > 0 ? costUsd : undefined,
-          costUsd: costUsd > 0 ? costUsd : undefined,
-        },
-      });
-    }
   }
 
   setTelemetry(patch: Partial<Telemetry>) {
@@ -657,9 +487,9 @@ export class Run extends EventEmitter {
   }
 
   /**
-   * Hard guarantee (structural, not conventional): if anything ever calls
-   * `JSON.stringify(run)` on the whole instance — a future persistence task,
-   * a stray debug log — it yields only `this.snapshot`, never `this.secret`.
+   * Hard guarantee: if anything ever calls `JSON.stringify(run)` on the whole
+   * instance — a future persistence task, a stray debug log — it yields only
+   * `this.snapshot`.
    */
   toJSON(): RunSnapshot {
     return this.snapshot;
@@ -680,9 +510,9 @@ const MAX_RUNS = 25;
 class RunStore {
   private runs = new Map<string, Run>();
 
-  create(config: Omit<RunConfig, 'runId'>, secret?: RunSecret): Run {
+  create(config: Omit<RunConfig, 'runId'>): Run {
     const runId = randomUUID();
-    const run = new Run({ ...config, runId }, secret);
+    const run = new Run({ ...config, runId });
     this.runs.set(runId, run);
     if (this.runs.size > MAX_RUNS) {
       const oldest = this.runs.keys().next().value;
@@ -698,8 +528,7 @@ class RunStore {
   /**
    * Active (non-terminal) runs, newest first — lets the client reconnect to a
    * live run after a reload / back-button / HMR instead of dropping to the
-   * start screen. `config` never carries the secret (held off-snapshot), so
-   * it's safe to expose. (root fix for orphaned-run loss)
+   * start screen. (root fix for orphaned-run loss)
    */
   listActive(): Array<{ runId: string; status: RunSnapshot['status']; config: RunConfig }> {
     const terminal = new Set<RunSnapshot['status']>(['completed', 'failed', 'cancelled']);

@@ -1,39 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { continueSubmitState, modeNote, projectBasename, relativeTime } from '../start-logic';
-import type { ProjectState } from '../types';
-
-const withState = (o: Partial<ProjectState> = {}): ProjectState => ({
-  installed: true, hasState: true, currentPhase: 5, pipelineStatus: 'in-progress',
-  journeys: 4, findings: 2, tests: 3, targetUrl: 'https://x', runMode: 'standard', ...o,
-});
-
-describe('continueSubmitState', () => {
-  it('blocks Continue when there is no resumable state', () => {
-    expect(continueSubmitState('continue', withState({ hasState: false })).blocked).toBe(true);
-  });
-  it('allows Continue with state, and never blocks New', () => {
-    expect(continueSubmitState('continue', withState()).blocked).toBe(false);
-    expect(continueSubmitState('new', withState({ hasState: false })).blocked).toBe(false);
-    expect(continueSubmitState('continue', null).blocked).toBe(false);
-  });
-});
-
-describe('modeNote', () => {
-  it('continue onboarding = resume note with phase', () => {
-    expect(modeNote('continue', 'onboarding', withState())).toContain('5/8');
-    expect(modeNote('continue', 'onboarding', withState())!.toLowerCase()).toContain('resume');
-  });
-  it('continue non-onboarding = fresh-pass note', () => {
-    expect(modeNote('continue', 'bug-discovery', withState())!.toLowerCase()).toContain('fresh');
-  });
-  it('new on an existing run = re-onboard warning', () => {
-    expect(modeNote('new', 'onboarding', withState())!.toLowerCase()).toContain('re-onboard');
-  });
-  it('returns null when there is nothing to say', () => {
-    expect(modeNote('new', 'onboarding', withState({ hasState: false }))).toBeNull();
-    expect(modeNote('continue', 'onboarding', null)).toBeNull();
-  });
-});
+import { projectBasename, relativeTime } from '../start-logic';
 
 describe('projectBasename', () => {
   it('returns the last path segment', () => {

@@ -5,8 +5,8 @@ import type { RunConfig } from '../types.js';
 const cfg: RunConfig = {
   projectPath: '/tmp/app',
   targetUrl: 'https://example.com',
-  mode: 'onboarding',
-  runMode: 'standard',
+  testbox: 'tb1',
+  mode: 'triage',
   permissionPolicy: 'autonomous',
   runId: 'log-coalesce-test',
 };
@@ -44,21 +44,5 @@ describe('log coalescing (#11)', () => {
     run.log({ kind: 'bash', text: 'npx playwright test' }); // breaks the run
     run.log({ kind: 'info', text: 'Editing a.ts' }, { verb: 'edit', file: 'a.ts' });
     expect(texts(run)).toEqual(['Editing a.ts', 'npx playwright test', 'Editing a.ts']);
-  });
-});
-
-describe('approver-block nudge (#10)', () => {
-  it('flag sets the recovery chip + a warn log; consume returns once then clears', () => {
-    const run = new Run(cfg);
-    run.flagApproverNudge();
-    expect(run.snapshot.nudging).toBe(true);
-    expect(run.snapshot.log.some((l) => l.kind === 'warn' && /approver registration/i.test(l.text))).toBe(true);
-    // Idempotent while still blocked — a second flag doesn't add another warn.
-    run.flagApproverNudge();
-    expect(run.snapshot.log.filter((l) => l.kind === 'warn').length).toBe(1);
-    // Consumed exactly once; the chip clears.
-    expect(run.consumeApproverNudge()).toBe(true);
-    expect(run.snapshot.nudging).toBe(false);
-    expect(run.consumeApproverNudge()).toBe(false);
   });
 });

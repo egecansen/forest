@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
-import type { PhaseId, PhaseState, RunConfig, RunSnapshot, Telemetry } from '../types';
-import { PHASES, MODE_LABEL, usesPipeline } from '../phases';
+import type { PhaseId, PhaseState, RunSnapshot, Telemetry } from '../types';
+import { PHASES } from '../phases';
 import { contextGauge, costSplit, fmtCost, fmtTokens } from '../telemetry-format';
 
 const SPINNER_FRAMES = ['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏'];
@@ -26,37 +26,16 @@ interface Props {
   activePhase: PhaseId | null;
   telemetry: Telemetry;
   outputs: Outputs;
-  mode: RunConfig['mode'];
   status: RunSnapshot['status'];
 }
 
-export function Sidebar({ phases, telemetry, outputs, mode, status }: Props) {
+export function Sidebar({ phases, telemetry, outputs, status }: Props) {
   return (
     <aside className="sidebar">
       <OutputsCard outputs={outputs} />
       <TelemetryCard telemetry={telemetry} />
-      {usesPipeline(mode, phases) ? (
-        <PipelineCard phases={phases} status={status} />
-      ) : (
-        <TaskRunCard mode={mode} />
-      )}
+      <PipelineCard phases={phases} status={status} />
     </aside>
-  );
-}
-
-/** Compact card for non-onboarding modes, which don't run the 8-phase pipeline. */
-function TaskRunCard({ mode }: { mode: RunConfig['mode'] }) {
-  return (
-    <div className="card">
-      <div className="card-label">
-        <span>Run</span>
-        <span className="card-counter">{MODE_LABEL[mode]}</span>
-      </div>
-      <p className="task-run-note">
-        This mode runs a single task, not the 8-phase onboarding pipeline. Follow live progress in
-        the <strong>Log</strong> tab; results land in Findings / Files / Recording.
-      </p>
-    </div>
   );
 }
 

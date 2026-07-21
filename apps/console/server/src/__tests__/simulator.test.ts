@@ -1,14 +1,13 @@
-import { describe, it, expect, vi } from 'vitest';
+import { describe, it, expect } from 'vitest';
 import { Run } from '../run-store.js';
 import { wait, runSimulator } from '../simulator.js';
-import { pendingAnswers } from '../pending-answers.js';
 import type { RunConfig } from '../types.js';
 
 const cfg: RunConfig = {
   projectPath: '/tmp/x',
   targetUrl: 'https://example.com',
-  mode: 'onboarding',
-  runMode: 'standard',
+  testbox: 'tb1',
+  mode: 'triage',
   permissionPolicy: 'autonomous',
   runId: 'r1',
 };
@@ -23,8 +22,8 @@ describe('simulator wait()', () => {
 
   it('does not accumulate stopped listeners across many sequential waits (regression for the leak)', async () => {
     const run = new Run(cfg);
-    // A full demo run calls wait() 100+ times; setMaxListeners(50) would
-    // start warning/throwing well before that if each call leaked its
+    // Real runs call wait() several times per pass; setMaxListeners(50) would
+    // start warning/throwing well before this many if each call leaked its
     // listener.
     for (let i = 0; i < 120; i++) {
       await wait(0, run);
@@ -42,17 +41,21 @@ describe('simulator wait()', () => {
 });
 
 describe('runSimulator', () => {
-  it('simulator raises a question and resumes when answered', async () => {
-    const run = new Run({ ...cfg, demo: true } as any);
+  it('walks ingest → cluster to done, then finishes the run successfully', async () => {
+    const run = new Run({ ...cfg, demo: true });
+    await runSimulator(run);
+    const ingest = run.snapshot.phases.find((p) => p.id === 'ingest');
+    const cluster = run.snapshot.phases.find((p) => p.id === 'cluster');
+    expect(ingest?.status).toBe('done');
+    expect(cluster?.status).toBe('done');
+    expect(run.snapshot.status).toBe('completed');
+  });
+
+  it('stops early (no crash) when the run is stopped mid-walk', async () => {
+    const run = new Run({ ...cfg, demo: true });
     const p = runSimulator(run);
-    await vi.waitFor(() => expect(run.snapshot.pendingQuestion).not.toBeNull(), { timeout: 20000 });
-    const qid = run.snapshot.pendingQuestion!.questionId;
-    expect(
-      pendingAnswers.resolve(run.snapshot.config!.runId, qid, {
-        [run.snapshot.pendingQuestion!.questions[0].question]: 'Proceed',
-      })
-    ).toBe(true);
-    run.stop(); // end the sim early once we've confirmed resume
+    run.stop();
     await p;
-  }, 25000);
+    expect(run.snapshot.status).toBe('cancelled');
+  });
 });

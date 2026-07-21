@@ -4,15 +4,14 @@ import os from 'node:os';
 import path from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { saveRun, listRuns, loadRun, isSafeRunId, resolveInsideRoot } from '../persistence.js';
-import { Run } from '../run-store.js';
-import type { RunConfig, RunSnapshot } from '../types.js';
+import type { RunSnapshot } from '../types.js';
 
 const makeSnapshot = (overrides: Partial<RunSnapshot> = {}): RunSnapshot => ({
   config: {
     projectPath: '/tmp/my-project',
     targetUrl: 'https://example.com',
-    mode: 'onboarding',
-    runMode: 'standard',
+    testbox: 'tb1',
+    mode: 'triage',
     permissionPolicy: 'autonomous',
     projectMode: 'new',
     runId: 'run-1',
@@ -26,7 +25,7 @@ const makeSnapshot = (overrides: Partial<RunSnapshot> = {}): RunSnapshot => ({
   files: [],
   tests: [{ id: 't1', ts: 1, path: 'a.spec.ts', name: 'a', status: 'wrote' }],
   reportUrl: null,
-  journeys: [],
+  clusters: [],
   currentSubStage: null,
   pipelineStatus: null,
   pendingQuestion: null,
@@ -72,7 +71,7 @@ describe('saveRun / listRuns / loadRun round trip', () => {
       runId: 'run-1',
       projectPath: '/tmp/my-project',
       targetUrl: 'https://example.com',
-      mode: 'onboarding',
+      mode: 'triage',
       status: 'completed',
       startedAt: 1000,
       findings: 1,
@@ -174,56 +173,6 @@ describe('listRuns tolerance', () => {
 
     const summaries = await listRuns(dir);
     expect(summaries).toHaveLength(1);
-  });
-});
-
-describe('secret-safety guard', () => {
-  it('a saved snapshot JSON file never contains an apiKey/secret substring', async () => {
-    // Mirrors run.snapshot for a run started with a custom credential: the
-    // secret lives only on Run.secret (off-snapshot) by Task 1's design, so
-    // whatever we hand to saveRun here should already be secret-free — this
-    // guards that persistence doesn't accidentally introduce a leak path.
-    const snapshot = makeSnapshot({
-      log: [
-        { id: 'l1', ts: 1, kind: 'info', text: 'using credential «redacted-credential»' },
-      ],
-    });
-    await saveRun(dir, snapshot);
-
-    const raw = await fs.readFile(path.join(dir, 'run-1.json'), 'utf8');
-    expect(raw).not.toMatch(/sk-ant-[a-zA-Z0-9-]+/);
-    expect(raw).not.toContain('apiKey');
-    expect(raw).not.toContain('oauthToken');
-    expect(raw).not.toContain('sk-ant-super-secret-do-not-leak');
-  });
-
-  it('end-to-end: a secret echoed into addFinding by the agent never reaches the persisted file on disk', async () => {
-    // This is the real invariant: an autonomous agent run against an
-    // adversarial target can be tricked (prompt injection / env dump) into
-    // writing the raw per-run secret into agent-authored text. That text
-    // flows through Run.addFinding (a snapshot mutator) -> run.snapshot ->
-    // saveRun -> disk. Redaction has to happen at the mutator, not later —
-    // proving the full composition here is what catches a regression if
-    // redaction is ever removed from run-store.ts.
-    const SECRET = 'sk-ant-PERSIST777';
-    const runConfig: RunConfig = {
-      projectPath: '/tmp/my-project',
-      targetUrl: 'https://example.com',
-      mode: 'onboarding',
-      runMode: 'standard',
-      permissionPolicy: 'autonomous',
-      projectMode: 'new',
-      runId: 'run-persist-1',
-    };
-    const run = new Run(runConfig, { apiKey: SECRET });
-    run.addFinding({ severity: 'high', area: 'auth', title: 'env leak', detail: SECRET });
-
-    await saveRun(dir, run.snapshot);
-
-    const raw = await fs.readFile(path.join(dir, 'run-persist-1.json'), 'utf8');
-    expect(raw).not.toContain(SECRET);
-    expect(raw).not.toContain('apiKey');
-    expect(raw).not.toContain('oauthToken');
   });
 });
 

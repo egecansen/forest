@@ -70,28 +70,10 @@ export function App() {
     async (
       projectPath: string,
       targetUrl: string,
-      mode: RunConfig['mode'],
-      runMode: RunConfig['runMode'],
-      permissionPolicy: RunConfig['permissionPolicy'],
-      projectMode: RunConfig['projectMode'] = 'new',
-      demo: boolean = false,
-      cred?: { mode: 'default' | 'apiKey' | 'oauthToken'; secret?: string },
-      record: boolean = false,
-      prereqCredentials?: string
+      testbox: string,
+      permissionPolicy: RunConfig['permissionPolicy']
     ) => {
-      // The raw secret is only ever placed in the POST body — never in the
-      // runConfig object we keep in state (that flows into RunConsole/the
-      // WS-streamed snapshot display). Only the non-secret display flag
-      // (`usesCustomCredential`) is retained client-side.
-      const usesCustomCredential: RunConfig['usesCustomCredential'] =
-        cred && cred.mode !== 'default' && cred.secret ? cred.mode : null;
-      const body: Record<string, unknown> = { projectPath, targetUrl, mode, runMode, permissionPolicy, projectMode, demo, record };
-      if (usesCustomCredential === 'apiKey') body.apiKey = cred!.secret;
-      else if (usesCustomCredential === 'oauthToken') body.oauthToken = cred!.secret;
-      // Raw prerequisite login-credentials content, like the secrets above, is
-      // POST-body only — never retained in the client-side RunConfig. Only the
-      // non-secret `hasPrereqCreds` flag is kept for display.
-      if (prereqCredentials) body.prereqCredentials = prereqCredentials;
+      const body: Record<string, unknown> = { projectPath, targetUrl, testbox, permissionPolicy };
 
       const res = await fetch('/api/runs', {
         method: 'POST',
@@ -106,34 +88,15 @@ export function App() {
       const config: RunConfig = {
         projectPath,
         targetUrl,
-        mode,
-        runMode,
+        testbox,
+        mode: 'triage',
         permissionPolicy,
-        projectMode,
         runId: json.runId,
-        demo,
-        record,
-        usesCustomCredential,
-        hasPrereqCreds: !!prereqCredentials,
       };
       setActiveConfig(config);
       setView({ kind: 'console', config });
     },
     []
-  );
-
-  const continueRun = useCallback(
-    (config: RunConfig, mode: RunConfig['mode']) =>
-      startRun(
-        config.projectPath,
-        config.targetUrl,
-        mode,
-        config.runMode,
-        config.permissionPolicy,
-        'continue',
-        config.demo,
-      ),
-    [startRun]
   );
 
   const stopRun = useCallback(async () => {
@@ -242,7 +205,6 @@ export function App() {
             onResume={resumeRun}
             onNew={newRun}
             onOpenHistory={openHistoryRun}
-            onContinue={(mode) => continueRun(view.config, mode)}
           />
         )}
         {view.kind === 'history' && (
@@ -252,7 +214,6 @@ export function App() {
               onNew={leaveHistory}
               backLabel={activeConfig ? 'back to session' : 'back to start'}
               onOpenHistory={openHistoryRun}
-              onContinue={(mode) => continueRun(view.snapshot.config!, mode)}
               readOnly
               staticSnapshot={view.snapshot}
             />

@@ -7,37 +7,29 @@ interface Props {
 }
 
 const FRIENDLY: Record<string, { lead: string; body: string }> = {
-  scaffold: {
-    lead: 'the runway',
-    body: 'Drops a Playwright skeleton into your project — configs, fixtures, and docs. The base every test sits on.',
+  ingest: {
+    lead: 'pin the build',
+    body: 'Pins the build and pulls every FAILED doc from the report — the raw material every later phase works from.',
   },
-  groundwork: {
-    lead: 'learning your app',
-    body: 'Crawls your app and writes down what it sees: an app context note, a selector repository, and a fixture that signs itself in.',
+  cluster: {
+    lead: 'find the shared cause',
+    body: 'Groups failures into root-cause clusters and buckets each one from easy-fix through to likely app bug.',
   },
-  'happy-path': {
-    lead: 'the critical flow',
-    body: 'Writes the first spec — the one path your product depends on. Catches catastrophic regressions before any other test runs.',
+  pick: {
+    lead: 'one decision',
+    body: 'A single call on which clusters to take this pass — the rest wait for a later run.',
   },
-  'journey-mapping': {
-    lead: 'the coverage plan',
-    body: 'Maps every meaningful user journey and ranks them by business impact. Everything that follows uses this map.',
+  fix: {
+    lead: 'apply the fix',
+    body: 'Applies and compile-checks a fix for each picked cluster.',
   },
-  'coverage-expansion': {
-    lead: 'growing the suite',
-    body: 'Runs prioritized, depth-tiered passes across the journey map, growing the suite journey by journey until coverage is real.',
-  },
-  'bug-discovery': {
-    lead: 'breaking your app',
-    body: 'An adversarial pass — hektor deliberately tries to break things, then turns each finding into a regression test you keep.',
-  },
-  'secrets-sweep': {
-    lead: 'no leaks',
-    body: 'Scans the suite for credentials, keys, or PII that slipped into checked-in code and moves them into .env.',
+  verify: {
+    lead: 'prove it',
+    body: 'Runs a green-proof pass^N on the testbox so a fix only counts once it holds.',
   },
   report: {
-    lead: 'the proof',
-    body: 'Generates a shareable QA summary deck (HTML + PDF) — what was tested, what broke, what got fixed.',
+    lead: 'the scoreboard',
+    body: 'Produces a convergence scoreboard — what was picked, what went green, what is still open.',
   },
 };
 
@@ -76,16 +68,16 @@ export function ProcessDrawer({ open, onClose }: Props) {
           ✕
         </button>
 
-        <div className="info-kicker">the process &middot; 8 phases</div>
+        <div className="info-kicker">the process &middot; 6 phases</div>
 
         <h2 className="info-h" style={{ fontSize: 28, marginBottom: 14 }}>
           how does it work?
         </h2>
 
         <p className="info-p" style={{ marginBottom: 28 }}>
-          When you start a pilot, hektor runs eight phases in sequence. Each phase
-          either learns something about your app, writes new tests, or produces
-          output you can share.
+          When you start a triage run, hektor walks six phases in sequence. Each
+          phase either narrows down the failures, makes a decision, applies a
+          fix, or proves it holds.
         </p>
 
         <ol className="process-list">

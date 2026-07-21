@@ -1,6 +1,6 @@
 import type { ReactNode } from 'react';
 
-export type TabId = 'log' | 'timeline' | 'findings' | 'files' | 'report' | 'journeys' | 'recording';
+export type TabId = 'log' | 'timeline' | 'files' | 'report';
 
 export interface TabDef {
   id: TabId;

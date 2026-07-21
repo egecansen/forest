@@ -1,13 +1,11 @@
 import { useEffect, useMemo, useState, type CSSProperties } from 'react';
-import type { PhaseState, PhaseStatus, RunConfig, Telemetry } from '../types';
-import { PHASES, MODE_LABEL, usesPipeline } from '../phases';
-import { EmptyState } from './FindingsTab';
+import type { PhaseState, PhaseStatus, Telemetry } from '../types';
+import { PHASES } from '../phases';
 import { costSplit, fmtCost, fmtTokens, formatDuration, phaseDurationLabel } from '../telemetry-format';
 
 interface Props {
   phases: PhaseState[];
   telemetry: Telemetry;
-  mode: RunConfig['mode'];
 }
 
 const STATUS_GLYPH: Record<PhaseStatus, string> = {
@@ -31,22 +29,7 @@ const STATUS_GLYPH: Record<PhaseStatus, string> = {
  * While the run is live a glowing NOW cursor sweeps across the chart and
  * a dotted vertical grid behind the bars provides time context.
  */
-export function TimelineTab({ phases, telemetry, mode }: Props) {
-  // Non-onboarding modes never populate the 8-phase state machine, so the
-  // gantt would be a permanently-empty 0/8 chart. Show a mode-aware note
-  // pointing at the Log instead. (finding #11)
-  if (!usesPipeline(mode, phases)) {
-    return (
-      <div className="timeline">
-        <EmptyState
-          glyph="╱"
-          title="No phase timeline for this run"
-          body={`${MODE_LABEL[mode]} runs a single task, not the 8-phase onboarding pipeline — follow its progress in the Log tab.`}
-        />
-      </div>
-    );
-  }
-
+export function TimelineTab({ phases, telemetry }: Props) {
   // Tick once per second so the active bar keeps growing while we watch.
   // Depend on the boolean — not the phases array — or the simulator's
   // half-second phase updates keep clearing the interval before it fires.

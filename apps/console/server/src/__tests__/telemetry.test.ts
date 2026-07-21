@@ -5,8 +5,8 @@ import type { RunConfig } from '../types.js';
 const cfg: RunConfig = {
   projectPath: '/tmp/telemetry-test',
   targetUrl: 'https://example.com',
-  mode: 'onboarding',
-  runMode: 'standard',
+  testbox: 'tb1',
+  mode: 'triage',
   permissionPolicy: 'autonomous',
   runId: 'telemetry-test',
 };

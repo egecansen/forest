@@ -30,7 +30,7 @@ const initialSnapshot = (): RunSnapshot => ({
   files: [],
   tests: [],
   reportUrl: null,
-  journeys: [],
+  clusters: [],
   currentSubStage: null,
   pipelineStatus: null,
   pendingQuestion: null,
@@ -181,12 +181,14 @@ export function applyEvent(prev: RunSnapshot, ev: ServerEvent): RunSnapshot {
       return { ...prev, log: appendLog(prev.log, ev.entry) };
     case 'phase':
       return updatePhase(prev, ev);
-    case 'journey': {
-      const idx = prev.journeys.findIndex((j) => j.id === ev.journey.id);
-      const journeys = idx >= 0
-        ? prev.journeys.map((j) => (j.id === ev.journey.id ? ev.journey : j))
-        : [...prev.journeys, ev.journey];
-      return { ...prev, journeys };
+    case 'clusters':
+      return { ...prev, clusters: ev.clusters };
+    case 'cluster': {
+      const idx = prev.clusters.findIndex((c) => c.id === ev.cluster.id);
+      const clusters = idx >= 0
+        ? prev.clusters.map((c) => (c.id === ev.cluster.id ? ev.cluster : c))
+        : [...prev.clusters, ev.cluster];
+      return { ...prev, clusters };
     }
     case 'subStage':
       return { ...prev, currentSubStage: ev.subStage };

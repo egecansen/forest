@@ -1,14 +1,6 @@
 export type PhaseStatus = 'queued' | 'active' | 'done' | 'failed' | 'skipped' | 'blocked';
 
-export type PhaseId =
-  | 'scaffold'
-  | 'groundwork'
-  | 'happy-path'
-  | 'journey-mapping'
-  | 'coverage-expansion'
-  | 'bug-discovery'
-  | 'secrets-sweep'
-  | 'report';
+export type PhaseId = 'ingest' | 'cluster' | 'pick' | 'fix' | 'verify' | 'report';
 
 export type ReviewerVerdict = 'pending' | 'approved' | 'rejected' | 'escalated-to-user';
 
@@ -117,55 +109,30 @@ export interface LogEntry {
   progress?: { percent: number; label?: string };
 }
 
-export interface Journey {
-  id: string;
-  title: string;
-  priority: 'P0' | 'P1' | 'P2' | 'P3' | 'unranked';
-  coverage: 'covered' | 'partial' | 'uncovered';
+export type ClusterBucket = 'easy-fix' | 'selector' | 'vrt' | 'app-change' | 'infra' | 'likely-bug';
+export type ClusterState =
+  | 'proposed' | 'picked' | 'skipped' | 'fixing' | 'verifying' | 'green' | 'app-bug' | 'error';
+
+export interface Cluster {
+  id: string;            // agent-chosen slug, e.g. "onetrust-overlay"
+  title: string;         // one-line cause, human phrasing
+  bucket: ClusterBucket;
+  tests: string[];       // FQCNs or test names
+  state: ClusterState;
+  passes?: number;       // green-proof progress: passes so far
+  runs?: number;         // green-proof target N
+  note?: string;         // short status detail ("fixed selector, verifying")
 }
 
 export interface RunConfig {
-  projectPath: string;
-  targetUrl: string;
-  mode: 'onboarding' | 'coverage-expansion' | 'bug-discovery' | 'repair' | 'companion';
-  runMode: 'standard' | 'depth';
-  permissionPolicy: 'autonomous' | 'restricted';
+  projectPath: string;                 // web-test repo (agent cwd)
+  targetUrl: string;                   // the s-report URL (kept name: shell renders it)
+  testbox: string;                     // e.g. "tb161"
+  mode: 'triage';
+  permissionPolicy: 'autonomous' | 'confirm-applies';
   projectMode?: 'new' | 'continue';
   runId: string;
   demo?: boolean;
-  /**
-   * Opt-in per-run capture flag. When true, `buildPrompt` appends a directive
-   * instructing the agent to record Playwright video/trace + frequent step
-   * screenshots, and the recordings discovery/serving routes surface them.
-   */
-  record?: boolean;
-  /**
-   * Non-secret display flag: which kind of credential override this run was
-   * started with, if any. The raw API key / OAuth token itself is NEVER
-   * part of RunConfig/RunSnapshot — see Run.secret in run-store.ts.
-   */
-  usesCustomCredential?: 'apiKey' | 'oauthToken' | null;
-  /**
-   * Non-secret display flag: whether the caller uploaded a prerequisite
-   * login-credentials file for this run. The raw credential CONTENT is NEVER
-   * part of RunConfig/RunSnapshot — it lives only on Run.secret.prereqCredentials
-   * (off-snapshot) and in the file the driver writes into the target project.
-   */
-  hasPrereqCreds?: boolean;
-}
-
-/**
- * A single captured browser-session artifact discovered under a run's project
- * (see `findRecordings` in recordings.ts). `relPath` is project-root-relative
- * and is what the serving route (`GET /api/runs/:runId/recording?path=`)
- * resolves + sandboxes back to an absolute file.
- */
-export interface Recording {
-  id: string;
-  kind: 'video' | 'trace' | 'screenshot';
-  relPath: string;
-  label: string;
-  bytes: number;
 }
 
 export interface RunSnapshot {
@@ -179,7 +146,7 @@ export interface RunSnapshot {
   files: FileChange[];
   tests: TestArtifact[];
   reportUrl: string | null;
-  journeys: Journey[];
+  clusters: Cluster[];
   currentSubStage: string | null;
   pipelineStatus: string | null;
   pendingQuestion: PendingQuestion | null;
@@ -210,7 +177,8 @@ export type ServerEvent =
       reviewerCycles?: number;
       subStage?: string | null;
     }
-  | { type: 'journey'; journey: Journey }
+  | { type: 'clusters'; clusters: Cluster[] }
+  | { type: 'cluster'; cluster: Cluster }
   | { type: 'subStage'; subStage: string | null }
   | { type: 'telemetry'; telemetry: Partial<Telemetry> }
   | { type: 'status'; status: RunSnapshot['status'] }
@@ -223,16 +191,7 @@ export type ServerEvent =
   | { type: 'questionResolved'; questionId: string }
   | { type: 'nudging'; nudging: boolean };
 
-export const PHASE_ORDER: PhaseId[] = [
-  'scaffold',
-  'groundwork',
-  'happy-path',
-  'journey-mapping',
-  'coverage-expansion',
-  'bug-discovery',
-  'secrets-sweep',
-  'report',
-];
+export const PHASE_ORDER: PhaseId[] = ['ingest', 'cluster', 'pick', 'fix', 'verify', 'report'];
 
 /**
  * Lightweight, list-friendly projection of a persisted `RunSnapshot` — what
@@ -252,30 +211,8 @@ export interface RunSummary {
 
 export type FileOp = { verb: 'write' | 'read' | 'edit'; file: string };
 
-export interface ProjectState {
-  installed: boolean;
-  hasState: boolean;
-  currentPhase: number | null;
-  pipelineStatus: string | null;
-  journeys: number;
-  tests: number;
-  findings: number;
-  targetUrl: string | null;
-  runMode: 'standard' | 'depth' | null;
-}
-
 export interface BrowseResult {
   path: string;
   parent: string | null;
   dirs: { name: string; path: string }[];
-}
-
-export interface AuthStatus {
-  loggedIn: boolean;
-  authMethod: string | null;
-  apiProvider: string | null;
-  email: string | null;
-  orgName: string | null;
-  subscriptionType: string | null;
-  error: string | null;
 }

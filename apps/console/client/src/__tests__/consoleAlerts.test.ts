@@ -48,7 +48,7 @@ describe('findLatestRateLimitWarning', () => {
 });
 
 describe('phaseWaitState', () => {
-  const base: PhaseState = { id: 'bug-discovery', status: 'queued' };
+  const base: PhaseState = { id: 'verify', status: 'queued' };
 
   it('is not-started when undefined or queued', () => {
     expect(phaseWaitState(undefined)).toBe('not-started');

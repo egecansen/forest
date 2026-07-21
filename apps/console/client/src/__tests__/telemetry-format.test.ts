@@ -41,7 +41,7 @@ describe('contextGauge (#14) — occupancy against the real window, not the life
 describe('phaseDurationLabel (#14) — completed phases show real work time', () => {
   const now = 1_000_000;
   const runStart = 900_000;
-  const mk = (p: Partial<PhaseState>): PhaseState => ({ id: 'scaffold', status: 'queued', ...p });
+  const mk = (p: Partial<PhaseState>): PhaseState => ({ id: 'ingest', status: 'queued', ...p });
 
   it('a carried prior-session phase shows its real activeMs, not "carried"/"0s"', () => {
     // done in a prior session: ledger stamps predate this run (clamp would flatten

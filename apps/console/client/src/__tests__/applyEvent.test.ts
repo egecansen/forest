@@ -6,21 +6,36 @@ const base: RunSnapshot = {
   config: null, phases: [], activePhase: null,
   telemetry: { startedAt: null, elapsedMs: 0, tokens: 0, thinking: false },
   log: [], status: 'running', findings: [], files: [], tests: [],
-  reportUrl: null, journeys: [], currentSubStage: null, pipelineStatus: null,
+  reportUrl: null, clusters: [], currentSubStage: null, pipelineStatus: null,
   pendingQuestion: null,
 };
 
 const basePhases: PhaseState[] = [
-  { id: 'scaffold', status: 'queued' },
-  { id: 'groundwork', status: 'queued' },
+  { id: 'ingest', status: 'queued' },
+  { id: 'cluster', status: 'queued' },
 ];
 
 describe('applyEvent new variants', () => {
-  it('journey adds then dedups by id', () => {
-    let s = applyEvent(base, { type: 'journey', journey: { id: 'j-x', title: 'X', priority: 'P1', coverage: 'uncovered' } });
-    s = applyEvent(s, { type: 'journey', journey: { id: 'j-x', title: 'X', priority: 'P1', coverage: 'covered' } });
-    expect(s.journeys).toHaveLength(1);
-    expect(s.journeys[0].coverage).toBe('covered');
+  it('clusters replaces the whole list', () => {
+    const s = applyEvent(base, {
+      type: 'clusters',
+      clusters: [{ id: 'c1', title: 'X', bucket: 'easy-fix', tests: [], state: 'proposed' }],
+    });
+    expect(s.clusters).toHaveLength(1);
+    expect(s.clusters[0].id).toBe('c1');
+  });
+
+  it('cluster adds then dedups by id', () => {
+    let s = applyEvent(base, {
+      type: 'cluster',
+      cluster: { id: 'c-x', title: 'X', bucket: 'easy-fix', tests: [], state: 'proposed' },
+    });
+    s = applyEvent(s, {
+      type: 'cluster',
+      cluster: { id: 'c-x', title: 'X', bucket: 'easy-fix', tests: [], state: 'picked' },
+    });
+    expect(s.clusters).toHaveLength(1);
+    expect(s.clusters[0].state).toBe('picked');
   });
 
   it('subStage updates currentSubStage', () => {
@@ -92,7 +107,7 @@ describe('applyEvent: phase', () => {
     const prev = { ...base, phases: basePhases };
     let s = applyEvent(prev, {
       type: 'phase',
-      phaseId: 'scaffold',
+      phaseId: 'ingest',
       status: 'active',
       stage: 'compiling config',
       progress: 10,
@@ -101,33 +116,33 @@ describe('applyEvent: phase', () => {
       reviewerCycles: 0,
     });
 
-    const scaffold = () => s.phases.find((p) => p.id === 'scaffold')!;
-    expect(scaffold()).toMatchObject({
+    const ingest = () => s.phases.find((p) => p.id === 'ingest')!;
+    expect(ingest()).toMatchObject({
       status: 'active', stage: 'compiling config', progress: 10, startedAt: 1000,
       reviewerVerdict: 'pending', reviewerCycles: 0,
     });
-    expect(s.activePhase).toBe('scaffold');
+    expect(s.activePhase).toBe('ingest');
     // Untouched phase is unaffected.
-    expect(s.phases.find((p) => p.id === 'groundwork')).toMatchObject({ status: 'queued' });
+    expect(s.phases.find((p) => p.id === 'cluster')).toMatchObject({ status: 'queued' });
 
     // A follow-up progress-only update (stage/reviewer omitted) must preserve
     // the previously-set stage/reviewer fields, not clobber them with undefined.
-    s = applyEvent(s, { type: 'phase', phaseId: 'scaffold', status: 'active', progress: 50 });
-    expect(scaffold()).toMatchObject({
+    s = applyEvent(s, { type: 'phase', phaseId: 'ingest', status: 'active', progress: 50 });
+    expect(ingest()).toMatchObject({
       status: 'active', stage: 'compiling config', progress: 50,
       reviewerVerdict: 'pending', reviewerCycles: 0,
     });
-    expect(s.activePhase).toBe('scaffold');
+    expect(s.activePhase).toBe('ingest');
 
     // Finishing the active phase clears activePhase and stamps endedAt.
-    s = applyEvent(s, { type: 'phase', phaseId: 'scaffold', status: 'done', endedAt: 2000 });
-    expect(scaffold()).toMatchObject({ status: 'done', endedAt: 2000, stage: 'compiling config', progress: 50 });
+    s = applyEvent(s, { type: 'phase', phaseId: 'ingest', status: 'done', endedAt: 2000 });
+    expect(ingest()).toMatchObject({ status: 'done', endedAt: 2000, stage: 'compiling config', progress: 50 });
     expect(s.activePhase).toBeNull();
 
-    // Activating a different phase moves activePhase without touching scaffold.
-    s = applyEvent(s, { type: 'phase', phaseId: 'groundwork', status: 'active', stage: 'wiring fixtures' });
-    expect(s.activePhase).toBe('groundwork');
-    expect(scaffold()).toMatchObject({ status: 'done', stage: 'compiling config' });
+    // Activating a different phase moves activePhase without touching ingest.
+    s = applyEvent(s, { type: 'phase', phaseId: 'cluster', status: 'active', stage: 'wiring fixtures' });
+    expect(s.activePhase).toBe('cluster');
+    expect(ingest()).toMatchObject({ status: 'done', stage: 'compiling config' });
   });
 
   it('is a no-op for a phaseId not present in state', () => {
@@ -237,9 +252,9 @@ describe('applyEvent: question', () => {
 describe('phase activeMs streaming (F15)', () => {
   it('merges activeMs from a phase event and keeps the prior value when absent', () => {
     const withPhases = { ...base, phases: basePhases.map((p) => ({ ...p })) };
-    let s = applyEvent(withPhases, { type: 'phase', phaseId: 'scaffold', status: 'done', activeMs: 4321 });
-    expect(s.phases.find((p) => p.id === 'scaffold')?.activeMs).toBe(4321);
-    s = applyEvent(s, { type: 'phase', phaseId: 'scaffold', status: 'done' });
-    expect(s.phases.find((p) => p.id === 'scaffold')?.activeMs).toBe(4321);
+    let s = applyEvent(withPhases, { type: 'phase', phaseId: 'ingest', status: 'done', activeMs: 4321 });
+    expect(s.phases.find((p) => p.id === 'ingest')?.activeMs).toBe(4321);
+    s = applyEvent(s, { type: 'phase', phaseId: 'ingest', status: 'done' });
+    expect(s.phases.find((p) => p.id === 'ingest')?.activeMs).toBe(4321);
   });
 });

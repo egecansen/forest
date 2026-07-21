@@ -1,37 +1,3 @@
-import type { ProjectState } from './types';
-
-export type ProjectMode = 'new' | 'continue';
-
-/** Whether Continue can start, and why not. Continue needs a resumable ledger. */
-export function continueSubmitState(
-  projectMode: ProjectMode,
-  state: ProjectState | null
-): { blocked: boolean; reason: string | null } {
-  if (projectMode === 'continue' && state && state.hasState === false) {
-    return { blocked: true, reason: 'No resumable state in this folder — nothing to continue.' };
-  }
-  return { blocked: false, reason: null };
-}
-
-/** Inline note under the mode field explaining what a run will do. */
-export function modeNote(
-  projectMode: ProjectMode,
-  mode: string,
-  state: ProjectState | null
-): string | null {
-  if (projectMode === 'continue') {
-    if (!state || !state.hasState) return null;
-    if (mode === 'onboarding') {
-      return `resumes from phase ${state.currentPhase ?? '?'}/8 (${state.pipelineStatus ?? 'unknown'})`;
-    }
-    return `starts a fresh ${mode} pass on the existing suite instead of resuming`;
-  }
-  if (projectMode === 'new' && state && state.installed && state.hasState) {
-    return 'this folder already has a run — starting New re-onboards from zero';
-  }
-  return null;
-}
-
 /** Last path segment, for the run-history list's project column. */
 export function projectBasename(p: string): string {
   const parts = p.replace(/\/+$/, '').split('/').filter(Boolean);
