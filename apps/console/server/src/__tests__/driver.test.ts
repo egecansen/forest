@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
-import { startDriver, inferPhase, type QueryFn } from '../driver.js';
+import { startDriver, inferPhase, makeDemoQueryFn, type QueryFn } from '../driver.js';
 import { runStore } from '../run-store.js';
 
 const cfg = { projectPath: '/tmp/x', targetUrl: 'https://r.example/j/1?buildStartTime=1&fullTestBuildName=x',
@@ -12,6 +12,11 @@ function scripted(messages: Record<string, unknown>[]): QueryFn {
     return Object.assign(gen(), { interrupt: vi.fn(async () => {}) });
   };
 }
+
+// A no-op ledger-watcher impl for tests that don't care about its lifecycle —
+// keeps `cfg` (not a demo config) from spinning up a REAL fs.watch/poll timer
+// against '/tmp/x' for the life of the test.
+const noopLedgerWatcher = () => () => {};
 
 describe('driver core', () => {
   it('maps SDK stream → session id, phases, log, telemetry, finish', async () => {
@@ -26,7 +31,7 @@ describe('driver core', () => {
         { type: 'tool_use', name: 'Bash', input: { command: '"$KIT/cluster.sh" < fails.json' } },
       ] } }),
       msg({ type: 'result', subtype: 'success', total_cost_usd: 0.42, usage: { output_tokens: 1000 }, result: 'done' }),
-    ]));
+    ]), { ledgerWatcherImpl: noopLedgerWatcher });
     await done;
     expect(run.snapshot.sessionId).toBe('sess-1');
     expect(run.snapshot.phases.find((p) => p.id === 'ingest')?.status).toBe('done');
@@ -43,7 +48,7 @@ describe('driver core', () => {
   it('a result with subtype error → run failed', async () => {
     const run = runStore.create(cfg);
     const done = new Promise<void>((r) => run.on('event', (e) => { if (e.type === 'status' && e.status === 'failed') r(); }));
-    startDriver(run, scripted([msg({ type: 'result', subtype: 'error_during_execution' })]));
+    startDriver(run, scripted([msg({ type: 'result', subtype: 'error_during_execution' })]), { ledgerWatcherImpl: noopLedgerWatcher });
     await done;
     expect(run.snapshot.status).toBe('failed');
   });
@@ -69,7 +74,7 @@ describe('driver core', () => {
         await pausePromise;
       }
       return Object.assign(gen(), { interrupt: vi.fn(async () => {}) });
-    });
+    }, { ledgerWatcherImpl: noopLedgerWatcher });
 
     // Wait for run to enter 'running' state, then call pause, then verify final status
     const done = new Promise<void>((r) => {
@@ -128,7 +133,7 @@ describe('driver core', () => {
         { type: 'tool_use', name: 'Bash', input: { command: '"$KIT/apply.sh" cluster-b' } },
       ] } }),
       msg({ type: 'result', subtype: 'success', total_cost_usd: 0.1, usage: { output_tokens: 10 }, result: 'done' }),
-    ]));
+    ]), { ledgerWatcherImpl: noopLedgerWatcher });
     await done;
 
     // No two phases were ever simultaneously 'active'.
@@ -137,5 +142,86 @@ describe('driver core', () => {
     // 'done' by then) must be a no-op, not a regression back to 'active'.
     const fixActiveCount = phaseEvents.filter((e) => e.phaseId === 'fix' && e.status === 'active').length;
     expect(fixActiveCount).toBe(1);
+  });
+});
+
+describe('driver ledger-watcher lifecycle', () => {
+  it('starts the ledger watcher exactly once for a non-demo scripted run, and stops it on result-success end', async () => {
+    const run = runStore.create(cfg);
+    const stopFn = vi.fn();
+    const ledgerWatcherImpl = vi.fn(() => stopFn);
+
+    const done = new Promise<void>((r) => run.on('event', (e) => { if (e.type === 'status' && e.status === 'completed') r(); }));
+    startDriver(run, scripted([
+      msg({ type: 'system', subtype: 'init', session_id: 'sess-lw-1' }),
+      msg({ type: 'result', subtype: 'success', total_cost_usd: 0.1, usage: { output_tokens: 10 }, result: 'done' }),
+    ]), { ledgerWatcherImpl });
+    await done;
+    // The 'completed' status event fires mid-loop (inside the `result`
+    // branch), a few microtask-hops before the driver's stream loop actually
+    // exhausts and unwinds into its `finally` (where stopLedgerWatcher()
+    // lives) — give that unwind a tick to finish before asserting on it.
+    await new Promise((r) => setTimeout(r, 0));
+
+    expect(ledgerWatcherImpl).toHaveBeenCalledTimes(1);
+    expect(ledgerWatcherImpl).toHaveBeenCalledWith(run, cfg.projectPath);
+    expect(stopFn).toHaveBeenCalledTimes(1);
+  });
+
+  it('stops the ledger watcher on the run.stop()/abort path', async () => {
+    const run = runStore.create(cfg);
+    const stopFn = vi.fn();
+    const ledgerWatcherImpl = vi.fn(() => stopFn);
+
+    const running = new Promise<void>((r) => run.on('event', (e) => { if (e.type === 'status' && e.status === 'running') r(); }));
+    const handle = startDriver(run, () => {
+      async function* gen() {
+        yield msg({ type: 'system', subtype: 'init', session_id: 'sess-lw-2' });
+        await new Promise(() => {}); // held open — the run is stopped from outside
+      }
+      return Object.assign(gen(), { interrupt: vi.fn(async () => {}) });
+    }, { ledgerWatcherImpl });
+    await running;
+
+    expect(ledgerWatcherImpl).toHaveBeenCalledTimes(1);
+    expect(stopFn).not.toHaveBeenCalled();
+
+    handle(); // the driver's stop() — abort + run.stop() + eager stopLedgerWatcher()
+    expect(stopFn).toHaveBeenCalledTimes(1);
+    expect(run.snapshot.status).toBe('cancelled');
+  });
+
+  it('stops the ledger watcher on the pause path', async () => {
+    const run = runStore.create(cfg);
+    const stopFn = vi.fn();
+    const ledgerWatcherImpl = vi.fn(() => stopFn);
+
+    const running = new Promise<void>((r) => run.on('event', (e) => { if (e.type === 'status' && e.status === 'running') r(); }));
+    const handle = startDriver(run, () => {
+      async function* gen() {
+        yield msg({ type: 'system', subtype: 'init', session_id: 'sess-lw-3' });
+        await new Promise(() => {}); // held open — the run is paused from outside
+      }
+      return Object.assign(gen(), { interrupt: vi.fn(async () => {}) });
+    }, { ledgerWatcherImpl });
+    await running;
+
+    expect(ledgerWatcherImpl).toHaveBeenCalledTimes(1);
+    expect(stopFn).not.toHaveBeenCalled();
+
+    handle.pause(); // eager stopLedgerWatcher(), ahead of the stream actually unwinding
+    expect(stopFn).toHaveBeenCalledTimes(1);
+  });
+
+  it('does NOT start the ledger watcher for demo:true config runs', async () => {
+    const demoCfg = { ...cfg, demo: true };
+    const run = runStore.create(demoCfg);
+    const ledgerWatcherImpl = vi.fn(() => vi.fn());
+
+    const awaitingInput = new Promise<void>((r) => run.on('event', (e) => { if (e.type === 'status' && e.status === 'awaiting-input') r(); }));
+    startDriver(run, makeDemoQueryFn(run), { ledgerWatcherImpl });
+    await awaitingInput;
+
+    expect(ledgerWatcherImpl).not.toHaveBeenCalled();
   });
 });

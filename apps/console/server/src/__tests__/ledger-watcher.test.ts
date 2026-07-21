@@ -254,4 +254,46 @@ describe('startLedgerWatcher', () => {
     expect(updateSpy).toHaveBeenCalledTimes(1);
     expect(run.snapshot.clusters[0].state).toBe('picked');
   });
+
+  it('stop() mid-tick — a read already in flight when stop() is called must not apply to the (now stopped) run', async () => {
+    const run = runStore.create(cfg);
+    run.setClusters([CL]);
+    const updateSpy = vi.spyOn(run, 'updateCluster');
+
+    const ledgerPath = path.join(dir, 'ledger.json');
+    await fs.writeFile(
+      ledgerPath,
+      JSON.stringify({ ...baseLedger, clusters: [ledgerCluster({ status: 'selected' })] }),
+      'utf8'
+    );
+
+    // A controllable fsImpl: `stat` behaves normally, but `readFile` blocks on
+    // a gate the test controls — this puts a tick's `await fsImpl.readFile`
+    // exactly where `stop()` needs to land to reproduce the race.
+    let releaseRead: () => void = () => {};
+    const gate = new Promise<void>((resolve) => { releaseRead = resolve; });
+    const fsImpl = {
+      stat: fs.stat,
+      readFile: async (p: string, enc: 'utf8') => {
+        await gate;
+        return fs.readFile(p, enc);
+      },
+    };
+
+    const stop = startLedgerWatcher(run, dir, { intervalMs: 20, fsImpl });
+
+    // Give the first (immediate) tick time to reach and block on the gated
+    // readFile — it must be in flight before we call stop().
+    await new Promise((r) => setTimeout(r, 50));
+    expect(updateSpy).not.toHaveBeenCalled();
+
+    stop(); // stop mid-read: the run is now "stopped" from the watcher's POV
+    releaseRead(); // let the in-flight read complete
+    await new Promise((r) => setTimeout(r, 100));
+
+    // The tick must have abandoned the stale in-flight read instead of
+    // applying it to a stopped watcher.
+    expect(updateSpy).not.toHaveBeenCalled();
+    expect(run.snapshot.clusters[0].state).toBe('proposed');
+  });
 });

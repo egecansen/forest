@@ -59,10 +59,19 @@ function advancePhase(run: Run, next: PhaseId) {
 const realQueryFn: QueryFn = ({ prompt, options }) =>
   query({ prompt, options: options as Options }) as unknown as ReturnType<QueryFn>;
 
-export function startDriver(run: Run, queryFn: QueryFn = realQueryFn, opts: { resume?: boolean } = {}): DriverHandle {
+export function startDriver(
+  run: Run,
+  queryFn: QueryFn = realQueryFn,
+  opts: { resume?: boolean; ledgerWatcherImpl?: typeof startLedgerWatcher } = {}
+): DriverHandle {
   const config = run.snapshot.config!;
   const abort = new AbortController();
   let pausing = false;
+  // Injectable seam (tests only — production always gets the real watcher):
+  // every pre-existing driver test scripts a non-demo run, so without this
+  // seam each one silently spins up a REAL fs.watch/poll timer against its
+  // (usually nonexistent) `config.projectPath`.
+  const ledgerWatcherImpl = opts.ledgerWatcherImpl ?? startLedgerWatcher;
 
   const options: Record<string, unknown> = {
     cwd: config.projectPath,
@@ -86,7 +95,7 @@ export function startDriver(run: Run, queryFn: QueryFn = realQueryFn, opts: { re
   // safe to call from more than one of those paths for the same run.
   let stopWatcher: (() => void) | null = null;
   const startLedgerWatcherOnce = () => {
-    if (!stopWatcher && !config.demo) stopWatcher = startLedgerWatcher(run, config.projectPath);
+    if (!stopWatcher && !config.demo) stopWatcher = ledgerWatcherImpl(run, config.projectPath);
   };
   const stopLedgerWatcher = () => { stopWatcher?.(); stopWatcher = null; };
 

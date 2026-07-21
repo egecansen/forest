@@ -106,6 +106,15 @@ const DEFAULT_INTERVAL_MS = 2000;
 export interface LedgerWatcherOptions {
   /** Poll interval in ms. Defaults to 2000 per spec; overridable for tests. */
   intervalMs?: number;
+  /**
+   * Injectable `fs/promises`-shaped `stat`/`readFile` pair, defaulting to the
+   * real module. Exists solely so tests can gate a tick mid-flight (e.g. to
+   * reproduce the stop()-during-read race) without needing a real slow disk.
+   */
+  fsImpl?: {
+    stat: (path: string) => Promise<{ mtimeMs: number }>;
+    readFile: (path: string, encoding: 'utf8') => Promise<string>;
+  };
 }
 
 /**
@@ -121,6 +130,7 @@ export interface LedgerWatcherOptions {
 export function startLedgerWatcher(run: Run, dir: string, opts: LedgerWatcherOptions = {}): () => void {
   const ledgerPath = path.join(dir, LEDGER_FILE);
   const intervalMs = opts.intervalMs ?? DEFAULT_INTERVAL_MS;
+  const fsImpl = opts.fsImpl ?? fs;
   let lastMtimeMs: number | null = null;
   let inFlight = false;
   let stopped = false;
@@ -131,18 +141,24 @@ export function startLedgerWatcher(run: Run, dir: string, opts: LedgerWatcherOpt
     try {
       let stat: { mtimeMs: number };
       try {
-        stat = await fs.stat(ledgerPath);
+        stat = await fsImpl.stat(ledgerPath);
       } catch {
         return; // absent — not yet created (or `dir` itself doesn't exist yet); retry next tick
       }
+      // `stop()` may have fired while the stat above was in flight — a
+      // stopped watcher must never go on to read/apply a cluster patch onto
+      // a run that's no longer live (stopped/paused/finished).
+      if (stopped) return;
       if (lastMtimeMs !== null && stat.mtimeMs === lastMtimeMs) return; // unchanged since last parse — skip
 
       let raw: string;
       try {
-        raw = await fs.readFile(ledgerPath, 'utf8');
+        raw = await fsImpl.readFile(ledgerPath, 'utf8');
       } catch {
         return; // vanished between stat and read — retry next tick
       }
+      // Same race, this time around the (typically slower) read itself.
+      if (stopped) return;
 
       let ledger: unknown;
       try {
@@ -155,6 +171,10 @@ export function startLedgerWatcher(run: Run, dir: string, opts: LedgerWatcherOpt
       // transient garbage read (same-second mtime on a non-atomic writer)
       // never gets treated as "already seen".
       lastMtimeMs = stat.mtimeMs;
+      // Final re-check immediately before mutating the run's cluster board —
+      // no further awaits happen between here and applyLedgerClusters, but
+      // this is the last chance to bail before the mutation actually lands.
+      if (stopped) return;
       applyLedgerClusters(run, ledger);
     } finally {
       inFlight = false;
