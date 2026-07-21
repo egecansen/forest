@@ -202,7 +202,7 @@ export function App() {
             }}
             aria-label="how does it work?"
           >
-            <span className="info-trigger-glyph">8</span>
+            <span className="info-trigger-glyph">6</span>
             how does it work?
           </button>
           <InfoDrawer open={infoOpen} onClose={() => setInfoOpen(false)} />

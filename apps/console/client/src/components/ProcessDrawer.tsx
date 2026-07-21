@@ -21,7 +21,7 @@ const FRIENDLY: Record<string, { lead: string; body: string }> = {
   },
   fix: {
     lead: 'apply the fix',
-    body: 'Applies and compile-checks a fix for each picked cluster.',
+    body: 'Applies and compile-checks a fix for each picked cluster, in your working tree — nothing is ever committed.',
   },
   verify: {
     lead: 'prove it',
