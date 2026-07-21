@@ -5010,9 +5010,18 @@ button.tree-line.file {
 
 /* Widens the shared start-card frame — a build table needs more room than
    the triage form's single input column. Both light and dark values come
-   from the surface/border/shadow tokens already flipped by [data-theme]. */
+   from the surface/border/shadow tokens already flipped by [data-theme].
+   `margin-inline: auto` is belt-and-suspenders with .start-screen's flex
+   centering (keeps this a self-centering column even if it ever ends up
+   somewhere that isn't that flex wrapper) and `margin-top` guarantees the
+   card never renders under the fixed top info-trigger buttons (.info-trigger
+   sits at top: 22px, ~34px tall) — .start-screen's own 24px padding-top
+   isn't enough headroom once the board has enough rows to push its
+   `align-items: safe center` into the start-aligned overflow fallback. */
 .start-card.builds-board {
-  max-width: 920px;
+  max-width: 1080px;
+  margin-inline: auto;
+  margin-top: 48px;
 }
 
 .board-header {
