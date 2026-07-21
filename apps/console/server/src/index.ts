@@ -5,7 +5,7 @@ import path from 'node:path';
 import fsp from 'node:fs/promises';
 import url from 'node:url';
 import { runStore } from './run-store.js';
-import { startDriver, type DriverHandle } from './driver.js';
+import { startDriver, demoQueryFn, type DriverHandle } from './driver.js';
 import { pendingAnswers } from './pending-answers.js';
 import { normalizeRunBody } from './validate.js';
 import { listDirectories } from './browse.js';
@@ -127,8 +127,14 @@ async function main() {
       res.status(400).json({ error: parsed.error });
       return;
     }
+    // Only one triage run active at a time — the driver owns the target
+    // repo's working tree, so a second concurrent run would race it.
+    if (runStore.listActive().length > 0) {
+      res.status(409).json({ error: 'a triage run is already active' });
+      return;
+    }
     // Continue requires an existing project dir; New may create it (driver mkdir -p's).
-    // Demo runs are exempt — the simulator never touches the filesystem, and the
+    // Demo runs are exempt — the demo stream never touches the filesystem, and the
     // demo project path is synthetic, so a real-directory check would wrongly reject
     // "continue this run" on a demo run.
     if (parsed.value.projectMode === 'continue' && !parsed.value.demo) {
@@ -142,7 +148,7 @@ async function main() {
     }
     const run = runStore.create(parsed.value);
     const runId = run.snapshot.config!.runId;
-    const stop = startDriver(run);
+    const stop = startDriver(run, parsed.value.demo === true ? demoQueryFn : undefined);
     drivers.set(runId, stop);
 
     // The drivers map is otherwise only pruned by the explicit /stop route —
