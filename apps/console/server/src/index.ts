@@ -12,7 +12,9 @@ import { listDirectories } from './browse.js';
 import { isAllowedHost } from './host-guard.js';
 import { saveRun, listRuns, loadRun, isSafeRunId, resolveInsideRoot, resolveRunsDirSync } from './persistence.js';
 import { loadConsoleConfig, kitAllowlist, type ConsoleConfig } from './console-config.js';
+import { BuildsPoller } from './trackers/poller.js';
 import type { RunSnapshot, ServerEvent } from './types.js';
+import type { WebSocket } from 'ws';
 
 const PORT = Number(process.env.PORT ?? 8765);
 const RUNS_DIR = resolveRunsDirSync();
@@ -38,6 +40,11 @@ const clientDist = path.resolve(__dirname, '..', '..', 'client', 'dist');
 // control them. Each handle is callable (stop) with a `.pause` method.
 const drivers = new Map<string, DriverHandle>();
 
+// Set once config loads inside main() (null when unconfigured). Declared here
+// so the shutdown handler below — which runs before main()'s promise settles
+// on process exit — can reach it.
+let poller: BuildsPoller | null = null;
+
 // Statuses a run never leaves once reached (see Run.stop/finish — both are
 // guarded by `this.stopped` and set exactly one of these).
 const TERMINAL_RUN_STATUSES = new Set<RunSnapshot['status']>(['completed', 'failed', 'cancelled']);
@@ -57,6 +64,7 @@ const shutdown = () => {
       // best-effort: a stuck driver shouldn't block the rest from stopping.
     }
   }
+  poller?.stop();
   process.exit(0);
 };
 process.on('SIGINT', shutdown);
@@ -68,9 +76,27 @@ async function main() {
     return null;
   });
   const allowlist = consoleConfig ? await kitAllowlist(consoleConfig.repoPath).catch(() => []) : [];
+  poller = consoleConfig ? new BuildsPoller(consoleConfig) : null;
+  // WS clients on /ws-board — a live connection is the sole "poll while
+  // watched" signal (see setClientCount below), and each gets pushed the
+  // latest builds snapshot whenever the poller refreshes.
+  const boardClients = new Set<WebSocket>();
+  if (poller) {
+    poller.onRefresh = (data) => {
+      for (const ws of boardClients) if (ws.readyState === ws.OPEN) ws.send(JSON.stringify({ type: 'builds', ...data }));
+    };
+  }
 
   app.get('/api/health', (_req, res) => {
     res.json({ ok: true });
+  });
+
+  app.get('/api/builds', (_req, res) => {
+    if (!poller) {
+      res.status(503).json({ error: 'console not configured — create ~/.hektor-console/config.json' });
+      return;
+    }
+    res.json(poller.getBuilds());
   });
 
   app.get('/api/config', (_req, res) => {
@@ -328,6 +354,22 @@ async function main() {
       return;
     }
     const u = new URL(request.url ?? '/', 'http://localhost');
+
+    if (u.pathname === '/ws-board') {
+      // Board presence channel: no runId — a connection itself is the "someone
+      // is watching" signal that gates BuildsPoller's polling (see
+      // setClientCount) plus the transport for its `{type:'builds'}` pushes.
+      wss.handleUpgrade(request, socket, head, (ws) => {
+        boardClients.add(ws);
+        poller?.setClientCount(boardClients.size);
+        ws.on('close', () => {
+          boardClients.delete(ws);
+          poller?.setClientCount(boardClients.size);
+        });
+      });
+      return;
+    }
+
     if (u.pathname !== '/ws') {
       socket.destroy();
       return;
