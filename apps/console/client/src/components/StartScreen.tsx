@@ -54,11 +54,23 @@ interface Props {
     targetUrl: string,
     testbox: string,
     permissionPolicy: RunConfig['permissionPolicy'],
-    projectMode: RunConfig['projectMode']
+    projectMode: RunConfig['projectMode'],
+    demo: boolean
   ) => Promise<void>;
   /** Seeds the report-URL field — set when arriving from the builds board
    *  ("triage" on a row) or a `?triage=<url>` deep link. */
   prefillReportUrl?: string;
+}
+
+/** The demo toggle is dev/demo-only surface — only shown when there's a
+ *  clear signal this is a demo session: an explicit `?demo` on the page URL,
+ *  or a `?triage=` deep link whose report URL already carries the scripted
+ *  demo's `fullTestBuildName=demo` marker (see server/src/driver.ts's
+ *  makeDemoQueryFn and validate.ts, which both key off `demo: true`/that
+ *  marker). Never shown for an ordinary triage session. */
+function computeShowDemoToggle(prefillReportUrl: string | undefined): boolean {
+  if (typeof window !== 'undefined' && new URLSearchParams(window.location.search).has('demo')) return true;
+  return !!prefillReportUrl && prefillReportUrl.includes('fullTestBuildName=demo');
 }
 
 export function StartScreen({ onStart, prefillReportUrl }: Props) {
@@ -66,9 +78,12 @@ export function StartScreen({ onStart, prefillReportUrl }: Props) {
   const [targetUrl, setTargetUrl] = useState(prefillReportUrl || 'https://');
   const [testbox, setTestbox] = useState('');
   const [permissionPolicy, setPermissionPolicy] = useState<RunConfig['permissionPolicy']>('confirm-applies');
+  const [demo, setDemo] = useState(false);
   const [submitting, setSubmitting] = useState(false);
   const [err, setErr] = useState<string | null>(null);
   const [pickerOpen, setPickerOpen] = useState(false);
+
+  const showDemoToggle = computeShowDemoToggle(prefillReportUrl);
 
   // Seed project path + testbox from the console's configured defaults
   // (GET /api/config) — only when the field hasn't already been filled in
@@ -93,8 +108,11 @@ export function StartScreen({ onStart, prefillReportUrl }: Props) {
   }, []);
 
   const projectPathValid = projectPath.trim().length > 0;
-  const testboxValid = isValidTestbox(testbox);
-  const urlValid = isValidReportUrl(targetUrl);
+  // The demo report URL/testbox are synthetic (a scripted run, no real
+  // Jenkins/ES lookup happens) — don't block a demo submission on the same
+  // shape checks a real triage session's URL/testbox must satisfy.
+  const testboxValid = demo || isValidTestbox(testbox);
+  const urlValid = demo || isValidReportUrl(targetUrl);
   const canSubmit = projectPathValid && testboxValid && urlValid && !submitting;
 
   const submit = async (ev: React.FormEvent) => {
@@ -103,7 +121,7 @@ export function StartScreen({ onStart, prefillReportUrl }: Props) {
     if (!canSubmit) return;
     setSubmitting(true);
     try {
-      await onStart(projectPath.trim(), targetUrl.trim(), testbox.trim(), permissionPolicy, 'new');
+      await onStart(projectPath.trim(), targetUrl.trim(), testbox.trim(), permissionPolicy, 'new', demo);
     } catch (e) {
       setErr((e as Error).message);
       setSubmitting(false);
@@ -174,6 +192,17 @@ export function StartScreen({ onStart, prefillReportUrl }: Props) {
               ariaLabel="permissions"
             />
           </div>
+
+          {showDemoToggle && (
+            <label className="demo-toggle">
+              <input
+                type="checkbox"
+                checked={demo}
+                onChange={(e) => setDemo(e.target.checked)}
+              />
+              demo mode — scripted run, no SDK or network needed
+            </label>
+          )}
 
           {err && <p className="start-error">{err}</p>}
 

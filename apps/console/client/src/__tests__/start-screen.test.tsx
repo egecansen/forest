@@ -71,7 +71,7 @@ describe('StartScreen', () => {
     expect(submit).toBeEnabled();
     await user.click(submit);
 
-    expect(onStart).toHaveBeenCalledWith('/tmp/web-test', GOOD_URL, 'tb161', 'confirm-applies', 'new');
+    expect(onStart).toHaveBeenCalledWith('/tmp/web-test', GOOD_URL, 'tb161', 'confirm-applies', 'new', false);
   });
 
   it('maps the policy dropdown labels to the right permissionPolicy values', async () => {
@@ -89,6 +89,59 @@ describe('StartScreen', () => {
     await user.click(screen.getByRole('option', { name: /auto-approve recipe fixes/i }));
 
     await user.click(screen.getByRole('button', { name: /start triage/i }));
-    expect(onStart).toHaveBeenCalledWith('/tmp/web-test', GOOD_URL, 'tb161', 'autonomous', 'new');
+    expect(onStart).toHaveBeenCalledWith('/tmp/web-test', GOOD_URL, 'tb161', 'autonomous', 'new', false);
+  });
+
+  describe('demo toggle', () => {
+    const DEMO_URL = 'https://report.example/web-test-s4-flaky/2127?buildStartTime=1&fullTestBuildName=demo';
+
+    afterEach(() => {
+      window.history.pushState(null, '', '/');
+    });
+
+    it('is not rendered for an ordinary triage session', async () => {
+      stubConfigFetch({ configured: false });
+      render(<StartScreen onStart={vi.fn()} prefillReportUrl={GOOD_URL} />);
+      expect(screen.queryByRole('checkbox', { name: /demo/i })).not.toBeInTheDocument();
+    });
+
+    it('renders when the deep-linked report URL carries fullTestBuildName=demo', async () => {
+      stubConfigFetch({ configured: false });
+      render(<StartScreen onStart={vi.fn()} prefillReportUrl={DEMO_URL} />);
+      expect(screen.getByRole('checkbox', { name: /demo/i })).toBeInTheDocument();
+    });
+
+    it('renders when the page URL carries ?demo', async () => {
+      window.history.pushState(null, '', '/?demo');
+      stubConfigFetch({ configured: false });
+      render(<StartScreen onStart={vi.fn()} />);
+      expect(screen.getByRole('checkbox', { name: /demo/i })).toBeInTheDocument();
+    });
+
+    it('checking it relaxes URL/testbox validation and posts demo: true', async () => {
+      stubConfigFetch({ configured: false });
+      const onStart = vi.fn().mockResolvedValue(undefined);
+      render(<StartScreen onStart={onStart} prefillReportUrl={DEMO_URL} />);
+      const user = userEvent.setup();
+
+      await user.type(screen.getByLabelText(/^project path$/i), '/tmp/demo-project');
+      // Deliberately malformed testbox — a real triage session would block on this.
+      await user.type(screen.getByLabelText(/testbox/i), 'not-a-testbox');
+      const submit = screen.getByRole('button', { name: /start triage/i });
+      expect(submit).toBeDisabled();
+
+      await user.click(screen.getByRole('checkbox', { name: /demo/i }));
+      expect(submit).toBeEnabled();
+
+      await user.click(submit);
+      expect(onStart).toHaveBeenCalledWith(
+        '/tmp/demo-project',
+        DEMO_URL,
+        'not-a-testbox',
+        'confirm-applies',
+        'new',
+        true
+      );
+    });
   });
 });

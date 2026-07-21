@@ -5,7 +5,7 @@ import path from 'node:path';
 import fsp from 'node:fs/promises';
 import url from 'node:url';
 import { runStore } from './run-store.js';
-import { startDriver, demoQueryFn, type DriverHandle } from './driver.js';
+import { startDriver, makeDemoQueryFn, type DriverHandle } from './driver.js';
 import { pendingAnswers } from './pending-answers.js';
 import { normalizeRunBody } from './validate.js';
 import { listDirectories } from './browse.js';
@@ -149,7 +149,7 @@ async function main() {
     }
     const run = runStore.create(parsed.value);
     const runId = run.snapshot.config!.runId;
-    const stop = startDriver(run, parsed.value.demo === true ? demoQueryFn : undefined);
+    const stop = startDriver(run, parsed.value.demo === true ? makeDemoQueryFn(run) : undefined);
     drivers.set(runId, stop);
 
     // The drivers map is otherwise only pruned by the explicit /stop route —

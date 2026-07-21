@@ -1,11 +1,12 @@
 import { query } from '@anthropic-ai/claude-agent-sdk';
 import type { Options } from '@anthropic-ai/claude-agent-sdk';
 import type { Run } from './run-store.js';
-import type { PhaseId } from './types.js';
+import type { Cluster, PhaseId, QuestionSpec } from './types.js';
 import { PHASE_ORDER } from './types.js';
 import { buildPrompt } from './driver-prompt.js';
 import { makeCanUseTool } from './driver-can-use-tool.js';
 import { hektorMcpServer } from './driver-mcp.js';
+import { pendingAnswers } from './pending-answers.js';
 
 export type QueryFn = (args: { prompt: string; options: Record<string, unknown> }) =>
   AsyncIterable<Record<string, unknown>> & { interrupt?: () => Promise<void> };
@@ -132,77 +133,101 @@ export function startDriver(run: Run, queryFn: QueryFn = realQueryFn, opts: { re
   });
 }
 
+const DEMO_CLUSTER_ID = 'onetrust';
+const DEMO_QUESTION = 'Which clusters should be picked for this triage pass?';
+
+const demoBash = (command: string): Record<string, unknown> => ({
+  type: 'assistant',
+  message: { content: [{ type: 'tool_use', name: 'Bash', input: { command } }] },
+});
+
 /**
  * Scripted demo stream used when `config.demo === true` — walks the same
- * shape a real triage session takes (system init → ingest → cluster → a
- * cluster pick via AskUserQuestion → a success result with a scoreboard) with
- * no SDK/network involved, so the UI has a working end-to-end path to demo
- * against. Yields asynchronously so WS clients see the run progress rather
- * than jumping straight to 'completed'. The AskUserQuestion block is only
- * logged in this task (the stub canUseTool doesn't intercept it) — the real
- * pick round-trip through the console lands in Task 10; this script is kept
- * so Task 13's smoke test has something to exercise once that lands.
+ * shape a real triage session takes: system init → ingest → cluster
+ * (publishing a cluster via `run.setClusters`, mirroring what the real
+ * session's `set_clusters` MCP tool does — see driver-mcp.ts) → a cluster
+ * pick via AskUserQuestion → fix → verify → the picked cluster turns green →
+ * a success result. No SDK/network/child-process involved.
+ *
+ * Unlike the earlier stub, the AskUserQuestion here is a REAL round-trip: it
+ * blocks on the exact same `pendingAnswers` registry `makeCanUseTool` uses
+ * for a live run (driver-can-use-tool.ts) — a scripted message stream never
+ * flows through the real SDK's `canUseTool` hook, so this generator (closed
+ * over `run`) reproduces that bridge itself. The console's QuestionModal →
+ * `POST /api/runs/:runId/answer` flow resolves it exactly as it would a real
+ * session's pause. This is what Task 13's smoke test exercises end-to-end.
  */
-export const demoQueryFn: QueryFn = () => {
-  const messages: Record<string, unknown>[] = [
-    { type: 'system', subtype: 'init', session_id: 'demo-1' },
-    {
-      type: 'assistant',
-      message: {
-        content: [
-          {
-            type: 'tool_use',
-            name: 'Bash',
-            input: { command: 'KIT=…; "$KIT/ingest.sh" "https://demo.example/report" > fails.json' },
-          },
-        ],
-      },
-    },
-    {
-      type: 'assistant',
-      message: {
-        content: [
-          { type: 'tool_use', name: 'Bash', input: { command: '"$KIT/cluster.sh" < fails.json' } },
-        ],
-      },
-    },
-    {
-      type: 'assistant',
-      message: {
-        content: [
-          {
-            type: 'tool_use',
-            name: 'AskUserQuestion',
-            input: {
-              questions: [
-                {
-                  question: 'Which clusters should be picked for this triage pass?',
-                  header: 'Pick clusters',
-                  multiSelect: true,
-                  options: [
-                    { label: 'flaky-selector', description: 'Selector timing flake across 4 tests' },
-                    { label: 'infra-timeout', description: 'Testbox network timeout, 2 tests' },
-                  ],
-                },
-              ],
-            },
-          },
-        ],
-      },
-    },
-    {
-      type: 'result',
-      subtype: 'success',
-      total_cost_usd: 0.08,
-      usage: { output_tokens: 320 },
-      result: 'Demo triage complete — 2 clusters picked, 0 escalations.',
-    },
-  ];
-  async function* gen() {
-    for (const m of messages) {
-      await new Promise((r) => setTimeout(r, 50));
-      yield m;
+export function makeDemoQueryFn(run: Run): QueryFn {
+  return () => {
+    async function* gen() {
+      const wait = (ms: number) => new Promise((r) => setTimeout(r, ms));
+
+      yield { type: 'system', subtype: 'init', session_id: 'demo-1' };
+      await wait(50);
+      yield demoBash('KIT=…; "$KIT/ingest.sh" "https://demo.example/report" > fails.json');
+      await wait(50);
+      yield demoBash('"$KIT/cluster.sh" < fails.json');
+      await wait(50);
+
+      // set_clusters equivalent: a real session publishes clusters via the
+      // hektor-console MCP tool (driver-mcp.ts); the demo calls the same
+      // Run method directly since there is no real MCP dispatch here.
+      const cluster: Cluster = {
+        id: DEMO_CLUSTER_ID,
+        title: 'OneTrust consent overlay intercepts clicks',
+        bucket: 'easy-fix',
+        tests: ['com.sahibinden.web.CheckoutFlowTest#submitsWithConsentBanner'],
+        state: 'proposed',
+      };
+      run.setClusters([cluster]);
+
+      const questions: QuestionSpec[] = [
+        {
+          question: DEMO_QUESTION,
+          header: 'Pick clusters',
+          multiSelect: true,
+          options: [{ label: 'onetrust', description: 'OneTrust consent overlay intercepts clicks on 1 test' }],
+        },
+      ];
+      yield {
+        type: 'assistant',
+        message: { content: [{ type: 'tool_use', name: 'AskUserQuestion', input: { questions } }] },
+      };
+
+      const questionId = run.nextQuestionId();
+      const runId = run.snapshot.config!.runId;
+      const answerPromise = pendingAnswers.register(runId, questionId);
+      run.setPendingQuestion({ questionId, questions });
+      run.setPhase('pick', 'active');
+      try {
+        await answerPromise;
+      } catch {
+        return; // stop()/rejectAll — the run was stopped before it was answered
+      }
+      run.clearPendingQuestion();
+      run.setPhase('pick', 'done');
+      run.updateCluster(DEMO_CLUSTER_ID, { state: 'picked' });
+      await wait(50);
+
+      // cluster_status equivalent (see driver-mcp.ts) — again a direct Run
+      // call rather than a real MCP dispatch.
+      yield demoBash('"$KIT/apply.sh" onetrust');
+      run.updateCluster(DEMO_CLUSTER_ID, { state: 'fixing' });
+      await wait(50);
+      yield demoBash('"$KIT/rerun.sh" onetrust tb161');
+      run.updateCluster(DEMO_CLUSTER_ID, { state: 'verifying', passes: 1, runs: 3 });
+      await wait(50);
+      run.updateCluster(DEMO_CLUSTER_ID, { state: 'green', passes: 3, runs: 3, note: 'fixed selector, verified green' });
+      await wait(50);
+
+      yield {
+        type: 'result',
+        subtype: 'success',
+        total_cost_usd: 0.08,
+        usage: { output_tokens: 320 },
+        result: 'Demo triage completed — 1 cluster fixed and verified green, 0 escalations.',
+      };
     }
-  }
-  return Object.assign(gen(), { interrupt: async () => {} });
-};
+    return Object.assign(gen(), { interrupt: async () => {} });
+  };
+}

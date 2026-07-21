@@ -4,3 +4,11 @@ server/dist/
 *.log
 .DS_Store
 .achilles/
+
+# Playwright — the smoke fixture's config.json files are regenerated fresh
+# (with a machine-absolute repoPath baked in) every time playwright.config.ts
+# loads; see the config file for why they aren't checked in.
+e2e/fixtures/console-home/
+e2e/.output/
+playwright-report/
+test-results/
