@@ -93,6 +93,41 @@ describe('RunStore.restore', () => {
     const snapshot = makeSnapshot({ config: null });
     expect(runStore.restore(snapshot)).toBeNull();
   });
+
+  it('seeds session clock on resume-after-restore to exclude downtime gap', () => {
+    // Simulate a paused snapshot: started 2 hours ago, but only 10 min active (prior elapsed),
+    // now idle for ~110 min waiting to be resumed.
+    const twoHoursAgo = Date.now() - 2 * 60 * 60 * 1000;
+    const tenMinActive = 10 * 60 * 1000;
+    const snapshot = makeSnapshot({
+      config: { ...baseConfig, runId: 'restore-run-session-clock' },
+      sessionId: 'sess-1',
+      telemetry: {
+        startedAt: twoHoursAgo,
+        elapsedMs: tenMinActive,
+        priorElapsedMs: tenMinActive,
+        tokens: 0,
+        thinking: false,
+      },
+    });
+
+    const run = runStore.restore(snapshot);
+    expect(run).not.toBeNull();
+
+    // Simulate resumed stream's init: call setSessionId with the same id.
+    run!.setSessionId('sess-1');
+
+    // Now simulate the resumed stream sending telemetry.
+    run!.setTelemetry({ thinking: false });
+
+    // The key assertion: elapsedMs should be ~tenMinActive (600s), NOT 2 hours.
+    // If the bug exists, elapsedMs would be ~2h (wall-clock from twoHoursAgo).
+    // With the fix, it should be just the prior elapsed plus a tiny bit for this session.
+    // Allow ±5s grace for test execution time.
+    const elapsedAfterResume = run!.snapshot.telemetry.elapsedMs;
+    expect(elapsedAfterResume).toBeGreaterThanOrEqual(tenMinActive - 5000);
+    expect(elapsedAfterResume).toBeLessThanOrEqual(tenMinActive + 5000);
+  });
 });
 
 describe('RunStore.all', () => {

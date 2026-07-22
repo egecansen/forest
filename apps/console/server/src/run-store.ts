@@ -172,6 +172,16 @@ export class Run extends EventEmitter {
         this.elapsedBase += Math.max(0, Date.now() - this.sessionStartedAt);
       }
       this.sessionStartedAt = Date.now();
+    } else if (this.sessionStartedAt == null && this.elapsedBase > 0) {
+      // First init after restore: a restored run is paused with no live session
+      // (sessionStartedAt is null), but it carries prior elapsed time from earlier
+      // sessions (elapsedBase > 0). Treat this as a session boundary — start a
+      // fresh session clock now without double-banking: elapsedBase already carries
+      // prior time via priorElapsedMs, so we just seed the live session's start.
+      // This ensures that when setTelemetry runs, the elapsed calculation uses
+      // this fresh sessionStartedAt rather than falling back to the (stale) run
+      // creation time. (finding F12 / session-clock-resume)
+      this.sessionStartedAt = Date.now();
     }
     this.snapshot.sessionId = id;
   }
@@ -231,6 +241,7 @@ export class Run extends EventEmitter {
    * download, etc.
    */
   setProgress(key: string, percent: number, label?: string) {
+    // NOTE: bypasses secretRedactor (only applies legacy redact) — must route through it if ever called by agent.
     const redactedKey = this.redact(key)!;
     const redactedLabel = this.redact(label);
     const lastIdx = this.snapshot.log.length - 1;
@@ -364,12 +375,14 @@ export class Run extends EventEmitter {
   }
 
   setPipelineStatus(pipelineStatus: string | null) {
+    // NOTE: bypasses secretRedactor (only applies legacy redact) — must route through it if ever called by agent.
     const redacted = this.redact(pipelineStatus ?? undefined) ?? null;
     this.snapshot.pipelineStatus = redacted;
     this.emitEvent({ type: 'pipelineStatus', pipelineStatus: redacted });
   }
 
   addFinding(f: Omit<Finding, 'id' | 'ts'> & Partial<Pick<Finding, 'id' | 'ts'>>) {
+    // NOTE: bypasses secretRedactor (only applies legacy redact) — must route through it if ever called by agent.
     const finding: Finding = {
       id: f.id ?? randomUUID(),
       ts: f.ts ?? Date.now(),
@@ -421,6 +434,7 @@ export class Run extends EventEmitter {
   }
 
   addTest(t: Omit<TestArtifact, 'id' | 'ts'> & Partial<Pick<TestArtifact, 'id' | 'ts'>>) {
+    // NOTE: bypasses secretRedactor (only applies legacy redact) — must route through it if ever called by agent.
     const test: TestArtifact = {
       id: t.id ?? randomUUID(),
       ts: t.ts ?? Date.now(),
