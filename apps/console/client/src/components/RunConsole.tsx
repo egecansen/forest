@@ -250,8 +250,12 @@ export function RunConsole({ config, onStop, onPause, onResume, onNew, backLabel
           </div>
           <div className={`term-title status-${runStatusTone(snapshot.status)}`}>
             <span className="term-title-name">{runTitle}</span>
-            <span className="dot" />
-            <span className="mode">{runStatusLabel(snapshot.status)}</span>
+            {/* Status tag chip: verdict-colored band + caps label, replacing
+                the old free-floating dot + pill pair. */}
+            <span className="status-tag">
+              <span className="dot" />
+              <span className="mode">{runStatusLabel(snapshot.status)}</span>
+            </span>
             {readOnly && (
               <span className="pipeline-status archived-badge" title="past run, read-only — viewed from history">
                 archived · read-only

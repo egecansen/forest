@@ -91,7 +91,9 @@ function BuildCard({ b, onTriage }: { b: BuildRow } & TriageProps) {
   return (
     <article className={`build-card tone-${tone}`}>
       <div className="build-card-info">
-        <div className="build-card-title" title={b.displayName}>{headline(b)}</div>
+        <div className="build-card-title" title={b.displayName}>
+          <span className="tag-serial-num">#{b.number}</span> · {b.jobName}
+        </div>
         {meta && <div className="build-card-meta">{meta}</div>}
         <div className="build-card-timing">started {formatClock(b.timestamp)} · took {formatDuration(b.duration)}</div>
         {b.stage?.failed && (
