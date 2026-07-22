@@ -15,6 +15,8 @@ PHASES="ingest confirm cluster pick fix verify report"
 TERMINAL="green deferred flagged resolved-upstream"
 FQCN_RE='^[A-Za-z_][A-Za-z0-9_.]*(#[A-Za-z0-9_]+)?$'
 ID_RE='^[a-z0-9-]{1,40}$'
+TIER_RE='^[1-4]$'
+INT_RE='^[0-9]+$'
 
 die() { echo "ledger: $1" >&2; exit "${2:-65}"; }
 has_word() { case " $1 " in *" $2 "*) return 0;; *) return 1;; esac; }
@@ -41,31 +43,32 @@ case "$CMD" in
 
   cluster-upsert)
     ID="${3:-}"; [ -n "$ID" ] || die "cluster-upsert: need <id>" 64; shift 3
-    printf '%s' "$ID" | grep -qE "$ID_RE" || die "invalid cluster id: $ID"
-    ARGS=(); TESTS_CSV=""
+    [[ "$ID" =~ $ID_RE ]] || die "invalid cluster id: $ID"
+    ARGS=(); TESTS_CSV=""; HAS_TESTS="0"
     while [ $# -gt 0 ]; do case "$1" in
       --title)      [ ${#2} -le 80 ]  || die "title >80 chars";  ARGS+=(--arg title "$2");  shift 2;;
       --detail)     [ ${#2} -le 600 ] || die "detail >600 chars"; ARGS+=(--arg detail "$2"); shift 2;;
       --bucket)     has_word "$BUCKETS" "$2" || die "invalid bucket: $2"; ARGS+=(--arg bucket "$2"); shift 2;;
-      --tier)       printf '%s' "$2" | grep -qE '^[1-4]$' || die "tier must be 1-4"; ARGS+=(--arg tier "$2"); shift 2;;
-      --signature)  ARGS+=(--arg signature "$2"); shift 2;;
-      --fix-vs-bug) ARGS+=(--arg fixVsBug "$2"); shift 2;;
-      --tests)      TESTS_CSV="$2"; shift 2;;
+      --tier)       [[ "$2" =~ $TIER_RE ]] || die "tier must be 1-4"; ARGS+=(--arg tier "$2"); shift 2;;
+      --signature)  [ ${#2} -le 200 ] || die "signature >200 chars"; ARGS+=(--arg signature "$2"); shift 2;;
+      --fix-vs-bug) [ ${#2} -le 40 ]  || die "fix-vs-bug >40 chars"; ARGS+=(--arg fixVsBug "$2"); shift 2;;
+      --tests)      TESTS_CSV="$2"; HAS_TESTS="1"; shift 2;;
       *) die "cluster-upsert: unknown flag $1" 64;;
     esac; done
     TESTS_JSON="[]"
     if [ -n "$TESTS_CSV" ]; then
+      case "$TESTS_CSV" in *$'\n'*) die "invalid --tests: embedded newline";; esac
       IFS=',' read -ra FQ <<< "$TESTS_CSV"
-      for f in "${FQ[@]}"; do printf '%s' "$f" | grep -qE "$FQCN_RE" || die "invalid fqcn: $f"; done
+      for f in "${FQ[@]}"; do [[ "$f" =~ $FQCN_RE ]] || die "invalid fqcn: $f"; done
       TESTS_JSON="$(printf '%s\n' "${FQ[@]}" | jq -R '{fqcn:.}' | jq -s '.')"
     fi
     jset '
       (if any(.clusters[]; .id==$id) then . else .clusters += [{id:$id, status:"proposed", tests:[]}] end)
       | .clusters |= map(if .id==$id then
-          . + ($ARGS.named | with_entries(select(.key != "id")))
-          + (if ($tests | length) > 0 then {tests:$tests} else {} end)
+          . + ($ARGS.named | with_entries(select(.key != "id" and .key != "tests" and .key != "hasTests")))
+          + (if $hasTests == "1" then {tests:$tests} else {} end)
         else . end)' \
-      --arg id "$ID" --argjson tests "$TESTS_JSON" "${ARGS[@]}" ;;
+      --arg id "$ID" --argjson tests "$TESTS_JSON" --arg hasTests "$HAS_TESTS" "${ARGS[@]+"${ARGS[@]}"}" ;;
 
   cluster-state)
     ID="${3:-}"; TO="${4:-}"; [ -n "$ID" ] && [ -n "$TO" ] || die "cluster-state: need <id> <status>" 64; shift 4
@@ -75,15 +78,23 @@ case "$CMD" in
     transition_ok "$FROM" "$TO" || die "invalid transition: $FROM → $TO"
     PASSES=""; RUNS=""; TESTUPS=()
     while [ $# -gt 0 ]; do case "$1" in
-      --passes) printf '%s' "$2" | grep -qE '^[0-9]+$' || die "passes must be integer"; PASSES="$2"; shift 2;;
-      --runs)   printf '%s' "$2" | grep -qE '^[0-9]+$' || die "runs must be integer";   RUNS="$2";   shift 2;;
+      --passes) [[ "$2" =~ $INT_RE ]] || die "passes must be integer"; PASSES="$2"; shift 2;;
+      --runs)   [[ "$2" =~ $INT_RE ]] || die "runs must be integer";   RUNS="$2";   shift 2;;
       --test)   fq="${2%%=*}"; st="${2#*=}"
-                printf '%s' "$fq" | grep -qE "$FQCN_RE" || die "invalid fqcn: $fq"
+                [[ "$fq" =~ $FQCN_RE ]] || die "invalid fqcn: $fq"
                 has_word "red green skipped" "$st" || die "invalid test status: $st"
                 TESTUPS+=("$fq=$st"); shift 2;;
       *) die "cluster-state: unknown flag $1" 64;;
     esac; done
-    if [ -n "$PASSES" ] && [ -n "$RUNS" ]; then [ "$PASSES" -le "$RUNS" ] || die "passes > runs"; fi
+    # Cross-call: if only one of passes/runs is given this call, fall back to the stored
+    # counterpart so the effective pair is still checked (a lone --passes can't sneak past
+    # a previously-recorded --runs, and vice versa).
+    if [ -n "$PASSES" ] || [ -n "$RUNS" ]; then
+      EFFP="$PASSES"; EFFR="$RUNS"
+      [ -n "$EFFP" ] || EFFP="$(jq -r --arg id "$ID" '.clusters[] | select(.id==$id) | .passes // empty' "$FILE")"
+      [ -n "$EFFR" ] || EFFR="$(jq -r --arg id "$ID" '.clusters[] | select(.id==$id) | .runs // empty' "$FILE")"
+      if [ -n "$EFFP" ] && [ -n "$EFFR" ]; then [ "$EFFP" -le "$EFFR" ] || die "passes > runs"; fi
+    fi
     jset '.clusters |= map(if .id==$id then .status=$to
             | (if $passes != "" then .passes=($passes|tonumber) else . end)
             | (if $runs   != "" then .runs=($runs|tonumber)     else . end)
@@ -117,11 +128,16 @@ case "$CMD" in
         (.id? // "" | test("'"$ID_RE"'") | not) or
         ((.status? // "proposed") as $s | ["proposed","selected","applied","green","deferred","flagged","resolved-upstream"] | index($s) | not) or
         ((.title? // "" | length) > 80) or ((.detail? // "" | length) > 600) or
-        (has("passes") and has("runs") and .passes > .runs)
-      ) | .id // "?"] | join(",")' "$FILE")"
+        ((.signature? // "" | length) > 200) or ((.fixVsBug? // "" | length) > 40) or
+        (has("passes") and has("runs") and .passes > .runs) or
+        ((.tests? // []) | any(.[];
+            ((.fqcn? // "" | test("'"$FQCN_RE"'")) | not) or
+            (has("status") and ((.status) as $ts | (["red","green","skipped"] | index($ts) | not)))))
+      ) | .id // "?"] | join(",")' "$FILE" 2>/dev/null)" || die "validate: unreadable/malformed ledger"
     [ -z "$BAD" ] || die "schema violations in clusters: $BAD"
     if [ "$MODE" = "--final" ]; then
-      OPEN="$(jq -r '[.clusters[] | select(.status=="selected" or .status=="applied") | .id] | join(",")' "$FILE")"
+      OPEN="$(jq -r '[.clusters[] | select(.status=="selected" or .status=="applied") | .id] | join(",")' "$FILE" 2>/dev/null)" \
+        || die "validate: unreadable/malformed ledger"
       [ -z "$OPEN" ] || { echo "ledger: NOT FINAL — non-terminal selected/applied clusters: $OPEN" >&2; exit 67; }
     fi
     echo "ledger: valid${MODE:+ ($MODE)}" >&2 ;;
