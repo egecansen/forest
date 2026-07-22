@@ -30,6 +30,12 @@ const initialTelemetry = (): Telemetry => ({
   thinking: false,
 });
 
+/** Replaces occurrences of configured secrets (jenkins.apiToken, es.password —
+ *  see redact.ts) with a fixed placeholder; `undefined` in, `undefined` out. */
+export type Redactor = (s: string | undefined) => string | undefined;
+
+const identityRedactor: Redactor = (s) => s;
+
 export class Run extends EventEmitter {
   readonly snapshot: RunSnapshot;
   private stopped = false;
@@ -59,9 +65,17 @@ export class Run extends EventEmitter {
   // write is dropped. Only valid while its `id` is still the last log entry.
   private lastFileOp: { verb: 'write' | 'read' | 'edit' | 'refine'; file: string; id: string; count: number } | null =
     null;
+  // Secret-scrubbing closure applied to log text/detail, the report text, and
+  // cluster title/detail/note — the agent-authored surfaces a config secret
+  // (Jenkins token, ES password) could otherwise leak through into (and be
+  // persisted via) run history. Defaults to a no-op identity so every
+  // existing call site (production callers that don't wire one up yet, and
+  // the many pre-existing tests) is unaffected.
+  private readonly secretRedactor: Redactor;
 
-  constructor(config: RunConfig) {
+  constructor(config: RunConfig, secretRedactor: Redactor = identityRedactor) {
     super();
+    this.secretRedactor = secretRedactor;
     this.setMaxListeners(50);
     this.snapshot = {
       config,
@@ -164,8 +178,8 @@ export class Run extends EventEmitter {
       id: entry.id ?? randomUUID(),
       ts: entry.ts ?? Date.now(),
       kind: entry.kind,
-      text: this.redact(entry.text)!,
-      detail: this.redact(entry.detail),
+      text: this.secretRedactor(this.redact(entry.text))!,
+      detail: this.secretRedactor(this.redact(entry.detail)),
       progress: entry.progress,
     };
     // #11 coalescing — only when the tracked file-op entry is still the log tail
@@ -181,7 +195,7 @@ export class Run extends EventEmitter {
         // A consecutive same-file edit folds into the tail as 'Refining ×N'.
         if (fileOp.verb === 'edit' && (tail.verb === 'edit' || tail.verb === 'refine')) {
           const count = tail.count + 1;
-          const merged: LogEntry = { ...last!, ts: Date.now(), text: this.redact(`Refining ${fileOp.file} ×${count}`)! };
+          const merged: LogEntry = { ...last!, ts: Date.now(), text: this.secretRedactor(this.redact(`Refining ${fileOp.file} ×${count}`))! };
           this.snapshot.log[lastIdx] = merged;
           this.lastFileOp = { verb: 'refine', file: fileOp.file, id: merged.id, count };
           this.emitEvent({ type: 'log', entry: merged });
@@ -362,15 +376,28 @@ export class Run extends EventEmitter {
     this.emitEvent({ type: 'finding', finding });
   }
 
+  /** `title`/`detail` are agent-authored (via the set_clusters MCP tool — see
+   *  driver-mcp.ts) and pass through the secret redactor for the same reason
+   *  `log()` does: a config secret echoed back by the agent shouldn't reach
+   *  the board or persisted history unredacted. */
   setClusters(clusters: Cluster[]) {
-    this.snapshot.clusters = clusters;
-    this.emitEvent({ type: 'clusters', clusters });
+    const redacted = clusters.map((c) => ({
+      ...c,
+      title: this.secretRedactor(c.title)!,
+      detail: this.secretRedactor(c.detail),
+    }));
+    this.snapshot.clusters = redacted;
+    this.emitEvent({ type: 'clusters', clusters: redacted });
   }
 
   updateCluster(id: string, patch: Partial<Cluster>) {
     const idx = this.snapshot.clusters.findIndex((c) => c.id === id);
     if (idx < 0) return;
-    const merged = { ...this.snapshot.clusters[idx], ...patch, id };
+    const redactedPatch: Partial<Cluster> = { ...patch };
+    if (patch.title !== undefined) redactedPatch.title = this.secretRedactor(patch.title)!;
+    if (patch.detail !== undefined) redactedPatch.detail = this.secretRedactor(patch.detail);
+    if (patch.note !== undefined) redactedPatch.note = this.secretRedactor(patch.note);
+    const merged = { ...this.snapshot.clusters[idx], ...redactedPatch, id };
     this.snapshot.clusters[idx] = merged;
     this.emitEvent({ type: 'cluster', cluster: merged });
   }
@@ -411,8 +438,9 @@ export class Run extends EventEmitter {
    *  run) so the Report tab can render the actual triage summary instead of
    *  a stylized preview. */
   setReportText(text: string) {
-    this.snapshot.reportText = text;
-    this.emitEvent({ type: 'reportText', reportText: text });
+    const redacted = this.secretRedactor(text)!;
+    this.snapshot.reportText = redacted;
+    this.emitEvent({ type: 'reportText', reportText: redacted });
   }
 
   setSubStage(subStage: string | null) {
@@ -532,9 +560,9 @@ const MAX_RUNS = 25;
 class RunStore {
   private runs = new Map<string, Run>();
 
-  create(config: Omit<RunConfig, 'runId'>): Run {
+  create(config: Omit<RunConfig, 'runId'>, secretRedactor?: Redactor): Run {
     const runId = randomUUID();
-    const run = new Run({ ...config, runId });
+    const run = new Run({ ...config, runId }, secretRedactor);
     this.runs.set(runId, run);
     if (this.runs.size > MAX_RUNS) {
       const oldest = this.runs.keys().next().value;

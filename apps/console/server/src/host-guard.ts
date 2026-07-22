@@ -23,3 +23,34 @@ export function isAllowedHost(host: string | undefined, _port: number): boolean 
   const allowed = new Set(['localhost', '127.0.0.1', '::1']);
   return allowed.has(hostname);
 }
+
+/**
+ * WebSocket-upgrade defense: WebSockets bypass CORS entirely, so any page
+ * open in the user's browser can open `ws://localhost:PORT/...` and the
+ * browser will happily send it — the Host header alone (checked by
+ * `isAllowedHost`) doesn't stop this, since a same-machine page's Host is
+ * legitimately `localhost`. The `Origin` header is the only signal that
+ * distinguishes "our own client" from "some other open tab" — reject any
+ * present Origin that isn't a loopback origin.
+ *
+ * Absent Origin (undefined) is ALLOWED: non-browser clients (our own tests,
+ * CLI tools, curl) never send one, and browsers always do for a WS
+ * handshake — so an absent Origin here can't be a browser page attacking us.
+ *
+ * Any port is accepted for loopback hosts — dev serves the client off
+ * Vite's port, not the server's own PORT.
+ */
+export function isAllowedOrigin(origin: string | undefined): boolean {
+  if (origin === undefined) return true;
+  if (!origin) return false; // empty string: present-but-malformed, not absent
+  let url: URL;
+  try {
+    url = new URL(origin);
+  } catch {
+    return false;
+  }
+  if (url.protocol !== 'http:') return false;
+  const hostname = url.hostname.toLowerCase().replace(/^\[|\]$/g, ''); // strip [] from IPv6
+  const allowed = new Set(['localhost', '127.0.0.1', '::1']);
+  return allowed.has(hostname);
+}

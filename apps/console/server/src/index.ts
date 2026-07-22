@@ -9,9 +9,10 @@ import { startDriver, makeDemoQueryFn, type DriverHandle } from './driver.js';
 import { pendingAnswers } from './pending-answers.js';
 import { normalizeRunBody } from './validate.js';
 import { listDirectories } from './browse.js';
-import { isAllowedHost } from './host-guard.js';
+import { isAllowedHost, isAllowedOrigin } from './host-guard.js';
 import { saveRun, listRuns, loadRun, isSafeRunId, resolveInsideRoot, resolveRunsDirSync } from './persistence.js';
 import { loadConsoleConfig, kitAllowlist } from './console-config.js';
+import { buildRedactList, makeRedactor } from './redact.js';
 import { findRunConflict } from './run-conflict.js';
 import { getWorktree } from './worktree.js';
 import { BuildsPoller } from './trackers/poller.js';
@@ -80,6 +81,11 @@ async function main() {
     return null;
   });
   const allowlist = consoleConfig ? await kitAllowlist(consoleConfig.repoPath).catch(() => []) : [];
+  // Built once from the loaded config's known secrets (jenkins.apiToken,
+  // es.password — see redact.ts) and injected into every Run so agent-authored
+  // log/report/cluster text can never echo a config secret back to the board
+  // or persisted history.
+  const secretRedactor = makeRedactor(buildRedactList(consoleConfig));
   // Best-effort — an unreachable/anonymous Jenkins just means the board's
   // "only mine" filter stays unavailable, not a hard startup failure.
   const jenkinsUser = consoleConfig
@@ -177,7 +183,7 @@ async function main() {
         return;
       }
     }
-    const run = runStore.create(parsed.value);
+    const run = runStore.create(parsed.value, secretRedactor);
     const runId = run.snapshot.config!.runId;
     const stop = startDriver(run, parsed.value.demo === true ? makeDemoQueryFn(run) : undefined);
     drivers.set(runId, stop);
@@ -409,6 +415,15 @@ async function main() {
     // channel — without this, a rebound-DNS Host header could open the
     // upgrade and exfiltrate live run telemetry/logs/findings over the WS.
     if (!isAllowedHost(request.headers.host, PORT)) {
+      socket.destroy();
+      return;
+    }
+    // WebSockets bypass CORS — the Host check above doesn't stop another open
+    // browser tab from connecting, since its Host is legitimately localhost
+    // too. Reject any PRESENT Origin that isn't loopback; absent Origin
+    // (non-browser clients: our own tests/tools) is allowed. Applies to both
+    // /ws and /ws-board below.
+    if (!isAllowedOrigin(request.headers.origin)) {
       socket.destroy();
       return;
     }
