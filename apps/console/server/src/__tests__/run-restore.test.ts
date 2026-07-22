@@ -128,6 +128,43 @@ describe('RunStore.restore', () => {
     expect(elapsedAfterResume).toBeGreaterThanOrEqual(tenMinActive - 5000);
     expect(elapsedAfterResume).toBeLessThanOrEqual(tenMinActive + 5000);
   });
+
+  it('defends first-session restore: session-clock guard fires even when priorElapsedMs is 0', () => {
+    // Simulate a run parked mid-FIRST-session: 2 minutes of work done, but nothing
+    // yet banked (priorElapsedMs=0). The run has a sessionId from before the interrupt.
+    // On resume, the guard should fire and start a fresh session clock, dropping the
+    // un-banked first-session work as the accepted cost of corruption prevention.
+    const twoHoursAgo = Date.now() - 2 * 60 * 60 * 1000;
+    const twoMinWork = 120 * 1000;
+    const snapshot = makeSnapshot({
+      config: { ...baseConfig, runId: 'restore-run-first-session-parked' },
+      sessionId: 'sess-2',
+      telemetry: {
+        startedAt: twoHoursAgo,
+        elapsedMs: twoMinWork,
+        priorElapsedMs: 0, // Nothing banked yet — this is mid-first-session
+        tokens: 0,
+        thinking: false,
+      },
+    });
+
+    const run = runStore.restore(snapshot);
+    expect(run).not.toBeNull();
+
+    // Simulate resumed stream's init: call setSessionId with the same id.
+    run!.setSessionId('sess-2');
+
+    // Now simulate the resumed stream sending telemetry.
+    run!.setTelemetry({ thinking: false });
+
+    // The key assertion: elapsedMs should be ~0 (a fresh session clock with
+    // only the milliseconds since setSessionId ran), NOT 2 minutes or 2 hours.
+    // The pre-restore 2 minutes of first-session work were never banked, so losing
+    // them is the accepted cost — the corruption being prevented (downtime swallowed)
+    // is much worse (hours instead of minutes).
+    const elapsedAfterResume = run!.snapshot.telemetry.elapsedMs;
+    expect(elapsedAfterResume).toBeLessThan(10_000);
+  });
 });
 
 describe('RunStore.all', () => {

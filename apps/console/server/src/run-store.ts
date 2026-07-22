@@ -172,15 +172,17 @@ export class Run extends EventEmitter {
         this.elapsedBase += Math.max(0, Date.now() - this.sessionStartedAt);
       }
       this.sessionStartedAt = Date.now();
-    } else if (this.sessionStartedAt == null && this.elapsedBase > 0) {
+    } else if (this.sessionStartedAt == null && (this.elapsedBase > 0 || this.snapshot.sessionId != null)) {
       // First init after restore: a restored run is paused with no live session
-      // (sessionStartedAt is null), but it carries prior elapsed time from earlier
-      // sessions (elapsedBase > 0). Treat this as a session boundary — start a
-      // fresh session clock now without double-banking: elapsedBase already carries
-      // prior time via priorElapsedMs, so we just seed the live session's start.
-      // This ensures that when setTelemetry runs, the elapsed calculation uses
-      // this fresh sessionStartedAt rather than falling back to the (stale) run
-      // creation time. (finding F12 / session-clock-resume)
+      // (sessionStartedAt is null). Two cases: (1) it carries prior elapsed time
+      // from earlier sessions (elapsedBase > 0 — multiple completed sessions banked),
+      // or (2) it was parked mid-first-session with a sessionId set but nothing
+      // banked yet (elapsedBase == 0, snapshot.sessionId != null). In both cases,
+      // treat this as a session boundary — start a fresh session clock now without
+      // double-banking: elapsedBase already carries prior time via priorElapsedMs.
+      // This ensures that when setTelemetry runs, the elapsed calculation uses this
+      // fresh sessionStartedAt rather than falling back to the (stale) run creation
+      // time. (finding F12 / session-clock-resume)
       this.sessionStartedAt = Date.now();
     }
     this.snapshot.sessionId = id;
