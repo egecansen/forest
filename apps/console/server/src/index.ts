@@ -18,7 +18,10 @@ import { getWorktree } from './worktree.js';
 import { BuildsPoller } from './trackers/poller.js';
 import { fetchJenkinsUser } from './trackers/jenkins.js';
 import { notifyTerminal } from './notify.js';
-import type { RunSnapshot, ServerEvent } from './types.js';
+import { parkAllRuns, restoreParkedRuns } from './run-park.js';
+import { TERMINAL_RUN_STATUSES } from './types.js';
+import type { ServerEvent } from './types.js';
+import type { Run } from './run-store.js';
 import type { WebSocket } from 'ws';
 
 const PORT = Number(process.env.PORT ?? 8765);
@@ -50,27 +53,55 @@ const drivers = new Map<string, DriverHandle>();
 // on process exit — can reach it.
 let poller: BuildsPoller | null = null;
 
-// Statuses a run never leaves once reached (see Run.stop/finish — both are
-// guarded by `this.stopped` and set exactly one of these).
-const TERMINAL_RUN_STATUSES = new Set<RunSnapshot['status']>(['completed', 'failed', 'cancelled']);
+/**
+ * Wires a run's terminal-status persistence + driver-handle cleanup: fires
+ * exactly once, the first time the run reaches a terminal status, whichever
+ * of the create path (POST /api/runs) or the boot-time restore path
+ * (restoreParkedRuns below) attaches it. The listener lives on the `Run`
+ * instance itself, so it survives a pause/resume cycle in between (the
+ * resume route re-enters the SAME Run object — it never creates a new one —
+ * so nothing needs to re-attach this around /resume).
+ */
+function attachPersistence(run: Run, runId: string) {
+  const onEvent = (ev: ServerEvent) => {
+    if (ev.type === 'status' && TERMINAL_RUN_STATUSES.has(ev.status)) {
+      run.off('event', onEvent);
+      // Persist the final snapshot so this run survives a server restart and
+      // shows up in run history. Fire-and-forget — a write failure (e.g.
+      // unwritable home dir) shouldn't affect the live run.
+      void saveRun(RUNS_DIR, run.snapshot);
+      notifyTerminal('hektor — run finished', `${ev.status}: ${run.snapshot.clusters.filter(c => c.state === 'green').length} green / ${run.snapshot.clusters.filter(c => c.state === 'app-bug').length} app-bug`);
+      // The drivers map is otherwise only pruned by the explicit /stop route
+      // — a run that completes or fails on its own would sit there forever.
+      // Give any open WS a grace period to deliver the final snapshot before
+      // /stop starts 404ing for this run. A restored-but-never-resumed run
+      // has no entry here — `Map.delete` on an absent key is a harmless no-op.
+      setTimeout(() => {
+        drivers.delete(runId);
+      }, 30_000);
+    }
+  };
+  run.on('event', onEvent);
+}
 
-// Graceful shutdown: stop every running driver (which kills its child process
-// group) before exiting, so SIGINT/SIGTERM don't orphan spawned child
-// processes. Guarded + idempotent — safe if invoked more than once (e.g. a
-// second signal arriving mid-shutdown) or if a driver's stop() throws.
+// Graceful shutdown: park every non-terminal run as resumable ('paused',
+// persisted to disk — see parkAllRuns/run-park.ts) rather than cancelling it,
+// so a console restart doesn't silently lose a live run. Guarded + idempotent
+// — safe if invoked more than once (e.g. a second signal arriving
+// mid-shutdown).
 let shuttingDown = false;
 const shutdown = () => {
   if (shuttingDown) return;
   shuttingDown = true;
-  for (const stop of drivers.values()) {
+  void (async () => {
     try {
-      stop();
+      await parkAllRuns(runStore.all(), (id) => drivers.get(id), RUNS_DIR);
     } catch {
-      // best-effort: a stuck driver shouldn't block the rest from stopping.
+      // best-effort: parking must never block shutdown itself.
     }
-  }
-  poller?.stop();
-  process.exit(0);
+    poller?.stop();
+    process.exit(0);
+  })();
 };
 process.on('SIGINT', shutdown);
 process.on('SIGTERM', shutdown);
@@ -86,6 +117,18 @@ async function main() {
   // log/report/cluster text can never echo a config secret back to the board
   // or persisted history.
   const secretRedactor = makeRedactor(buildRedactList(consoleConfig));
+  // Boot-time restore: bring back every run a PRIOR process parked as
+  // 'paused' on shutdown (see parkAllRuns/run-park.ts) so it's live on the
+  // board again — GET /api/runs lists it (restoreParkedRuns registers it in
+  // runStore, and listActive() already surfaces any non-terminal run) and
+  // the client's reconnect effect adopts it as a resumable tab. Each
+  // restored run gets the SAME terminal-status persistence hook a
+  // freshly-created run gets, since it's a brand-new Run/EventEmitter with
+  // no listeners yet.
+  await restoreParkedRuns(RUNS_DIR, runStore, {
+    redactor: secretRedactor,
+    onRestored: (run) => attachPersistence(run, run.snapshot.config!.runId),
+  });
   // Best-effort — an unreachable/anonymous Jenkins just means the board's
   // "only mine" filter stays unavailable, not a hard startup failure.
   const jenkinsUser = consoleConfig
@@ -187,26 +230,7 @@ async function main() {
     const runId = run.snapshot.config!.runId;
     const stop = startDriver(run, parsed.value.demo === true ? makeDemoQueryFn(run) : undefined);
     drivers.set(runId, stop);
-
-    // The drivers map is otherwise only pruned by the explicit /stop route —
-    // a run that completes or fails on its own would sit there forever.
-    // Watch for the run's one-and-only terminal status event and drop the
-    // stop handle shortly after, giving any open WS a grace period to
-    // deliver the final snapshot before /stop starts 404ing for this run.
-    const onEvent = (ev: ServerEvent) => {
-      if (ev.type === 'status' && TERMINAL_RUN_STATUSES.has(ev.status)) {
-        run.off('event', onEvent);
-        // Persist the final snapshot so this run survives a server restart and
-        // shows up in run history. Fire-and-forget — a write failure (e.g.
-        // unwritable home dir) shouldn't affect the live run.
-        void saveRun(RUNS_DIR, run.snapshot);
-        notifyTerminal('hektor — run finished', `${ev.status}: ${run.snapshot.clusters.filter(c => c.state === 'green').length} green / ${run.snapshot.clusters.filter(c => c.state === 'app-bug').length} app-bug`);
-        setTimeout(() => {
-          drivers.delete(runId);
-        }, 30_000);
-      }
-    };
-    run.on('event', onEvent);
+    attachPersistence(run, runId);
 
     res.json({ runId });
   });

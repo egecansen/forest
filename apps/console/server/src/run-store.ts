@@ -16,7 +16,7 @@ import type {
   Telemetry,
   TestArtifact,
 } from './types.js';
-import { PHASE_ORDER } from './types.js';
+import { PHASE_ORDER, TERMINAL_RUN_STATUSES } from './types.js';
 import type { FileOp } from './types.js';
 import { pendingAnswers } from './pending-answers.js';
 
@@ -128,19 +128,22 @@ export class Run extends EventEmitter {
   /**
    * `question` is AGENT-authored (the engine writes the question/header/option
    * text via the AskUserQuestion tool call). Rebuilds the questions array with
-   * each text field passed through `redact()` (currently a no-op passthrough —
-   * see the class-level note above).
+   * every text field passed through `secretRedactor` — a config secret
+   * (Jenkins token, ES password) echoed back by the agent in a question,
+   * header, or option label/description must not reach the board or a
+   * persisted/restored snapshot unredacted, same rationale as `log()`/
+   * `setClusters()` below. The legacy no-op `redact()` is NOT used here.
    */
   setPendingQuestion(question: PendingQuestion) {
     const redacted: PendingQuestion = {
       questionId: question.questionId,
       questions: question.questions.map((q) => ({
-        question: this.redact(q.question)!,
-        header: this.redact(q.header)!,
+        question: this.secretRedactor(q.question)!,
+        header: this.secretRedactor(q.header)!,
         multiSelect: q.multiSelect,
         options: q.options.map((o) => ({
-          label: this.redact(o.label)!,
-          description: this.redact(o.description),
+          label: this.secretRedactor(o.label)!,
+          description: this.secretRedactor(o.description),
         })),
       })),
     };
@@ -259,10 +262,13 @@ export class Run extends EventEmitter {
   ) {
     const phase = this.snapshot.phases.find((p) => p.id === phaseId);
     if (!phase) return;
-    const redactedStage = this.redact(opts.stage);
+    // stage/subStage are agent/ledger-authored free text — route through the
+    // injected secretRedactor (not the legacy no-op redact()) for the same
+    // reason setPendingQuestion does.
+    const redactedStage = this.secretRedactor(opts.stage);
     // subStage is fed from the same agent-authored ledger text as setSubStage,
-    // so redact it too (guarding the string|null shape redact() doesn't accept).
-    const redactedSubStage = opts.subStage == null ? opts.subStage : this.redact(opts.subStage);
+    // so redact it too (guarding the string|null shape secretRedactor doesn't accept).
+    const redactedSubStage = opts.subStage == null ? opts.subStage : this.secretRedactor(opts.subStage);
     const wasActive = phase.status === 'active';
     phase.status = status;
     if (redactedStage !== undefined) phase.stage = redactedStage;
@@ -444,7 +450,10 @@ export class Run extends EventEmitter {
   }
 
   setSubStage(subStage: string | null) {
-    const redacted = this.redact(subStage ?? undefined) ?? null;
+    // Agent/ledger-authored free text — route through the injected
+    // secretRedactor (not the legacy no-op redact()), same as setPhase's
+    // stage/subStage and setPendingQuestion above.
+    const redacted = this.secretRedactor(subStage ?? undefined) ?? null;
     this.snapshot.currentSubStage = redacted;
     this.emitEvent({ type: 'subStage', subStage: redacted });
   }
@@ -544,6 +553,58 @@ export class Run extends EventEmitter {
   toJSON(): RunSnapshot {
     return this.snapshot;
   }
+
+  /**
+   * Reconstructs a live `Run` from a persisted snapshot (see `saveRun`/
+   * `loadRun` in persistence.ts) — the counterpart to `parkAllRuns` (run-
+   * park.ts), which is the only thing that ever persists a run mid-flight
+   * (as `paused`) rather than on natural completion. Used at boot to bring a
+   * console-restart-parked run back onto the live board so the operator can
+   * resume it.
+   *
+   * Seeds every public snapshot field the UI reads — config, sessionId,
+   * phases, activePhase, clusters, log, telemetry, findings/files/tests,
+   * reportUrl/reportText, currentSubStage, pipelineStatus — from the
+   * snapshot as-is (no re-redaction: a persisted snapshot was already
+   * redacted before it was written). Status is always forced to `'paused'`
+   * regardless of what was persisted — a restored run is never anything but
+   * a parked, resumable run.
+   *
+   * A restored run can never have a live pendingQuestion (whatever answered
+   * it before the restart is long gone — the operator's answer route has
+   * nothing registered for this runId anymore), so it's always cleared
+   * rather than carried over as an unanswerable ghost modal.
+   *
+   * The private cost/elapsed session-banking fields (`costBase`/
+   * `elapsedBase`) are seeded from the snapshot's own `priorCostUsd`/
+   * `priorElapsedMs` — the same "banked from earlier sessions" fields the
+   * live in-process context-boundary-continuation path (`setSessionId`)
+   * already populates — so a later resumed session's telemetry keeps
+   * accumulating from where the run left off instead of re-basing off a
+   * `sessionStartedAt` that's now long in the past.
+   */
+  static restore(snapshot: RunSnapshot, secretRedactor: Redactor = identityRedactor): Run {
+    const config = snapshot.config!;
+    const run = new Run(config, secretRedactor);
+    run.snapshot.activePhase = snapshot.activePhase;
+    run.snapshot.phases = snapshot.phases.length ? [...snapshot.phases] : initialPhases();
+    run.snapshot.telemetry = { ...snapshot.telemetry };
+    run.snapshot.log = [...snapshot.log];
+    run.snapshot.findings = [...snapshot.findings];
+    run.snapshot.files = [...snapshot.files];
+    run.snapshot.tests = [...snapshot.tests];
+    run.snapshot.clusters = [...snapshot.clusters];
+    run.snapshot.currentSubStage = snapshot.currentSubStage;
+    run.snapshot.pipelineStatus = snapshot.pipelineStatus;
+    run.snapshot.reportUrl = snapshot.reportUrl;
+    if (snapshot.reportText !== undefined) run.snapshot.reportText = snapshot.reportText;
+    if (snapshot.sessionId) run.snapshot.sessionId = snapshot.sessionId;
+    run.snapshot.pendingQuestion = null;
+    run.snapshot.status = 'paused';
+    run.costBase = snapshot.telemetry.priorCostUsd ?? 0;
+    run.elapsedBase = snapshot.telemetry.priorElapsedMs ?? 0;
+    return run;
+  }
 }
 
 /**
@@ -560,19 +621,53 @@ const MAX_RUNS = 25;
 class RunStore {
   private runs = new Map<string, Run>();
 
-  create(config: Omit<RunConfig, 'runId'>, secretRedactor?: Redactor): Run {
-    const runId = randomUUID();
-    const run = new Run({ ...config, runId }, secretRedactor);
+  get(runId: string): Run | undefined {
+    return this.runs.get(runId);
+  }
+
+  /** Every run currently held, any status — used by shutdown's `parkAllRuns`
+   *  (run-park.ts) to find every non-terminal run that needs parking before
+   *  the process exits. */
+  all(): Run[] {
+    return [...this.runs.values()];
+  }
+
+  /**
+   * Registers a run under its runId, evicting the oldest entry past
+   * MAX_RUNS. Shared by `create` (a brand-new run) and `restore` (a run
+   * reconstructed from a persisted snapshot at boot) so both paths get the
+   * same cap behavior.
+   */
+  private register(run: Run): void {
+    const runId = run.snapshot.config!.runId;
     this.runs.set(runId, run);
     if (this.runs.size > MAX_RUNS) {
       const oldest = this.runs.keys().next().value;
       if (oldest !== undefined) this.runs.delete(oldest);
     }
+  }
+
+  create(config: Omit<RunConfig, 'runId'>, secretRedactor?: Redactor): Run {
+    const runId = randomUUID();
+    const run = new Run({ ...config, runId }, secretRedactor);
+    this.register(run);
     return run;
   }
 
-  get(runId: string): Run | undefined {
-    return this.runs.get(runId);
+  /**
+   * Restores a persisted snapshot (see `Run.restore`) into the live store —
+   * the boot-time counterpart to `parkAllRuns` parking a run at shutdown.
+   * Returns `null` (a no-op) when the snapshot has no config (nothing to key
+   * it by) or when a run with that id is already live — restoring the same
+   * persisted run twice would silently clobber whatever the live one has
+   * done since boot.
+   */
+  restore(snapshot: RunSnapshot, secretRedactor?: Redactor): Run | null {
+    if (!snapshot.config) return null;
+    if (this.runs.has(snapshot.config.runId)) return null;
+    const run = Run.restore(snapshot, secretRedactor);
+    this.register(run);
+    return run;
   }
 
   /**
@@ -581,11 +676,10 @@ class RunStore {
    * start screen. (root fix for orphaned-run loss)
    */
   listActive(): Array<{ runId: string; status: RunSnapshot['status']; config: RunConfig }> {
-    const terminal = new Set<RunSnapshot['status']>(['completed', 'failed', 'cancelled']);
     const out: Array<{ runId: string; status: RunSnapshot['status']; config: RunConfig }> = [];
     for (const run of this.runs.values()) {
       const s = run.snapshot;
-      if (s.config && !terminal.has(s.status)) {
+      if (s.config && !TERMINAL_RUN_STATUSES.has(s.status)) {
         out.push({ runId: s.config.runId, status: s.status, config: s.config });
       }
     }

@@ -202,6 +202,19 @@ export type ServerEvent =
 export const PHASE_ORDER: PhaseId[] = ['ingest', 'cluster', 'pick', 'fix', 'verify', 'report'];
 
 /**
+ * Statuses a run never leaves once reached (see Run.stop/finish — both are
+ * guarded by `this.stopped` and set exactly one of these). Shared between
+ * index.ts (drops the driver handle + persists on completion) and
+ * run-park.ts (parkAllRuns never touches an already-terminal run; a
+ * terminal run is done and lives in history, not the resumable board).
+ */
+export const TERMINAL_RUN_STATUSES: ReadonlySet<RunSnapshot['status']> = new Set([
+  'completed',
+  'failed',
+  'cancelled',
+]);
+
+/**
  * Lightweight, list-friendly projection of a persisted `RunSnapshot` — what
  * `GET /api/history` returns for the run-history list. Never carries the
  * full log/findings/files arrays (fetch `GET /api/history/:runId` for that).
