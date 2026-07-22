@@ -4,6 +4,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { startLedgerWatcher } from '../ledger-watcher.js';
 import { runStore } from '../run-store.js';
+import type { Cluster } from '../types.js';
 
 /**
  * v2 ledger fixture — kernel.md §8's "presentation contract" shape
@@ -221,5 +222,115 @@ describe('startLedgerWatcher — v2 (run.version: 2)', () => {
     // v1 never drives phases from the ledger either — that stays the
     // driver's Bash-command inference (inferPhase/advancePhase).
     expect(run.snapshot.phases.every((p) => p.status === 'queued')).toBe(true);
+  });
+
+  it('(f) full-replace never drops a cluster that is only TEMPORARILY invalid/missing this tick', async () => {
+    // Snapshot already shows two valid clusters (e.g. from a prior tick).
+    const A: Cluster = {
+      id: 'a-selectors',
+      title: 'A cluster (old)',
+      bucket: 'selector',
+      tests: ['com.x.ATest'],
+      state: 'proposed',
+    };
+    const B: Cluster = {
+      id: 'b-vrt',
+      title: 'B cluster',
+      bucket: 'vrt',
+      tests: ['com.x.BTest'],
+      state: 'proposed',
+    };
+    const run = runStore.create(cfg);
+    run.setClusters([A, B]);
+
+    const setClustersSpy = vi.spyOn(run, 'setClusters');
+
+    // This tick's ledger: A changed (still valid) + brand-new C (valid) —
+    // together these miss an id (C) and trigger the full-replace branch.
+    // B is entirely absent from this read (the "transiently absent from the
+    // raw read" case called out in the finding) — it must NOT be dropped.
+    const ledgerTick = {
+      run: { version: 2 },
+      clusters: [
+        { id: 'a-selectors', title: 'A cluster (old)', bucket: 'selector', status: 'selected', tests: [{ fqcn: 'com.x.ATest' }] },
+        { id: 'c-new', title: 'C cluster (new)', bucket: 'easy-fix', status: 'proposed', tests: [{ fqcn: 'com.x.CTest' }] },
+      ],
+      events: [],
+    };
+    await fs.writeFile(path.join(dir, 'ledger.json'), JSON.stringify(ledgerTick), 'utf8');
+
+    const stop = startLedgerWatcher(run, dir, { intervalMs: 20 });
+    stops.push(stop);
+
+    await waitFor(() => run.snapshot.clusters.length === 3);
+    expect(setClustersSpy).toHaveBeenCalledTimes(1);
+
+    const ids = run.snapshot.clusters.map((c) => c.id).sort();
+    expect(ids).toEqual(['a-selectors', 'b-vrt', 'c-new']);
+
+    const a = run.snapshot.clusters.find((c) => c.id === 'a-selectors')!;
+    expect(a.state).toBe('picked'); // updated by this tick's ledger
+
+    const c = run.snapshot.clusters.find((c) => c.id === 'c-new')!;
+    expect(c.state).toBe('proposed'); // newly created by this tick's ledger
+
+    // B was carried forward verbatim — never dropped, never re-derived.
+    const b = run.snapshot.clusters.find((c) => c.id === 'b-vrt')!;
+    expect(b).toEqual(B);
+  });
+
+  it('(g) regression: full-create from an empty snapshot has zero phantom carry-forwards', async () => {
+    const run = runStore.create(cfg); // no clusters published — nothing to carry forward
+    const setClustersSpy = vi.spyOn(run, 'setClusters');
+
+    await fs.writeFile(path.join(dir, 'ledger.json'), JSON.stringify(V2), 'utf8');
+    const stop = startLedgerWatcher(run, dir, { intervalMs: 20 });
+    stops.push(stop);
+
+    await waitFor(() => run.snapshot.clusters.length === 2);
+    expect(setClustersSpy).toHaveBeenCalledTimes(1);
+
+    const calledWith = setClustersSpy.mock.calls[0][0];
+    expect(calledWith).toHaveLength(2);
+    expect(calledWith.map((c) => c.id).sort()).toEqual(['c1-selectors', 'c2-vrt']);
+  });
+
+  it('(h) a reordered-but-set-equal tests array does not trigger a spurious updateCluster', async () => {
+    // Seeded snapshot cluster whose `tests` order differs from the ledger's
+    // — same fqcn set, different array order — everything else identical to
+    // what the ledger tick will map to.
+    const seeded: Cluster = {
+      id: 'c1-selectors',
+      title: 'Relocated selectors',
+      detail: 'blog anchor moved to href/blog',
+      bucket: 'selector',
+      tests: ['com.x.BarTest', 'com.x.FooTest#a'], // reversed vs. V2's ledger order
+      state: 'verifying',
+      passes: 2,
+      runs: 3,
+      divergent: [{ fqcn: 'com.x.FooTest#a', status: 'green' }],
+    };
+    const run = runStore.create(cfg);
+    run.setClusters([seeded]);
+
+    const setClustersSpy = vi.spyOn(run, 'setClusters');
+    const updateSpy = vi.spyOn(run, 'updateCluster');
+
+    // Ledger carries only c1-selectors, tests in the opposite order (see V2
+    // fixture: FooTest#a then BarTest) — same set, no other field changed.
+    await fs.writeFile(path.join(dir, 'ledger.json'), JSON.stringify({ ...V2, clusters: [V2.clusters[0]] }), 'utf8');
+
+    const stop = startLedgerWatcher(run, dir, { intervalMs: 20 });
+    stops.push(stop);
+
+    // Give the watcher several ticks to have processed the file — since no
+    // real change should be detected, we can't waitFor a call; wait a fixed
+    // settle window instead.
+    await new Promise((r) => setTimeout(r, 120));
+
+    expect(updateSpy).not.toHaveBeenCalled();
+    expect(setClustersSpy).not.toHaveBeenCalled();
+    // Order is left untouched — no patch was applied.
+    expect(run.snapshot.clusters[0].tests).toEqual(['com.x.BarTest', 'com.x.FooTest#a']);
   });
 });

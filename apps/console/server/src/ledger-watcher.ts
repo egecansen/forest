@@ -98,9 +98,17 @@ import { PHASE_ORDER } from './types.js';
  *   ledger cluster (dropping any malformed entry — missing id/title/status
  *   or an unrecognized bucket — rather than fabricate one; see
  *   `buildDesiredClusterV2`). If the current snapshot is missing ANY of
- *   those ids (a session's first v2 tick, most commonly), the whole desired
- *   array replaces the board in one authoritative `run.setClusters` call —
- *   this is the only path in the module that creates clusters. Once every
+ *   those ids (a session's first v2 tick, most commonly), the whole board is
+ *   replaced in one authoritative `run.setClusters` call — this is the only
+ *   path in the module that creates clusters. That replacement set is NOT
+ *   `desired` alone, though: any cluster id present in the current snapshot
+ *   but absent from `desired` this tick is carried forward verbatim first
+ *   (ledger-desired clusters keep their ledger order, carried-forward ones
+ *   are appended in their prior snapshot order) — otherwise a cluster that
+ *   momentarily fails `buildDesiredClusterV2` on the SAME tick some other
+ *   cluster's id newly validates would be silently (and permanently, until
+ *   a later re-validating tick) dropped from the board, violating this
+ *   module's "never wipe an existing valid cluster" discipline. Once every
  *   ledger id is already present, it falls back to a per-cluster diff
  *   (`diffClusterV2`) and only calls `updateCluster` for an id whose mapped
  *   fields actually changed — same "diff before emit" discipline as the v1
@@ -465,7 +473,32 @@ function applyLedgerClustersV2(run: Run, clustersRaw: unknown[]): void {
   const currentIds = new Set(run.snapshot.clusters.map((c) => c.id));
   const missesAnId = desired.some((c) => !currentIds.has(c.id));
   if (missesAnId) {
-    run.setClusters(desired);
+    // Full replace — but never let a cluster the operator was already shown
+    // silently vanish just because it's the OTHER half of this race: a
+    // cluster can momentarily fail `buildDesiredClusterV2` this tick
+    // (unrecognized bucket/status, missing title, or transiently absent
+    // from the raw read) at the same time some OTHER cluster's id newly
+    // validates and trips `missesAnId` above. `desired` alone would then
+    // silently drop it from the board — permanently, until a later tick
+    // happens to re-validate it. That violates this module's "never wipe an
+    // existing valid cluster" discipline (the v1 path is patch-only for
+    // exactly this reason).
+    //
+    // Fix: merge `desired` with known-good existing state before replacing.
+    // Any cluster id present in the CURRENT snapshot but absent from
+    // `desired` this tick is carried forward verbatim (not re-derived —
+    // its last-known-good snapshot state is what the operator already
+    // sees). Order: ledger-desired clusters keep their ledger order (this
+    // tick's freshest authoritative state leads the board), then
+    // carried-forward stragglers are appended in their prior snapshot
+    // order — this keeps the board stable (no reshuffling of clusters the
+    // operator hasn't touched) while still surfacing this tick's real
+    // updates first. A brand-new cluster that's still incomplete this tick
+    // simply isn't in `desired` yet either way — benign, eventual
+    // visibility once it validates.
+    const desiredIds = new Set(desired.map((c) => c.id));
+    const carriedForward = run.snapshot.clusters.filter((c) => !desiredIds.has(c.id));
+    run.setClusters([...desired, ...carriedForward]);
     return;
   }
 
@@ -476,12 +509,25 @@ function applyLedgerClustersV2(run: Run, clustersRaw: unknown[]): void {
   }
 }
 
+/** Sorted-by-fqcn copy for order-insensitive comparison — see `diffClusterV2`.
+ *  Never mutates the input, and is only ever used for the comparison itself:
+ *  a real patch still carries `desired`'s own (ledger-authored) order. */
+function sortedByFqcn<T>(arr: T[], fqcnOf: (item: T) => string): T[] {
+  return [...arr].sort((a, b) => fqcnOf(a).localeCompare(fqcnOf(b)));
+}
+
 /** Field-by-field diff of a desired v2-mapped cluster against its current
  *  snapshot state — only changed fields land in the patch, so an unchanged
  *  re-parse never re-emits an `updateCluster` call (same discipline as the
  *  v1 path's inline diff). Array fields (`tests`, `divergent`) compare by
- *  serialized equality; `divergent`'s "no divergence" case is normalized to
- *  `[]` on both sides so `undefined` and `[]` never register as a diff. */
+ *  serialized equality of a fqcn-sorted copy (NOT the raw array) — the
+ *  ledger's own array order isn't a meaningful signal (nothing in the kit
+ *  contract promises `tests`/`divergent` order is stable across ticks), so
+ *  a reordered-but-set-equal array must never emit a spurious patch; the
+ *  patch itself (when one IS needed for a real content change) still
+ *  carries `desired`'s un-sorted, ledger-authored order. `divergent`'s "no
+ *  divergence" case is normalized to `[]` on both sides so `undefined` and
+ *  `[]` never register as a diff. */
 function diffClusterV2(existing: Cluster, desired: Cluster): Partial<Cluster> {
   const patch: Partial<Cluster> = {};
   if (existing.title !== desired.title) patch.title = desired.title;
@@ -490,8 +536,17 @@ function diffClusterV2(existing: Cluster, desired: Cluster): Partial<Cluster> {
   if (existing.detail !== desired.detail) patch.detail = desired.detail;
   if (existing.passes !== desired.passes) patch.passes = desired.passes;
   if (existing.runs !== desired.runs) patch.runs = desired.runs;
-  if (JSON.stringify(existing.tests) !== JSON.stringify(desired.tests)) patch.tests = desired.tests;
-  if (JSON.stringify(existing.divergent ?? []) !== JSON.stringify(desired.divergent ?? [])) {
+  if (
+    JSON.stringify(sortedByFqcn(existing.tests, (t) => t)) !== JSON.stringify(sortedByFqcn(desired.tests, (t) => t))
+  ) {
+    patch.tests = desired.tests;
+  }
+  const existingDivergent = existing.divergent ?? [];
+  const desiredDivergent = desired.divergent ?? [];
+  if (
+    JSON.stringify(sortedByFqcn(existingDivergent, (d) => d.fqcn)) !==
+    JSON.stringify(sortedByFqcn(desiredDivergent, (d) => d.fqcn))
+  ) {
     patch.divergent = desired.divergent;
   }
   return patch;
