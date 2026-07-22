@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { StartScreen } from './components/StartScreen';
 import { BuildsBoard } from './components/BuildsBoard';
 import { RunConsole } from './components/RunConsole';
@@ -37,6 +37,15 @@ export function App() {
   // (re-fetches its snapshot + resubscribes).
   const [openRuns, setOpenRuns] = useState<OpenRunTab[]>([]);
   const [activeRunId, setActiveRunId] = useState<string | null>(null);
+  // Latest activeRunId for the freshness-poll effect below, which must not
+  // reset its 10s interval on every tab switch (its effect deps stay
+  // [openRuns]) yet still needs the CURRENT active id to exclude it from
+  // each tick's writes — a ref sidesteps the stale-closure problem without
+  // re-subscribing the interval.
+  const activeRunIdRef = useRef(activeRunId);
+  useEffect(() => {
+    activeRunIdRef.current = activeRunId;
+  }, [activeRunId]);
   // Best-known status per live-kind runId: seeded from the reconnect fetch,
   // kept current for the ACTIVE tab via RunConsole's onStatusChange (its own
   // live stream), and refreshed for every OTHER live tab by polling
@@ -104,11 +113,20 @@ export function App() {
         if (!res.ok || cancelled) return;
         const active = (await res.json()) as Array<{ runId: string; status: RunSnapshot['status'] }>;
         const activeIds = new Set(active.map((r) => r.runId));
+        // The ACTIVE tab's status is owned exclusively by its own WS stream
+        // (RunConsole's onStatusChange) — this poll's response can be stale
+        // by up to one interval, so writing it here risks briefly regressing
+        // a status the active tab's live stream has already moved past
+        // (e.g. completed -> running for up to 10s).
+        const currentActiveRunId = activeRunIdRef.current;
         setStatusByRunId((prev) => {
           const next = { ...prev };
-          for (const r of active) next[r.runId] = r.status;
+          for (const r of active) {
+            if (r.runId === currentActiveRunId) continue;
+            next[r.runId] = r.status;
+          }
           for (const t of openRuns) {
-            if (t.kind === 'live' && !activeIds.has(t.runId)) next[t.runId] = 'completed';
+            if (t.kind === 'live' && t.runId !== currentActiveRunId && !activeIds.has(t.runId)) next[t.runId] = 'completed';
           }
           return next;
         });

@@ -148,7 +148,8 @@ async function main() {
     // guard (e.g. the operator confirmed a "start anyway (risky)" dialog);
     // that path is logged since it's a deliberate risk, not the default.
     const override = req.body?.override === true;
-    const conflictRunId = findRunConflict(runStore.listActive(), parsed.value.projectPath, override);
+    const activeRuns = runStore.listActive();
+    const conflictRunId = findRunConflict(activeRuns, parsed.value.projectPath, override);
     if (conflictRunId) {
       res.status(409).json({
         error: 'a triage is already running in this repo — two agents would fight over one working tree and ledger',
@@ -156,7 +157,7 @@ async function main() {
       });
       return;
     }
-    if (override && runStore.listActive().some((r) => r.config.projectPath === parsed.value.projectPath)) {
+    if (override && activeRuns.some((r) => r.config.projectPath === parsed.value.projectPath)) {
       console.warn(
         `[hektor-console] override: starting a new triage in ${parsed.value.projectPath} while another run is already active there`
       );
