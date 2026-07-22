@@ -143,3 +143,20 @@ yourself once the console is configured and built:
    working tree and **nothing committed**.
 
 Only after this passes is v1 done.
+
+### Acceptance run with MCP disabled
+
+This proves the ledger alone carries the contract without MCP server tool calls:
+
+```sh
+HEKTOR_DISABLE_MCP=1 PORT=8790 npm start
+```
+
+Then run one real triage end-to-end. Pass criteria:
+- Clusters appear from the ledger within ~2 seconds of the agent's upserts
+- Pick works (AskUserQuestion still active)
+- Chips progress to verdicts
+- `ledger.sh validate --final` passes before the summary
+- Report tab shows complete scoreboard
+
+This exercises the entire pipeline via ledger-only state, proving the console is not dependent on MCP tool calls for core functionality.

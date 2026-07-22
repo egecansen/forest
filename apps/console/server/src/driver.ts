@@ -150,6 +150,8 @@ export function startDriver(
   // (usually nonexistent) `config.projectPath`.
   const ledgerWatcherImpl = opts.ledgerWatcherImpl ?? startLedgerWatcher;
 
+  const mcpAvailable = process.env.HEKTOR_DISABLE_MCP !== '1';
+
   const options: Record<string, unknown> = {
     cwd: config.projectPath,
     abortController: abort,
@@ -159,11 +161,11 @@ export function startDriver(
     // terminal run. The kit stays the authority on its own safety.
     settingSources: ['project'],
     canUseTool: makeCanUseTool(run),
-    mcpServers: { 'hektor-console': hektorMcpServer(run) },
+    ...(mcpAvailable ? { mcpServers: { 'hektor-console': hektorMcpServer(run) } } : {}),
     ...(opts.resume && run.snapshot.sessionId ? { resume: run.snapshot.sessionId } : {}),
   };
 
-  const stream = queryFn({ prompt: buildPrompt(config, { resume: !!opts.resume }), options });
+  const stream = queryFn({ prompt: buildPrompt(config, { resume: !!opts.resume, mcpAvailable }), options });
 
   // Ledger-watcher lifecycle (leak-proof): started once this run is actually
   // 'running' (real sessions only — a scripted demo has no ledger.json to

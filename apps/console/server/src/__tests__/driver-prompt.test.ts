@@ -35,4 +35,26 @@ describe('buildPrompt', () => {
       'Resume the in-progress flaky triage below from its last state (re-read ledger.json). If verification runs were left in flight, collect their results first (check the gradle output / ledger), then continue.'
     );
   });
+
+  it('when mcpAvailable:false, omits mcp__hektor-console bullets but retains AskUserQuestion and ledger-discipline', () => {
+    const run = runStore.create(cfg);
+    const prompt = buildPrompt(run.snapshot.config!, { resume: false, mcpAvailable: false });
+    expect(prompt).not.toContain('mcp__hektor-console');
+    expect(prompt).toContain('AskUserQuestion');
+    expect(prompt).toContain('NEVER end the session while verification is pending');
+  });
+
+  it('when mcpAvailable:true (default), includes mcp__hektor-console bullets', () => {
+    const run = runStore.create(cfg);
+    const prompt = buildPrompt(run.snapshot.config!, { resume: false, mcpAvailable: true });
+    expect(prompt).toContain('mcp__hektor-console__set_clusters');
+    expect(prompt).toContain('mcp__hektor-console__cluster_status');
+  });
+
+  it('default mcpAvailable (undefined) includes mcp__hektor-console bullets', () => {
+    const run = runStore.create(cfg);
+    const prompt = buildPrompt(run.snapshot.config!, { resume: false });
+    expect(prompt).toContain('mcp__hektor-console__set_clusters');
+    expect(prompt).toContain('mcp__hektor-console__cluster_status');
+  });
 });

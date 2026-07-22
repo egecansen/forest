@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from 'vitest';
+import { describe, expect, it, vi, afterEach } from 'vitest';
 import { startDriver, inferPhase, makeDemoQueryFn, type QueryFn } from '../driver.js';
 import { runStore } from '../run-store.js';
 
@@ -498,5 +498,51 @@ describe('driver ledger-watcher lifecycle', () => {
     await awaitingInput;
 
     expect(ledgerWatcherImpl).not.toHaveBeenCalled();
+  });
+});
+
+describe('HEKTOR_DISABLE_MCP acceptance switch', () => {
+  afterEach(() => {
+    vi.unstubAllEnvs();
+  });
+
+  it('when HEKTOR_DISABLE_MCP=1, options passed to queryFn have no mcpServers key', async () => {
+    vi.stubEnv('HEKTOR_DISABLE_MCP', '1');
+    const run = runStore.create(cfg);
+    let capturedOptions: Record<string, unknown> | null = null;
+    const customQueryFn: QueryFn = ({ options }) => {
+      capturedOptions = options;
+      async function* gen() {
+        yield msg({ type: 'system', subtype: 'init', session_id: 'sess-disable-mcp' });
+        yield msg({ type: 'result', subtype: 'success', total_cost_usd: 0.01, usage: { output_tokens: 10 }, result: 'done' });
+      }
+      return Object.assign(gen(), { interrupt: vi.fn(async () => {}) });
+    };
+
+    const done = new Promise<void>((r) => run.on('event', (e) => { if (e.type === 'status' && e.status === 'completed') r(); }));
+    startDriver(run, customQueryFn, { ledgerWatcherImpl: noopLedgerWatcher });
+    await done;
+
+    expect(capturedOptions).not.toHaveProperty('mcpServers');
+  });
+
+  it('when HEKTOR_DISABLE_MCP is not set, options passed to queryFn have mcpServers key', async () => {
+    const run = runStore.create(cfg);
+    let capturedOptions: Record<string, unknown> | null = null;
+    const customQueryFn: QueryFn = ({ options }) => {
+      capturedOptions = options;
+      async function* gen() {
+        yield msg({ type: 'system', subtype: 'init', session_id: 'sess-with-mcp' });
+        yield msg({ type: 'result', subtype: 'success', total_cost_usd: 0.01, usage: { output_tokens: 10 }, result: 'done' });
+      }
+      return Object.assign(gen(), { interrupt: vi.fn(async () => {}) });
+    };
+
+    const done = new Promise<void>((r) => run.on('event', (e) => { if (e.type === 'status' && e.status === 'completed') r(); }));
+    startDriver(run, customQueryFn, { ledgerWatcherImpl: noopLedgerWatcher });
+    await done;
+
+    expect(capturedOptions).toBeTruthy();
+    expect(capturedOptions).toHaveProperty('mcpServers');
   });
 });
