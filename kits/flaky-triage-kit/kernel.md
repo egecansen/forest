@@ -101,18 +101,19 @@ Use `where:{testName}` for an exact flow; semantic query only for sibling/recipe
 ### 5.1 Buckets (flaky-testbox signatures)
 
 
-| Signature                                                                     | Meaning                                                                    | Default action                                   |
-| ----------------------------------------------------------------------------- | -------------------------------------------------------------------------- | ------------------------------------------------ |
-| passes on re-run                                                              | flaky / race                                                               | dismiss (record flaky-confidence)                |
-| whole-class Timeout / NotInteractable / NoSuchElement                         | **broken box**                                                             | invalidate verdict, re-run elsewhere (I9)        |
-| `ElementClickIntercepted` (`ot-sdk-row`)                                      | OneTrust cookie overlay                                                    | 🔧 recipe: dismiss-in-setup                      |
-| `VisualRegressionTrackerException`                                            | baseline drift                                                             | advisory (baseline review)                       |
-| `NoSuchElement` on a generated/hard-coded id                                  | brittle selector                                                           | 🔧 re-locate by name (T1/T3)                     |
-| `NoSuchElement` on a filter-value-by-text (`//label[text()='Sıfır']`, `'5G'`) | **data/flag-dependent** (option renders only with matching inventory/flag) | re-run on a control box — **not** a selector fix |
-| `IndexOutOfBounds` (empty list)                                               | data-dependent                                                             | 🔧 empty-guard (T2)                              |
-| `AssertionFailedError`, self-consistent test                                  | **app contract violation**                                                 | 🐛 suspected bug (T4)                            |
-| `AssertionFailedError`, testbox-data assumption                               | brittle assertion                                                          | 🔧 make data-aware (T2)                          |
+| Signature                                                                     | Meaning                                                                    | Default action                                   | Bucket     |
+| ----------------------------------------------------------------------------- | -------------------------------------------------------------------------- | ------------------------------------------------ | ---------- |
+| passes on re-run                                                              | flaky / race                                                               | dismiss (record flaky-confidence)                | infra      |
+| whole-class Timeout / NotInteractable / NoSuchElement                         | **broken box**                                                             | invalidate verdict, re-run elsewhere (I9)        | infra      |
+| `ElementClickIntercepted` (`ot-sdk-row`)                                      | OneTrust cookie overlay                                                    | 🔧 recipe: dismiss-in-setup                      | easy-fix   |
+| `VisualRegressionTrackerException`                                            | baseline drift                                                             | advisory (baseline review)                       | vrt        |
+| `NoSuchElement` on a generated/hard-coded id                                  | brittle selector                                                           | 🔧 re-locate by name (T1/T3)                     | selector   |
+| `NoSuchElement` on a filter-value-by-text (`//label[text()='Sıfır']`, `'5G'`) | **data/flag-dependent** (option renders only with matching inventory/flag) | re-run on a control box — **not** a selector fix | infra      |
+| `IndexOutOfBounds` (empty list)                                               | data-dependent                                                             | 🔧 empty-guard (T2)                              | easy-fix   |
+| `AssertionFailedError`, self-consistent test                                  | **app contract violation**                                                 | 🐛 suspected bug (T4)                            | likely-bug |
+| `AssertionFailedError`, testbox-data assumption                               | brittle assertion                                                          | 🔧 make data-aware (T2)                          | app-change |
 
+**Canonical presentation buckets (closed enum):** easy-fix · selector · vrt · app-change · infra · likely-bug — every cluster carries exactly one (§8).
 
 **Signature extraction:** cluster on the **root cause**, not the first stack line — wrapped / `MultipleFailures` (e.g. `AssertionFailedError: Multiple Failure : [VRT…]`) misbucket otherwise; split `MultipleFailures` into sub-failures (V6).
 **Cluster homogeneity:** before applying one fix to a cluster, verify its tests truly share that one fix — else re-cluster (V10).
@@ -168,18 +169,25 @@ mark *resolved-upstream*; don't re-litigate.
 | **I8**  | Never commit · file/comment a ticket · disable a test · act only on **selected** clusters. **Honesty: re-running tests executes real testbox side-effecting flows (not fully "reversible") — flag tests with irreversible external actions (payment/email)**                             | overreach / unflagged side effects (V5) |
 | **I9**  | tb health-check is **necessary-not-sufficient** (misses *partial* degradation); cross-check suspicious whole-cluster flips vs a **control box / per-test ES history** — **qagent's golden testbox is a ready control-box candidate**                                                     | per-box confound (V9)                   |
 | **I10** | **Pin one code revision** for classify + apply + green-proof (mismatched revs = inconsistent verdicts); **bound re-clustering** — every cluster must reach a terminal status; max iterations                                                                                             | rev-drift / non-convergence (V8, V10)   |
+| **I11** | **A session may not end while any cluster is `selected`/`applied`** — run `core/ledger.sh validate --final <ledger>` before the convergence summary; non-zero exit means the run is NOT done (collect verdicts; never background the green-proof and quit)                                  | premature completion / unverified "fixed" claims |
 
 
 ## 8. State / ledger (resumable · idempotent · auditable)
 
 ```
-run:    { id, sReportUrl, build{name,@timestamp}, tb, startedBy }
-cluster:{ id, signature, tier, bucket, fixVsBug, evidence,
-          tests[ fqcn… ],
-          status: proposed|selected|applied|green|deferred|flagged|resolved-upstream,
-          diffRef, lineage(parentClusterId), greenProofScope }
-event:  { who, what(selected/applied/steered), when }     // provenance
+run:     { id, sReportUrl, build{name,@timestamp}, tb, startedBy, version: 2 }
+cluster: { id, title,                  # ≤80 chars, human phrasing — I7-governed: never raw stackTrace
+           detail,                     # ≤600 chars evidence summary; may quote signatures, never full traces
+           signature, tier, bucket,    # bucket ∈ the six (closed enum, kernel-canonical)
+           fixVsBug, evidence,
+           tests[ {fqcn, status?} ],   # status ∈ red|green|skipped, present only when diverging
+           status: proposed|selected|applied|green|deferred|flagged|resolved-upstream,
+           passes, runs,               # green-proof progress; integers; passes ≤ runs
+           diffRef, lineage, greenProofScope }
+event:   { who, what, when, phase? }   # what gains 'phase-enter'; phase ∈ ingest|confirm|cluster|pick|fix|verify|report
 ```
+
+All writes go through ledger.sh subcommands (cluster-upsert / cluster-state / event) — hand-edited JSON violates P2. v1 files (no version) remain readable.
 
 ## 9. Output — convergence summary
 
