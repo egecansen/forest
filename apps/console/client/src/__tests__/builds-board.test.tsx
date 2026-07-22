@@ -68,11 +68,7 @@ describe('BuildsBoard', () => {
     const onTriage = vi.fn();
     render(<BuildsBoard onTriage={onTriage} onBack={vi.fn()} />);
     await waitFor(() => expect(screen.getByText(/needs triage \(1\)/i)).toBeInTheDocument());
-    // The card's serial number sits in its own <span> (tag-stub treatment —
-    // mono number inside the caps display title), so match by the stable
-    // `title` hover attribute rather than the now-split visible text.
-    expect(screen.getByTitle(NEEDS_TRIAGE.displayName)).toHaveTextContent('#2127');
-    expect(screen.getByTitle(NEEDS_TRIAGE.displayName)).toHaveTextContent('web-test-s4-flaky');
+    expect(screen.getByText(/#2127.*web-test-s4-flaky/)).toBeInTheDocument();
     // fail meter shows the count
     expect(screen.getByText('12')).toBeInTheDocument();
     expect(screen.getByText('failed')).toBeInTheDocument();
@@ -81,7 +77,7 @@ describe('BuildsBoard', () => {
     // timing: 125000ms = 2m 5s
     expect(screen.getByText(/took 2m 5s/i)).toBeInTheDocument();
     // Check timing in the card context to avoid matching the running row
-    const card = screen.getByTitle(NEEDS_TRIAGE.displayName).closest('article')!;
+    const card = screen.getByText(/#2127.*web-test-s4-flaky/).closest('article')!;
     expect(within(card).getByText(/started \d{2}:\d{2}/)).toBeInTheDocument();
 
     const triageBtn = screen.getByRole('button', { name: /^triage$/i });
@@ -97,11 +93,9 @@ describe('BuildsBoard', () => {
     await waitFor(() => expect(screen.getByText(/running \(1\)/i)).toBeInTheDocument());
     await waitFor(() => expect(screen.getByText(/done \(1\)/i)).toBeInTheDocument());
 
-    // NEEDS TRIAGE card headline — the serial number is its own <span>
-    // (tag-stub treatment), so match by the stable `title` hover attribute.
-    const cardTitle = screen.getByTitle(NEEDS_TRIAGE.displayName);
-    expect(cardTitle).toHaveTextContent('#2127');
-    expect(cardTitle).toHaveTextContent('web-test-s4-flaky');
+    // NEEDS TRIAGE card headline.
+    const cardTitle = screen.getByText('#2127 · web-test-s4-flaky');
+    expect(cardTitle).toHaveAttribute('title', NEEDS_TRIAGE.displayName);
 
     // RUNNING row headline.
     const runningTitle = screen.getByText('#2128 · web-test-s4-flaky');
@@ -119,7 +113,7 @@ describe('BuildsBoard', () => {
     stubFetch();
     render(<BuildsBoard onTriage={vi.fn()} onBack={vi.fn()} />);
     await waitFor(() => expect(screen.getByText(/needs triage \(1\)/i)).toBeInTheDocument());
-    const card = screen.getByTitle(NEEDS_TRIAGE.displayName).closest('article')!;
+    const card = screen.getByText(/#2127.*web-test-s4-flaky/).closest('article')!;
     const openBuild = within(card).getByRole('link', { name: /open build/i });
     expect(openBuild).toHaveAttribute('href', NEEDS_TRIAGE.url);
     expect(openBuild).toHaveAttribute('target', '_blank');
