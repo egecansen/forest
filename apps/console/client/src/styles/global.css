@@ -3031,6 +3031,45 @@ textarea {
   user-select: text;
 }
 
+/* Divergent tests (v2 ledger): per-test outcomes that diverge from the
+   cluster's own life-cycle state — a small status-tinted chip per entry,
+   directly under the full test list. */
+.cluster-divergent-list {
+  list-style: none;
+  margin: 8px 0 0;
+  padding: 8px 0 0;
+  border-top: 1px dashed var(--border);
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.cluster-divergent-item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  font-size: 11.5px;
+  color: var(--muted);
+  user-select: text;
+}
+
+.cluster-divergent-fqcn {
+  overflow-wrap: anywhere;
+}
+
+.cluster-divergent-chip {
+  flex: none;
+  font-size: 10.5px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.02em;
+}
+
+.cluster-divergent-item.is-green .cluster-divergent-chip { color: var(--ok); }
+.cluster-divergent-item.is-red   .cluster-divergent-chip { color: var(--err); }
+.cluster-divergent-item.is-skipped .cluster-divergent-chip { color: var(--muted-3); }
+
 /* Row tints mirror the builds board (`.board-table tr.is-*`): a tinted head
    background + an inset left rail in the row's tone, so a cluster's
    disposition reads at a glance down the list. */

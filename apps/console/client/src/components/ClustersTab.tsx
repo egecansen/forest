@@ -63,6 +63,16 @@ export function ClustersTab({ clusters }: { clusters: Cluster[] }) {
                     <li key={t} className="cluster-test-item">{t}</li>
                   ))}
                 </ul>
+                {c.divergent && c.divergent.length > 0 && (
+                  <ul className="cluster-divergent-list">
+                    {c.divergent.map((d) => (
+                      <li key={d.fqcn} className={`cluster-divergent-item is-${d.status}`}>
+                        <span className="cluster-divergent-fqcn">{d.fqcn}</span>
+                        <span className="cluster-divergent-chip">{d.status}</span>
+                      </li>
+                    ))}
+                  </ul>
+                )}
               </div>
             )}
           </div>

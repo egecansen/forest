@@ -129,6 +129,13 @@ export interface Cluster {
   /** Longer evidence/cause explanation shown in the Clusters tab's expanded
    *  row: the failing signature, why it broke, and the intended fix approach. */
   detail?: string;
+  /** Per-test outcomes that diverge from the cluster's own life-cycle
+   *  `state` — sourced from a v2 ledger's `cluster.tests[].status` entries
+   *  (only present when a test's own red/green/skipped outcome is worth
+   *  calling out separately, e.g. one test in an "applied" cluster already
+   *  proved green while its sibling hasn't rerun yet). Rendered as a small
+   *  status-tinted chip per entry in the Clusters tab's expanded row. */
+  divergent?: { fqcn: string; status: 'red' | 'green' | 'skipped' }[];
 }
 
 export interface RunConfig {

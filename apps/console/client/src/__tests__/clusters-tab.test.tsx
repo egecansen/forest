@@ -79,4 +79,41 @@ describe('ClustersTab', () => {
     await userEvent.keyboard('{Enter}');
     expect(row).toHaveAttribute('aria-expanded', 'true');
   });
+
+  describe('divergent tests (v2 ledger — per-test outcomes that diverge from the cluster state)', () => {
+    const WITH_DIVERGENT: Cluster[] = [
+      {
+        id: 'c1-selectors', title: 'Relocated selectors', bucket: 'selector',
+        tests: ['com.x.FooTest#a', 'com.x.BarTest'], state: 'verifying', passes: 2, runs: 3,
+        divergent: [
+          { fqcn: 'com.x.FooTest#a', status: 'green' },
+          { fqcn: 'com.x.BarTest', status: 'red' },
+        ],
+      },
+    ];
+
+    it('renders one status-tinted chip per divergent entry in the expanded row', async () => {
+      render(<ClustersTab clusters={WITH_DIVERGENT} />);
+      await userEvent.click(screen.getByRole('button', { name: /c1-selectors/i }));
+
+      const greenChip = screen.getByText('green', { selector: '.cluster-divergent-chip' });
+      expect(greenChip.closest('.cluster-divergent-item')).toHaveClass('is-green');
+      expect(greenChip.closest('.cluster-divergent-item')?.textContent).toContain('com.x.FooTest#a');
+
+      const redChip = screen.getByText('red', { selector: '.cluster-divergent-chip' });
+      expect(redChip.closest('.cluster-divergent-item')).toHaveClass('is-red');
+      expect(redChip.closest('.cluster-divergent-item')?.textContent).toContain('com.x.BarTest');
+    });
+
+    it('the divergent list is hidden while the row is collapsed', () => {
+      render(<ClustersTab clusters={WITH_DIVERGENT} />);
+      expect(screen.queryByText('green', { selector: '.cluster-divergent-chip' })).not.toBeInTheDocument();
+    });
+
+    it('a cluster with no divergent tests renders no divergent list', async () => {
+      render(<ClustersTab clusters={CLUSTERS} />); // neither fixture cluster carries `divergent`
+      await userEvent.click(screen.getByRole('button', { name: /onetrust/i }));
+      expect(document.querySelector('.cluster-divergent-list')).not.toBeInTheDocument();
+    });
+  });
 });
