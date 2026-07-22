@@ -5660,3 +5660,237 @@ textarea {
   border-color: var(--accent);
   box-shadow: 0 0 0 3px rgba(255, 212, 0, 0.15);
 }
+
+/* ─── Run tabs strip (concurrent runs) ─────────────────────────────────
+   A slim bar between the header area and whichever view is active
+   (board/start/console/history) — visible whenever at least one run tab is
+   open. Mirrors the inner .tab-bar's visual language (mono font, accent
+   underline on the active tab, dotBeat pulse) but is a distinct set of
+   classes since it's a different concept: run tabs, not content tabs. */
+.run-tabs-bar {
+  position: relative;
+  z-index: 2;
+  display: flex;
+  align-items: stretch;
+  gap: 10px;
+  padding: 0 14px;
+  border-bottom: 1px solid var(--border);
+  background: var(--bg-2);
+  font-family: var(--mono);
+  font-size: 12px;
+}
+
+/* Only needed on the board/start screens — the fixed "what is hektor?" /
+   "how does it work?" buttons float over the very top of the page there
+   (see .info-trigger, top: 22px, ~34px tall); a live console/history view
+   hides those buttons entirely, so the strip can sit flush at the top. */
+.run-tabs-bar.top-inset {
+  margin-top: 58px;
+}
+
+.run-tabs-list {
+  display: flex;
+  align-items: stretch;
+  gap: 2px;
+  overflow-x: auto;
+  flex: 1;
+  min-width: 0;
+}
+
+.run-tab {
+  display: flex;
+  align-items: stretch;
+  flex-shrink: 0;
+}
+
+.run-tab-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 12px;
+  color: var(--muted);
+  border-bottom: 2px solid transparent;
+  white-space: nowrap;
+  transition: color 0.15s, background 0.15s, border-color 0.15s;
+}
+
+.run-tab-btn:hover {
+  color: var(--text);
+  background: rgba(var(--raise-rgb), 0.025);
+}
+
+.run-tab.is-active .run-tab-btn,
+.run-tab-btn.is-active {
+  color: var(--text);
+  border-bottom-color: var(--accent);
+  background: linear-gradient(180deg, transparent, rgba(255, 212, 0, 0.05));
+}
+
+.run-tab-label {
+  letter-spacing: 0.02em;
+  font-variant-numeric: tabular-nums;
+}
+
+.run-tab-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+
+.run-tab-dot.tone-accent {
+  background: var(--accent);
+  box-shadow: 0 0 8px var(--accent);
+  animation: dotBeat 1.8s ease-in-out infinite;
+}
+
+.run-tab-dot.tone-warn {
+  background: var(--warn);
+  box-shadow: 0 0 8px var(--warn);
+  animation: dotBeat 1s ease-in-out infinite;
+}
+
+.run-tab-dot.tone-muted {
+  background: var(--muted-3);
+  box-shadow: none;
+}
+
+.run-tab-dot.tone-outline {
+  background: transparent;
+  border: 1px solid var(--muted-2);
+  box-shadow: none;
+}
+
+.run-tab-close {
+  display: inline-flex;
+  align-items: center;
+  padding: 0 10px 0 2px;
+  color: var(--muted-2);
+  font-size: 14px;
+  line-height: 1;
+  transition: color 0.15s;
+}
+
+.run-tab-close:hover {
+  color: var(--err);
+}
+
+.run-tab-board {
+  color: var(--muted-2);
+  text-transform: uppercase;
+  letter-spacing: 0.12em;
+  font-size: 11px;
+}
+
+.run-tab-new {
+  flex-shrink: 0;
+  align-self: center;
+  color: var(--muted-2);
+  padding: 6px 10px;
+  border: 1px solid var(--border-strong);
+  border-radius: 999px;
+  font-size: 11px;
+  letter-spacing: 0.04em;
+  transition: color 0.15s, border-color 0.15s, background 0.15s;
+}
+
+.run-tab-new:hover {
+  color: var(--text);
+  border-color: var(--accent);
+  background: var(--accent-tint);
+}
+
+/* Header live-run indicator — a clickable pulse + count, trailing the strip.
+   Amber (tone-warn) whenever any live run needs the operator; accent
+   otherwise. */
+.live-indicator {
+  flex-shrink: 0;
+  align-self: center;
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  padding: 6px 12px;
+  border-radius: 999px;
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.03em;
+  white-space: nowrap;
+  transition: background 0.15s, border-color 0.15s;
+}
+
+.live-indicator-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  animation: dotBeat 1.4s ease-in-out infinite;
+}
+
+.live-indicator.tone-accent {
+  color: var(--accent-ink);
+  background: var(--accent-tint);
+  border: 1px solid var(--accent);
+}
+.live-indicator.tone-accent .live-indicator-dot {
+  background: var(--accent);
+  box-shadow: 0 0 8px var(--accent);
+}
+
+.live-indicator.tone-warn {
+  color: var(--warn);
+  background: rgba(245, 158, 11, 0.12);
+  border: 1px solid var(--warn);
+}
+.live-indicator.tone-warn .live-indicator-dot {
+  background: var(--warn);
+  box-shadow: 0 0 8px var(--warn);
+}
+
+/* ─── Start screen — "N triage(s) running" banner + previous triages ─── */
+.live-run-banner {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  padding: 10px 16px;
+  border: 1px solid var(--accent);
+  background: var(--accent-tint);
+  color: var(--accent-ink);
+  border-radius: 12px;
+  font-family: var(--mono);
+  font-size: 12.5px;
+  animation: fieldFade 0.4s ease-out both;
+}
+
+.link-btn {
+  color: inherit;
+  font: inherit;
+  font-weight: 700;
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+
+/* Reuses .history-panel/.history-list/.history-row (forked from the
+   original sahika shell, previously unused) — the start screen's "previous
+   triages" section, below the form. */
+.previous-triages {
+  animation: fieldFade 0.55s ease-out 0.4s both;
+}
+
+/* ─── Conflict dialog (POST /api/runs' same-projectPath 409) ──────────── */
+.conflict-dialog-panel {
+  max-width: 480px;
+}
+
+.conflict-dialog-body {
+  padding: 16px 18px 20px;
+}
+
+.conflict-dialog-actions {
+  display: flex;
+  gap: 10px;
+  margin-top: 14px;
+}
+.conflict-dialog-actions .btn {
+  flex: 1;
+}

@@ -1,8 +1,9 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useState, type ReactNode } from 'react';
 import type { RunConfig } from '../types';
 import { SelectDropdown } from './SelectDropdown';
 import type { DropdownOption } from './SelectDropdown';
 import { FolderPicker } from './FolderPicker';
+import { RunConflictError } from '../run-conflict';
 
 const PERMISSION_OPTIONS: DropdownOption<RunConfig['permissionPolicy']>[] = [
   {
@@ -54,7 +55,11 @@ interface Props {
     testbox: string,
     permissionPolicy: RunConfig['permissionPolicy'],
     projectMode: RunConfig['projectMode'],
-    demo: boolean
+    demo: boolean,
+    /** Bypasses the server's same-projectPath 409 guard — only ever passed
+     *  by this component's own conflict-retry closure below, never by direct
+     *  user action. */
+    override?: boolean
   ) => Promise<void>;
   /** Seeds the report-URL field — set when arriving from the builds board
    *  ("triage" on a row) or a `?triage=<url>` deep link. */
@@ -67,6 +72,18 @@ interface Props {
   /** Navigates to the builds board — the form is the landing view, this is
    *  its escape hatch to browse/triage from live Jenkins state instead. */
   onBrowseBuilds: () => void;
+  /**
+   * Called instead of showing the plain inline error when `onStart` rejects
+   * with a same-projectPath 409 (RunConflictError) — hands the conflicting
+   * run's id plus a ready-to-call retry (the same submission, with
+   * `override: true`) up to a host that can render a proper dialog. Falls
+   * back to the inline error banner when omitted.
+   */
+  onConflict?: (conflictRunId: string, retry: () => Promise<void>) => void;
+  /** Rendered above the form — e.g. a "N triage(s) running — view" banner. */
+  banner?: ReactNode;
+  /** Rendered below the form — e.g. the "previous triages" section. */
+  afterForm?: ReactNode;
 }
 
 /** The demo toggle is dev/demo-only surface — only shown when there's a
@@ -80,7 +97,7 @@ function computeShowDemoToggle(prefillReportUrl: string | undefined): boolean {
   return !!prefillReportUrl && prefillReportUrl.includes('fullTestBuildName=demo');
 }
 
-export function StartScreen({ onStart, prefillReportUrl, prefillTestbox, onBrowseBuilds }: Props) {
+export function StartScreen({ onStart, prefillReportUrl, prefillTestbox, onBrowseBuilds, onConflict, banner, afterForm }: Props) {
   const [projectPath, setProjectPath] = useState('');
   const [targetUrl, setTargetUrl] = useState(prefillReportUrl || 'https://');
   const [testbox, setTestbox] = useState(prefillTestbox || '');
@@ -133,7 +150,13 @@ export function StartScreen({ onStart, prefillReportUrl, prefillTestbox, onBrows
     try {
       await onStart(projectPath.trim(), targetUrl.trim(), testbox.trim(), permissionPolicy, 'new', demo);
     } catch (e) {
-      setErr((e as Error).message);
+      if (e instanceof RunConflictError && onConflict) {
+        onConflict(e.conflictRunId, () =>
+          onStart(projectPath.trim(), targetUrl.trim(), testbox.trim(), permissionPolicy, 'new', demo, true)
+        );
+      } else {
+        setErr((e as Error).message);
+      }
       setSubmitting(false);
     }
   };
@@ -141,6 +164,7 @@ export function StartScreen({ onStart, prefillReportUrl, prefillTestbox, onBrows
   return (
     <div className="start-screen">
       <div className="start-stack">
+        {banner}
         <form className="start-card" onSubmit={submit}>
           <div className="start-logo">
             <div className="start-kicker"><span className="kicker-brand">sahibinden</span> › hektor</div>
@@ -236,6 +260,7 @@ export function StartScreen({ onStart, prefillReportUrl, prefillTestbox, onBrows
             />
           )}
         </form>
+        {afterForm}
       </div>
     </div>
   );

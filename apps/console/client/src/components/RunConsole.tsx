@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
-import type { RunConfig, RunSnapshot } from '../types';
+import type { RunConfig, RunSnapshot, RunSummary } from '../types';
 import { useRunStream, isTerminalStatus } from '../useRunStream';
 import { findLatestRateLimitWarning, findLatestError, isRunLive, runStatusTone } from '../consoleAlerts';
 import { TerminalLog } from './TerminalLog';
@@ -24,8 +24,10 @@ interface Props {
   onNew: () => void;
   /** Label for the primary header button in read-only mode (defaults to 'back'). */
   backLabel?: string;
-  /** Opens a past run read-only; when provided, a "recent runs" popup trigger is shown. */
-  onOpenHistory?: (runId: string) => void;
+  /** Opens a past run read-only (the full RunSummary row, not just its id —
+   *  enough for a host to open it as a tab immediately); when provided, a
+   *  "recent runs" popup trigger is shown. */
+  onOpenHistory?: (run: RunSummary) => void;
   /**
    * Renders a past, persisted run: no live WS connection is opened (a
    * `null` runId is passed to `useRunStream`), and the stop/interrupt
@@ -34,10 +36,19 @@ interface Props {
   readOnly?: boolean;
   /** Required when `readOnly` — the persisted snapshot to render verbatim. */
   staticSnapshot?: RunSnapshot;
+  /** Reports the live (or static) snapshot's status upward as it changes —
+   *  lets a host (e.g. the run-tabs strip) reflect this run's status without
+   *  owning its own WS connection. Fires on mount and every status change. */
+  onStatusChange?: (status: RunSnapshot['status']) => void;
 }
 
-export function RunConsole({ config, onStop, onPause, onResume, onNew, backLabel, onOpenHistory, readOnly = false, staticSnapshot }: Props) {
+export function RunConsole({ config, onStop, onPause, onResume, onNew, backLabel, onOpenHistory, readOnly = false, staticSnapshot, onStatusChange }: Props) {
   const { snapshot, conn } = useRunStream(readOnly ? null : config.runId, staticSnapshot ?? null);
+
+  useEffect(() => {
+    onStatusChange?.(snapshot.status);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [snapshot.status]);
 
   // Selenoid live-session link (GET /api/config's `selenoidUrl`) — a URL, not a
   // secret, so it's fetched the same best-effort way BuildsBoard/StartScreen

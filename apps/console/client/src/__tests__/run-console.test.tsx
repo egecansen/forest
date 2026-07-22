@@ -170,3 +170,12 @@ describe('RunConsole files tab badge', () => {
     expect(screen.getByRole('tab', { name: /files/i })).toHaveTextContent('2');
   });
 });
+
+describe('RunConsole onStatusChange', () => {
+  it('reports the (static/live) snapshot status upward, so a host can track it without its own WS', () => {
+    const onStatusChange = vi.fn();
+    const snap = snapshot({ status: 'awaiting-input' });
+    render(<RunConsole config={CONFIG} onNew={() => {}} readOnly staticSnapshot={snap} onStatusChange={onStatusChange} />);
+    expect(onStatusChange).toHaveBeenCalledWith('awaiting-input');
+  });
+});

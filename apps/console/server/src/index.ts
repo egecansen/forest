@@ -12,6 +12,7 @@ import { listDirectories } from './browse.js';
 import { isAllowedHost } from './host-guard.js';
 import { saveRun, listRuns, loadRun, isSafeRunId, resolveInsideRoot, resolveRunsDirSync } from './persistence.js';
 import { loadConsoleConfig, kitAllowlist } from './console-config.js';
+import { findRunConflict } from './run-conflict.js';
 import { getWorktree } from './worktree.js';
 import { BuildsPoller } from './trackers/poller.js';
 import { fetchJenkinsUser } from './trackers/jenkins.js';
@@ -141,11 +142,24 @@ async function main() {
       res.status(400).json({ error: parsed.error });
       return;
     }
-    // Only one triage run active at a time — the driver owns the target
-    // repo's working tree, so a second concurrent run would race it.
-    if (runStore.listActive().length > 0) {
-      res.status(409).json({ error: 'a triage run is already active' });
+    // Two runs against the SAME resolved projectPath would fight over one
+    // working tree + ledger — block that, but allow different projectPaths
+    // to run fully concurrently. `override: true` explicitly bypasses the
+    // guard (e.g. the operator confirmed a "start anyway (risky)" dialog);
+    // that path is logged since it's a deliberate risk, not the default.
+    const override = req.body?.override === true;
+    const conflictRunId = findRunConflict(runStore.listActive(), parsed.value.projectPath, override);
+    if (conflictRunId) {
+      res.status(409).json({
+        error: 'a triage is already running in this repo — two agents would fight over one working tree and ledger',
+        conflictRunId,
+      });
       return;
+    }
+    if (override && runStore.listActive().some((r) => r.config.projectPath === parsed.value.projectPath)) {
+      console.warn(
+        `[hektor-console] override: starting a new triage in ${parsed.value.projectPath} while another run is already active there`
+      );
     }
     // Continue requires an existing project dir; New doesn't check here, but a
     // non-existent 'new' project path is not created by the console — the run

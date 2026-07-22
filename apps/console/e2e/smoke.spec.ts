@@ -41,6 +41,10 @@ test('board → deep link → demo triage run → clusters → pick → completi
 
   await page.getByRole('button', { name: /start triage/i }).click();
 
+  // Starting a run appends a live tab to the run-tabs strip and activates
+  // it — exactly one tab, and it's the active one.
+  await expect(page.locator('.run-tabs-bar [role="tab"][aria-selected="true"]')).toHaveCount(1);
+
   // The demo driver publishes a cluster, then asks the pick — a genuine
   // pause on the operator, not a logged-only tool call. Scoped to the
   // question dock's region (not just a role+name match on "onetrust")

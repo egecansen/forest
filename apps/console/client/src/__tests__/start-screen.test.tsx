@@ -2,6 +2,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { StartScreen } from '../components/StartScreen';
+import { RunConflictError } from '../run-conflict';
 
 const CONFIG_RESPONSE = {
   configured: true,
@@ -159,6 +160,65 @@ describe('StartScreen', () => {
         'new',
         true
       );
+    });
+  });
+
+  describe('same-projectPath 409 conflict', () => {
+    it('hands off to onConflict (with a working retry) instead of showing an inline error', async () => {
+      stubConfigFetch({ configured: false });
+      const onStart = vi.fn();
+      onStart.mockRejectedValueOnce(new RunConflictError('conflicting-run-id'));
+      onStart.mockResolvedValueOnce(undefined); // the retry (override) succeeds
+      const onConflict = vi.fn();
+      render(<StartScreen onStart={onStart} onBrowseBuilds={vi.fn()} onConflict={onConflict} prefillReportUrl={GOOD_URL} />);
+      const user = userEvent.setup();
+      await user.type(screen.getByLabelText(/^project path$/i), '/tmp/web-test');
+      await user.type(screen.getByLabelText(/testbox/i), 'tb161');
+
+      await user.click(screen.getByRole('button', { name: /start triage/i }));
+
+      await waitFor(() => expect(onConflict).toHaveBeenCalledTimes(1));
+      expect(onConflict).toHaveBeenCalledWith('conflicting-run-id', expect.any(Function));
+      // No dead-end inline error banner underneath what should be a dialog.
+      expect(screen.queryByText(/conflicting-run-id/i)).not.toBeInTheDocument();
+
+      // The retry closure re-submits the same fields with override: true.
+      const retry = onConflict.mock.calls[0][1] as () => Promise<void>;
+      await retry();
+      expect(onStart).toHaveBeenLastCalledWith('/tmp/web-test', GOOD_URL, 'tb161', 'confirm-applies', 'new', false, true);
+    });
+
+    it('falls back to the plain inline error when no onConflict handler is wired up', async () => {
+      stubConfigFetch({ configured: false });
+      const onStart = vi.fn().mockRejectedValueOnce(new RunConflictError('conflicting-run-id'));
+      render(<StartScreen onStart={onStart} onBrowseBuilds={vi.fn()} prefillReportUrl={GOOD_URL} />);
+      const user = userEvent.setup();
+      await user.type(screen.getByLabelText(/^project path$/i), '/tmp/web-test');
+      await user.type(screen.getByLabelText(/testbox/i), 'tb161');
+      await user.click(screen.getByRole('button', { name: /start triage/i }));
+      expect(await screen.findByText(/already running/i)).toBeInTheDocument();
+    });
+  });
+
+  describe('banner and afterForm slots', () => {
+    it('renders an optional banner above the form and afterForm content below it', () => {
+      stubConfigFetch({ configured: false });
+      render(
+        <StartScreen
+          onStart={vi.fn()}
+          onBrowseBuilds={vi.fn()}
+          banner={<div>1 triage running — view</div>}
+          afterForm={<div>previous triages go here</div>}
+        />
+      );
+      expect(screen.getByText('1 triage running — view')).toBeInTheDocument();
+      expect(screen.getByText('previous triages go here')).toBeInTheDocument();
+    });
+
+    it('renders neither slot when not provided', () => {
+      stubConfigFetch({ configured: false });
+      render(<StartScreen onStart={vi.fn()} onBrowseBuilds={vi.fn()} />);
+      expect(screen.queryByText(/triage running/i)).not.toBeInTheDocument();
     });
   });
 });

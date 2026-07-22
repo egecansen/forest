@@ -4,7 +4,7 @@ import { projectBasename, relativeTime } from '../start-logic';
 
 interface Props {
   /** Opens the read-only console view for the chosen past run, then closes. */
-  onOpen: (runId: string) => void;
+  onOpen: (run: RunSummary) => void;
   onClose: () => void;
 }
 
@@ -68,7 +68,7 @@ export function HistoryModal({ onOpen, onClose }: Props) {
                   type="button"
                   className="history-row"
                   onClick={() => {
-                    onOpen(r.runId);
+                    onOpen(r);
                     onClose();
                   }}
                   title={r.projectPath}
