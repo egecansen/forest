@@ -7,7 +7,7 @@ export function buildPrompt(config: RunConfig, opts: { resume: boolean }): strin
     ? 'Applies that match a known recipe in core/config.json may proceed without asking; ask before other applies only if genuinely uncertain (SKILL batching discipline still applies).'
     : 'Before the FIRST apply of each picked batch, ask one AskUserQuestion summarizing the planned diffs (one option per cluster: proceed / skip).';
   return [
-    opts.resume ? 'Resume the in-progress flaky triage below from its last state (re-read ledger.json).' : '',
+    opts.resume ? 'Resume the in-progress flaky triage below from its last state (re-read ledger.json). If verification runs were left in flight, collect their results first (check the gradle output / ledger), then continue.' : '',
     `Use the hektor-flaky-triage skill to triage this flaky run end-to-end.`,
     `s-report URL: ${config.targetUrl}`,
     `testbox: ${config.testbox}`,
@@ -20,5 +20,6 @@ export function buildPrompt(config: RunConfig, opts: { resume: boolean }): strin
     '- On every cluster state change (fixing / verifying pass n of N / green / app-bug / error) call mcp__hektor-console__cluster_status.',
     `- Apply policy: ${policy}`,
     '- Final scoreboard: emit it as your final message text (the console shows it as the report).',
+    '- NEVER end the session while verification is pending: do not background the green-proof run and stop — wait for it, collect per-test verdicts, and update cluster_status for every picked cluster to green / app-bug / error BEFORE your final message. Your final message must be the converge scoreboard, not a status update.',
   ].filter(Boolean).join('\n');
 }

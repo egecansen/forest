@@ -224,6 +224,76 @@ describe('driver core', () => {
   });
 });
 
+describe('completion honesty — unverified clusters park the run as paused', () => {
+  it('a cluster still verifying when the result succeeds parks the run as paused, not completed', async () => {
+    const run = runStore.create(cfg);
+    const done = new Promise<void>((r) =>
+      run.on('event', (e) => { if (e.type === 'status' && (e.status === 'paused' || e.status === 'completed')) r(); })
+    );
+    startDriver(run, scriptedWithHooks([
+      msg({ type: 'system', subtype: 'init', session_id: 'sess-unverified' }),
+      () => run.setClusters([{ id: 'c1', title: 'flaky selector', bucket: 'selector', tests: ['t1'], state: 'proposed' }]),
+      () => run.updateCluster('c1', { state: 'verifying', passes: 1, runs: 3 }),
+      msg({ type: 'result', subtype: 'success', total_cost_usd: 0.1, usage: { output_tokens: 10 }, result: 'partial scoreboard' }),
+    ]), { ledgerWatcherImpl: noopLedgerWatcher });
+    await done;
+
+    expect(run.snapshot.status).toBe('paused');
+    expect(run.isStopped()).toBe(false);
+    expect(
+      run.snapshot.log.some(
+        (l) => l.kind === 'warn' && l.text.includes('1 cluster(s) unverified') && l.text.includes('paused')
+      )
+    ).toBe(true);
+    expect(run.snapshot.phases.find((p) => p.id === 'report')?.status).not.toBe('done');
+    expect(run.snapshot.reportText).toBe('partial scoreboard');
+  });
+
+  it('a cluster left picked or fixing also parks the run as paused', async () => {
+    const run = runStore.create(cfg);
+    const done = new Promise<void>((r) =>
+      run.on('event', (e) => { if (e.type === 'status' && (e.status === 'paused' || e.status === 'completed')) r(); })
+    );
+    startDriver(run, scriptedWithHooks([
+      msg({ type: 'system', subtype: 'init', session_id: 'sess-unverified-2' }),
+      () => run.setClusters([
+        { id: 'c1', title: 'flaky selector', bucket: 'selector', tests: ['t1'], state: 'proposed' },
+        { id: 'c2', title: 'vrt drift', bucket: 'vrt', tests: ['t2'], state: 'proposed' },
+      ]),
+      () => run.updateCluster('c1', { state: 'fixing' }),
+      () => run.updateCluster('c2', { state: 'picked' }),
+      msg({ type: 'result', subtype: 'success', total_cost_usd: 0.1, usage: { output_tokens: 10 }, result: 'partial scoreboard' }),
+    ]), { ledgerWatcherImpl: noopLedgerWatcher });
+    await done;
+
+    expect(run.snapshot.status).toBe('paused');
+    expect(
+      run.snapshot.log.some((l) => l.kind === 'warn' && l.text.includes('2 cluster(s) unverified'))
+    ).toBe(true);
+  });
+
+  it('all clusters terminal (green/app-bug/skipped/proposed-only) still completes as today', async () => {
+    const run = runStore.create(cfg);
+    const done = new Promise<void>((r) => run.on('event', (e) => { if (e.type === 'status' && e.status === 'completed') r(); }));
+    startDriver(run, scriptedWithHooks([
+      msg({ type: 'system', subtype: 'init', session_id: 'sess-verified' }),
+      () => run.setClusters([
+        { id: 'c1', title: 'fixed selector', bucket: 'selector', tests: ['t1'], state: 'green' },
+        { id: 'c2', title: 'real app bug', bucket: 'likely-bug', tests: ['t2'], state: 'app-bug' },
+        { id: 'c3', title: 'not picked', bucket: 'infra', tests: ['t3'], state: 'skipped' },
+        { id: 'c4', title: 'never picked', bucket: 'easy-fix', tests: ['t4'], state: 'proposed' },
+      ]),
+      msg({ type: 'result', subtype: 'success', total_cost_usd: 0.1, usage: { output_tokens: 10 }, result: 'full scoreboard' }),
+    ]), { ledgerWatcherImpl: noopLedgerWatcher });
+    await done;
+
+    expect(run.snapshot.status).toBe('completed');
+    expect(run.snapshot.phases.find((p) => p.id === 'report')?.status).toBe('done');
+    expect(run.snapshot.reportText).toBe('full scoreboard');
+    expect(run.snapshot.log.some((l) => l.kind === 'warn' && l.text.includes('unverified'))).toBe(false);
+  });
+});
+
 describe('post-pick phase gating', () => {
   it('a rerun.sh EXECUTED before any AskUserQuestion does not advance verify (or pick) — the kit\'s early confirmation rerun leaves cluster/ingest as the visible active phase', async () => {
     const run = runStore.create(cfg);

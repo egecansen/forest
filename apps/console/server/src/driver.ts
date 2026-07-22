@@ -224,13 +224,33 @@ export function startDriver(
           if (typeof r.usage?.output_tokens === 'number') run.raiseTokens(r.usage.output_tokens);
           run.setTelemetry({ thinking: false });
           if (r.subtype === 'success') {
-            advancePhase(run, 'report');
-            run.setPhase('report', 'done');
-            if (r.result) {
-              run.log({ kind: 'success', text: r.result.slice(0, 2000) });
-              run.setReportText(r.result);
+            // Completion honesty: a session can end its stream with a
+            // `result` success while a green-proof verification run was only
+            // backgrounded, not awaited — the SDK session closing doesn't
+            // mean the picked clusters actually converged. Any cluster still
+            // in-flight (picked/fixing/verifying) means this "success" is
+            // really an unfinished session, not a completed triage — park it
+            // as 'paused' (resumable via the existing /resume route, which
+            // re-enters the same sessionId) instead of marking it done.
+            const unverified = run.snapshot.clusters.filter(
+              (c) => c.state === 'picked' || c.state === 'fixing' || c.state === 'verifying'
+            );
+            if (unverified.length > 0) {
+              if (r.result) run.setReportText(r.result);
+              run.log({
+                kind: 'warn',
+                text: `session ended with ${unverified.length} cluster(s) unverified — parked as paused; resume to collect verdicts`,
+              });
+              run.setStatus('paused');
+            } else {
+              advancePhase(run, 'report');
+              run.setPhase('report', 'done');
+              if (r.result) {
+                run.log({ kind: 'success', text: r.result.slice(0, 2000) });
+                run.setReportText(r.result);
+              }
+              run.finish(true);
             }
-            run.finish(true);
           } else if (pausing) {
             run.setStatus('paused');
           } else {
