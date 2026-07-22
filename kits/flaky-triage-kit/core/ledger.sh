@@ -125,13 +125,13 @@ case "$CMD" in
     jq -e 'type=="object" and (.clusters|type=="array") and (.events|type=="array")' "$FILE" >/dev/null \
       || die "not a ledger: missing clusters/events arrays"
     BAD="$(jq -r '[.clusters[] | select(
-        (.id? // "" | test("'"$ID_RE"'") | not) or
+        ((.id? // "" | test("'"$ID_RE"'") | not) or (.id? // "" | test("\n"))) or
         ((.status? // "proposed") as $s | ["proposed","selected","applied","green","deferred","flagged","resolved-upstream"] | index($s) | not) or
         ((.title? // "" | length) > 80) or ((.detail? // "" | length) > 600) or
         ((.signature? // "" | length) > 200) or ((.fixVsBug? // "" | length) > 40) or
         (has("passes") and has("runs") and .passes > .runs) or
         ((.tests? // []) | any(.[];
-            ((.fqcn? // "" | test("'"$FQCN_RE"'")) | not) or
+            (((.fqcn? // "" | test("'"$FQCN_RE"'")) | not) or (.fqcn? // "" | test("\n"))) or
             (has("status") and ((.status) as $ts | (["red","green","skipped"] | index($ts) | not)))))
       ) | .id // "?"] | join(",")' "$FILE" 2>/dev/null)" || die "validate: unreadable/malformed ledger"
     [ -z "$BAD" ] || die "schema violations in clusters: $BAD"

@@ -112,6 +112,17 @@ CORRUPT4="$TMP/corrupt-caps2.json"
 jq -n --arg fvb "$(printf 'x%.0s' {1..41})" '{run:{},clusters:[{id:"ccapy",status:"proposed",tests:[],fixVsBug:$fvb}],events:[]}' > "$CORRUPT4"
 expect 65 "validate catches oversized fixVsBug in schema" -- "$LEDGER" validate "$CORRUPT4"
 
+# --- fix 8: validate must reject trailing-newline-corrupted id and tests[].fqcn
+CORRUPT5="$TMP/corrupt-trailing-newline.json"
+jq -n '{run:{},clusters:[{id:"abc\n",status:"proposed",tests:[{fqcn:"com.x.Foo\n"}]}],events:[]}' > "$CORRUPT5"
+expect 65 "validate rejects trailing-newline-corrupted id" -- "$LEDGER" validate "$CORRUPT5"
+CORRUPT6="$TMP/corrupt-fqcn-newline.json"
+jq -n '{run:{},clusters:[{id:"valid-id",status:"proposed",tests:[{fqcn:"com.x.Foo\n"}]}],events:[]}' > "$CORRUPT6"
+expect 65 "validate rejects trailing-newline-corrupted fqcn" -- "$LEDGER" validate "$CORRUPT6"
+CLEAN7="$TMP/clean-no-newline.json"
+jq -n '{run:{},clusters:[{id:"valid-id",status:"proposed",tests:[{fqcn:"com.x.Foo"}]}],events:[]}' > "$CLEAN7"
+expect 0 "validate accepts clean id and fqcn without newline" -- "$LEDGER" validate "$CLEAN7"
+
 # --- minor: named missing suite cases
 expect 0 "bare-id upsert succeeds (explicit minor case)" -- "$LEDGER" cluster-upsert "$F" cminor1
 GF="$TMP/greengreen.json"
