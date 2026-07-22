@@ -9,6 +9,11 @@ export interface ConsoleConfig {
   es: { url: string; index: string; username?: string; password?: string };
   reportBase: string;
   pollMs: number;
+  /** Selenoid session-grid URL — a live link, not a secret; shown in the run
+   *  console header while a run is live so the operator can jump straight to
+   *  the browser session. Optional: unset when the console isn't wired up
+   *  to a Selenoid grid. */
+  selenoidUrl?: string;
 }
 
 const home = () => process.env.HEKTOR_CONSOLE_HOME ?? path.join(os.homedir(), '.hektor-console');

@@ -1,4 +1,5 @@
 import type { LogEntry, PhaseState, RunSnapshot } from './types';
+import { isTerminalStatus } from './useRunStream';
 
 /**
  * True when a log entry's text reads like the engine hit a rate limit or ran
@@ -48,6 +49,15 @@ export function runStatusTone(status: RunSnapshot['status']): 'live' | 'ok' | 'e
     default:
       return 'idle';
   }
+}
+
+/**
+ * True while a run is genuinely live: not a read-only (history) view, and not
+ * yet in a terminal status. Drives "poll every 10s while live, else fetch
+ * once" decisions (e.g. the Files tab's working-tree diff poller).
+ */
+export function isRunLive(status: RunSnapshot['status'], readOnly: boolean): boolean {
+  return !readOnly && !isTerminalStatus(status);
 }
 
 /** Where a phase sits relative to "has it had a chance to produce output yet". */

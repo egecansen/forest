@@ -126,6 +126,9 @@ export interface Cluster {
   passes?: number;       // green-proof progress: passes so far
   runs?: number;         // green-proof target N
   note?: string;         // short status detail ("fixed selector, verifying")
+  /** Longer evidence/cause explanation shown in the Clusters tab's expanded
+   *  row: the failing signature, why it broke, and the intended fix approach. */
+  detail?: string;
 }
 
 export interface RunConfig {
@@ -219,4 +222,18 @@ export interface BrowseResult {
   path: string;
   parent: string | null;
   dirs: { name: string; path: string }[];
+}
+
+/** One changed path from `git diff --name-status` (GET /api/runs/:runId/worktree). */
+export interface WorktreeFile {
+  status: string; // git's single-letter status code, e.g. "M", "A", "D", "R100"
+  path: string;
+}
+
+/** Working-tree diff vs HEAD for a run's project repo — the Files tab's
+ *  primary content (see FilesTab.tsx). */
+export interface WorktreeResult {
+  files: WorktreeFile[];
+  diff: string;
+  truncated: boolean;
 }

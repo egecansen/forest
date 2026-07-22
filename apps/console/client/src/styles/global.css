@@ -1862,6 +1862,12 @@ textarea {
   box-shadow: 0 0 18px rgba(239, 68, 68, 0.25);
 }
 
+/* Ghost link-button variant of .icon-btn — an <a>, not a <button>, so it
+   needs its own underline reset (the rest of .icon-btn's chrome applies as-is). */
+.icon-btn.selenoid-link {
+  text-decoration: none;
+}
+
 /* ─── NOW PLAYING strip (between term-header and tab-bar) ─────────────── */
 .now-playing {
   display: grid;
@@ -2921,115 +2927,269 @@ textarea {
 }
 
 /* ─── Clusters tab ────────────────────────────────────────────────────── */
-.clusters-table {
-  width: 100%;
-  border-collapse: collapse;
+.clusters-list {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
   font-family: var(--mono);
   font-size: 12.5px;
 }
 
-.clusters-table th {
-  text-align: left;
-  padding: 8px 10px;
-  font-size: 10.5px;
-  letter-spacing: 0.08em;
-  text-transform: uppercase;
-  color: var(--muted-2);
-  border-bottom: 1px solid var(--border-strong);
-  font-weight: 600;
+.cluster-row {
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--surface-2);
+  overflow: hidden;
 }
 
-.clusters-table td {
-  padding: 10px;
-  border-bottom: 1px solid var(--border);
+.cluster-row-head {
+  display: grid;
+  grid-template-columns: 14px auto minmax(0, 2fr) auto auto minmax(0, 1fr);
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  padding: 10px 12px;
+  background: none;
+  border: none;
+  font: inherit;
   color: var(--text);
-  vertical-align: middle;
+  text-align: left;
+  cursor: pointer;
+  box-shadow: inset 2px 0 0 transparent;
 }
 
-.clusters-table tr:hover td {
+.cluster-row-head:hover {
   background: rgba(var(--raise-rgb), 0.04);
+}
+
+.cluster-chevron {
+  width: 12px;
+  text-align: center;
+  font-weight: 700;
+  color: var(--muted-2);
+  transition: transform 0.15s ease;
 }
 
 .cluster-id {
   color: var(--muted-2);
   font-size: 11.5px;
-  margin-right: 2px;
+  white-space: nowrap;
 }
 
-/* Row tints mirror the builds board (`.board-table tr.is-*`): a tinted
+.cluster-title-clamp {
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+  color: var(--text);
+  line-height: 1.4;
+}
+
+.cluster-bucket,
+.cluster-tests-count {
+  color: var(--muted);
+  font-size: 11.5px;
+  white-space: nowrap;
+}
+
+.cluster-state-chip {
+  text-align: right;
+  white-space: nowrap;
+}
+
+.cluster-row-body {
+  padding: 2px 16px 14px 38px;
+  border-top: 1px solid var(--border);
+  animation: paneFade 0.2s ease-out;
+}
+
+.cluster-full-title {
+  color: var(--text);
+  font-size: 13px;
+  line-height: 1.4;
+  margin: 10px 0 8px;
+}
+
+.cluster-detail {
+  white-space: pre-wrap;
+  margin: 0 0 12px;
+  padding: 10px 12px;
+}
+
+.cluster-test-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.cluster-test-item {
+  font-size: 11.5px;
+  color: var(--muted);
+  user-select: text;
+}
+
+/* Row tints mirror the builds board (`.board-table tr.is-*`): a tinted head
    background + an inset left rail in the row's tone, so a cluster's
-   disposition reads at a glance down the whole table. */
-.clusters-table tr.cluster-green td {
+   disposition reads at a glance down the list. */
+.cluster-row.cluster-green .cluster-row-head {
   background: rgba(163, 193, 48, 0.08);
   color: var(--ok);
-}
-.clusters-table tr.cluster-green td:first-child {
   box-shadow: inset 2px 0 0 var(--ok);
 }
 
-.clusters-table tr.cluster-app-bug td {
+.cluster-row.cluster-app-bug .cluster-row-head {
   background: rgba(239, 68, 68, 0.06);
   color: var(--err);
-}
-.clusters-table tr.cluster-app-bug td:first-child {
   box-shadow: inset 2px 0 0 var(--err);
 }
 
-.clusters-table tr.cluster-error td {
+.cluster-row.cluster-error .cluster-row-head {
   background: rgba(245, 158, 11, 0.08);
   color: var(--warn);
-}
-.clusters-table tr.cluster-error td:first-child {
   box-shadow: inset 2px 0 0 var(--warn);
 }
 
 /* Active work (fixing/verifying) — accent-tinted like the board's in-progress row. */
-.clusters-table tr.cluster-fixing td,
-.clusters-table tr.cluster-verifying td {
+.cluster-row.cluster-fixing .cluster-row-head,
+.cluster-row.cluster-verifying .cluster-row-head {
   background: var(--accent-tint);
   color: var(--accent-ink);
-}
-.clusters-table tr.cluster-fixing td:first-child,
-.clusters-table tr.cluster-verifying td:first-child {
   box-shadow: inset 2px 0 0 var(--accent);
 }
 
 /* Picked (queued to work) — a faint hint of the same accent, no full tint. */
-.clusters-table tr.cluster-picked td:first-child {
+.cluster-row.cluster-picked .cluster-row-head {
   box-shadow: inset 2px 0 0 var(--border-strong);
 }
 
 /* Skipped — dimmed, out of the running. */
-.clusters-table tr.cluster-skipped td {
+.cluster-row.cluster-skipped .cluster-row-head {
   color: var(--muted-3);
 }
 
-/* ─── Files & Tests tab ───────────────────────────────────────────────── */
-.files-tab {
-  display: grid;
-  grid-template-columns: 1fr 1fr;
-  gap: 20px;
-  height: 100%;
-}
-
-.files-pane {
+/* ─── Files tab: working-tree diff (primary content) ──────────────────── */
+.worktree-tab {
   display: flex;
   flex-direction: column;
+  gap: 14px;
+  height: 100%;
+  overflow-y: auto;
+}
+
+.worktree-summary {
+  font-family: var(--mono);
+  font-size: 12.5px;
+  color: var(--muted);
+  padding: 2px 2px 0;
+}
+
+.worktree-body {
+  display: grid;
+  grid-template-columns: minmax(180px, 260px) 1fr;
+  gap: 14px;
+  min-height: 0;
+}
+
+.worktree-namestatus {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
   border: 1px solid var(--border);
   border-radius: 10px;
   background: var(--surface-2);
-  overflow: hidden;
+  padding: 6px;
+  overflow-y: auto;
+  align-self: start;
+  max-height: 480px;
 }
 
-.files-pane-head {
+.worktree-file-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  padding: 6px 8px;
+  border-radius: 6px;
+  border: none;
+  background: none;
+  font: inherit;
+  font-family: var(--mono);
+  font-size: 12px;
+  color: var(--text);
+  text-align: left;
+  cursor: pointer;
+}
+.worktree-file-row:hover {
+  background: rgba(var(--raise-rgb), 0.05);
+}
+.worktree-file-status {
+  width: 18px;
+  text-align: center;
+  font-weight: 700;
+  color: var(--muted-2);
+}
+.worktree-file-row.status-M .worktree-file-status { color: var(--warn); }
+.worktree-file-row.status-A .worktree-file-status { color: var(--ok); }
+.worktree-file-row.status-D .worktree-file-status { color: var(--err); }
+.worktree-file-row.status-R .worktree-file-status { color: var(--accent-ink); }
+.worktree-file-path {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.worktree-diff {
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  max-height: 480px;
+  overflow: auto;
+}
+
+.worktree-hunk + .worktree-hunk {
+  border-top: 1px dashed var(--border);
+  margin-top: 6px;
+  padding-top: 6px;
+}
+
+.diff-line {
+  white-space: pre;
+  padding: 0 4px;
+}
+.diff-line.diff-add  { background: rgba(163, 193, 48, 0.12); color: var(--ok); }
+.diff-line.diff-del  { background: rgba(239, 68, 68, 0.1); color: var(--err); }
+.diff-line.diff-hunk { color: var(--accent-ink); font-weight: 600; }
+.diff-line.diff-meta { color: var(--muted-2); }
+.diff-line.diff-context { color: var(--muted); }
+
+.worktree-truncated {
+  margin-top: -6px;
+}
+
+.files-empty-mini {
+  color: var(--muted-2);
+  font-style: italic;
+  padding: 16px 12px;
+  font-size: 12px;
+}
+
+/* ─── Files tab: agent-touched files (small secondary section) ────────── */
+.files-secondary {
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--surface-2);
+  padding: 4px 0;
+}
+
+.files-secondary-head {
   display: flex;
   justify-content: space-between;
   align-items: center;
-  padding: 10px 14px;
-  background: var(--bg-2);
-  border-bottom: 1px solid var(--border);
+  padding: 8px 14px;
   font-family: var(--mono);
-  font-size: 11.5px;
+  font-size: 10.5px;
   text-transform: uppercase;
   letter-spacing: 0.12em;
   color: var(--muted);
@@ -3050,19 +3210,10 @@ textarea {
   letter-spacing: 0;
 }
 
-.files-tree {
-  flex: 1;
-  overflow-y: auto;
-  padding: 10px 8px;
-  font-family: var(--mono);
-  font-size: 12.5px;
-}
-
-.files-empty-mini {
-  color: var(--muted-2);
-  font-style: italic;
-  padding: 16px 12px;
-  font-size: 12px;
+.files-secondary-list {
+  list-style: none;
+  margin: 0;
+  padding: 2px 8px;
 }
 
 .tree-line {
@@ -3072,78 +3223,9 @@ textarea {
   padding: 4px 8px;
   border-radius: 4px;
   white-space: nowrap;
-  animation: paneFade 0.25s ease-out;
-}
-.tree-line.dir {
-  color: var(--muted);
-}
-/* Dir rows are <button> for collapse-toggle — strip native button chrome. */
-button.tree-line.dir {
-  width: 100%;
-  background: none;
-  border: none;
-  font: inherit;
-  color: var(--muted);
-  text-align: left;
-  cursor: pointer;
-}
-button.tree-line.dir:hover {
-  background: rgba(var(--raise-rgb), 0.03);
-}
-button.tree-line.dir .tree-glyph {
-  transition: color 0.15s ease;
-}
-button.tree-line.dir:hover .tree-glyph {
-  color: var(--muted);
-}
-.tree-line.file {
-  color: var(--text);
-}
-.tree-line.file:hover {
-  background: rgba(var(--raise-rgb), 0.03);
-}
-/* File rows are <button> for click-to-view — strip native button chrome. */
-button.tree-line.file {
-  width: 100%;
-  background: none;
-  border: none;
-  font: inherit;
-  color: var(--text);
-  text-align: left;
-  cursor: pointer;
-}
-.tree-line.file.is-selected {
-  background: var(--accent-tint);
-  color: var(--text);
-}
-
-/* File-content viewer (right Files pane) */
-.file-viewer-head .file-viewer-close {
-  background: none;
-  border: none;
-  color: var(--muted);
-  cursor: pointer;
-  font-size: 16px;
-  line-height: 1;
-  padding: 0 2px;
-  margin-left: 4px;
-}
-.file-viewer-head .file-viewer-close:hover {
-  color: var(--text);
-}
-.file-viewer-body {
-  flex: 1;
-  overflow: auto;
-}
-.file-viewer-pre {
-  margin: 0;
-  padding: 12px 14px;
   font-family: var(--mono);
   font-size: 12px;
-  line-height: 1.5;
-  color: var(--muted);
-  white-space: pre;
-  tab-size: 2;
+  color: var(--text);
 }
 
 .tree-glyph {
@@ -3162,33 +3244,24 @@ button.tree-line.file {
   text-overflow: ellipsis;
 }
 
-.tree-meta {
-  margin-left: auto;
-  color: var(--muted-2);
-  font-size: 11px;
-}
-
 .tests-list {
   list-style: none;
-  padding: 8px;
+  padding: 2px 8px 6px;
   margin: 0;
-  flex: 1;
-  overflow-y: auto;
 }
 
 .test-row {
-  display: grid;
-  grid-template-columns: 16px 1fr auto;
+  display: flex;
   align-items: center;
   gap: 10px;
-  padding: 7px 10px;
+  padding: 4px 8px;
   border-radius: 4px;
-  font-size: 12.5px;
-  animation: paneFade 0.25s ease-out;
+  font-family: var(--mono);
+  font-size: 12px;
 }
-.test-row:hover { background: rgba(var(--raise-rgb), 0.03); }
 
 .test-status {
+  width: 12px;
   text-align: center;
   font-weight: 700;
 }
@@ -3202,9 +3275,17 @@ button.tree-line.file {
   text-overflow: ellipsis;
 }
 
-.test-path {
-  color: var(--muted-2);
-  font-size: 11px;
+/* file-viewer-pre: shared mono/preformatted block styling, reused by both
+   the worktree diff (above) and the Report tab's final-message block. */
+.file-viewer-pre {
+  margin: 0;
+  padding: 12px 14px;
+  font-family: var(--mono);
+  font-size: 12px;
+  line-height: 1.5;
+  color: var(--muted);
+  white-space: pre;
+  tab-size: 2;
 }
 
 /* ─── Report tab ──────────────────────────────────────────────────────── */
@@ -3268,6 +3349,98 @@ button.tree-line.file {
   color: var(--muted-2);
   font-weight: 700;
   margin-bottom: 12px;
+}
+
+/* ─── Report tab: slim per-cluster outcome rows ────────────────────────── */
+.report-outcomes {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  font-family: var(--mono);
+  font-size: 12.5px;
+}
+
+.report-outcome-row {
+  display: grid;
+  grid-template-columns: auto auto 1fr auto;
+  align-items: center;
+  gap: 12px;
+  padding: 8px 12px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--surface-2);
+}
+
+.report-outcome-bucket {
+  color: var(--muted);
+  font-size: 11.5px;
+}
+
+.report-outcome-chip {
+  color: var(--text);
+  text-align: right;
+}
+
+.report-outcome-count {
+  color: var(--muted-2);
+  font-size: 11.5px;
+  text-align: right;
+  white-space: nowrap;
+}
+
+.report-outcome-row.cluster-green   { border-color: rgba(163, 193, 48, 0.3); }
+.report-outcome-row.cluster-green   .report-outcome-chip { color: var(--ok); }
+.report-outcome-row.cluster-app-bug { border-color: rgba(239, 68, 68, 0.3); }
+.report-outcome-row.cluster-app-bug .report-outcome-chip { color: var(--err); }
+.report-outcome-row.cluster-error   { border-color: rgba(245, 158, 11, 0.35); }
+.report-outcome-row.cluster-error   .report-outcome-chip { color: var(--warn); }
+.report-outcome-row.cluster-skipped { color: var(--muted-3); }
+
+/* ─── Report tab: minimal safe markdown renderer for the final message ── */
+.report-markdown {
+  font-family: var(--mono);
+  font-size: 13px;
+  line-height: 1.6;
+  color: var(--text);
+}
+
+.report-md-p {
+  margin: 0 0 12px;
+  white-space: pre-wrap;
+}
+.report-md-p:last-child {
+  margin-bottom: 0;
+}
+
+.report-md-list {
+  margin: 0 0 12px;
+  padding-left: 20px;
+}
+.report-md-list li {
+  margin-bottom: 4px;
+}
+
+.report-markdown strong {
+  color: var(--accent-ink);
+  font-weight: 700;
+}
+
+.report-markdown code {
+  font-family: var(--mono);
+  background: rgba(var(--raise-rgb), 0.08);
+  border-radius: 4px;
+  padding: 1px 5px;
+  font-size: 12px;
+}
+
+/* ─── Report tab: footer line ──────────────────────────────────────────── */
+.report-footer {
+  margin-top: 22px;
+  padding-top: 14px;
+  border-top: 1px solid var(--border);
+  font-family: var(--mono);
+  font-size: 12px;
+  color: var(--muted-2);
 }
 
 /* ─── Readability fallback: reduced motion ────────────────────────────── */

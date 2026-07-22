@@ -122,6 +122,9 @@ export interface Cluster {
   passes?: number;       // green-proof progress: passes so far
   runs?: number;         // green-proof target N
   note?: string;         // short status detail ("fixed selector, verifying")
+  /** Longer evidence/cause explanation shown in the Clusters tab's expanded
+   *  row: the failing signature, why it broke, and the intended fix approach. */
+  detail?: string;
 }
 
 export interface RunConfig {

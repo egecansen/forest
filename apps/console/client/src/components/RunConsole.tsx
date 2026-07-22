@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import type { RunConfig, RunSnapshot } from '../types';
 import { useRunStream, isTerminalStatus } from '../useRunStream';
-import { findLatestRateLimitWarning, findLatestError, runStatusTone } from '../consoleAlerts';
+import { findLatestRateLimitWarning, findLatestError, isRunLive, runStatusTone } from '../consoleAlerts';
 import { TerminalLog } from './TerminalLog';
 import { Sidebar } from './Sidebar';
 import { Footer } from './Footer';
@@ -38,6 +38,54 @@ interface Props {
 
 export function RunConsole({ config, onStop, onPause, onResume, onNew, backLabel, onOpenHistory, readOnly = false, staticSnapshot }: Props) {
   const { snapshot, conn } = useRunStream(readOnly ? null : config.runId, staticSnapshot ?? null);
+
+  // Selenoid live-session link (GET /api/config's `selenoidUrl`) — a URL, not a
+  // secret, so it's fetched the same best-effort way BuildsBoard/StartScreen
+  // fetch their own slice of /api/config. Stays null (hiding the header link
+  // entirely) when the console isn't wired up to a Selenoid grid, or the
+  // fetch itself fails.
+  const [selenoidUrl, setSelenoidUrl] = useState<string | null>(null);
+  useEffect(() => {
+    let ignore = false;
+    (async () => {
+      try {
+        const res = await fetch('/api/config');
+        if (!res.ok) return;
+        const json = (await res.json()) as { selenoidUrl?: string };
+        if (!ignore) setSelenoidUrl(json.selenoidUrl ?? null);
+      } catch {
+        // Best-effort: the console still works with the selenoid link just unavailable.
+      }
+    })();
+    return () => { ignore = true; };
+  }, []);
+  const showSelenoidLink = !!selenoidUrl && (snapshot.status === 'running' || snapshot.status === 'awaiting-input');
+
+  // Files tab badge (worktree file count, not the agent-touched snapshot.files
+  // count — see the tabs[] definition below): fetched independently of
+  // whether the Files tab is the active one, so the badge stays live the
+  // whole time. Polls every 10s while the run is live; a single fetch
+  // otherwise (finished run / history view). `null` (fetch never resolved,
+  // or the endpoint 404s — e.g. a history run whose repo moved) falls back
+  // to snapshot.files.length in the badge formula.
+  const [worktreeFileCount, setWorktreeFileCount] = useState<number | null>(null);
+  useEffect(() => {
+    let ignore = false;
+    const load = async () => {
+      try {
+        const res = await fetch(`/api/runs/${config.runId}/worktree`);
+        if (!res.ok) return;
+        const json = (await res.json()) as { files?: unknown[] };
+        if (!ignore) setWorktreeFileCount(Array.isArray(json.files) ? json.files.length : null);
+      } catch {
+        // Best-effort: the badge falls back to snapshot.files.length.
+      }
+    };
+    void load();
+    if (!isRunLive(snapshot.status, readOnly)) return () => { ignore = true; };
+    const id = window.setInterval(load, 10_000);
+    return () => { ignore = true; window.clearInterval(id); };
+  }, [config.runId, readOnly, snapshot.status]);
   const logScrollRef = useRef<HTMLDivElement>(null);
   // Whether the log is pinned to the bottom. Driven by the user's own scrolling
   // (a scroll listener), NOT recomputed from the post-render delta — a batch of
@@ -166,12 +214,17 @@ export function RunConsole({ config, onStop, onPause, onResume, onNew, backLabel
 
   const reportReady = snapshot.phases.find((p) => p.id === 'report')?.status === 'done';
   const filesPhase = snapshot.phases.find((p) => p.id === 'fix');
+  const runIsLive = isRunLive(snapshot.status, readOnly);
+  // Worktree file count wins for the badge; fall back to the agent-touched
+  // snapshot.files.length when the endpoint hasn't resolved (or 404s — e.g. a
+  // history run whose repo moved).
+  const filesBadgeCount = worktreeFileCount ?? snapshot.files.length;
 
   const tabs: TabDef[] = [
     { id: 'log',      label: 'Log',      icon: '›', badge: null },
     { id: 'clusters', label: 'Clusters', icon: '◫', badge: snapshot.clusters.length || null },
     { id: 'timeline', label: 'Timeline', icon: '╱', badge: null },
-    { id: 'files',    label: 'Files',    icon: '⌗', badge: snapshot.files.length || null },
+    { id: 'files',    label: 'Files',    icon: '⌗', badge: filesBadgeCount || null },
     { id: 'report',   label: 'Report',   icon: '◈', badge: reportReady ? 1 : null, disabled: !reportReady && snapshot.status !== 'running' && snapshot.status !== 'completed' && snapshot.status !== 'idle' },
   ];
 
@@ -217,6 +270,16 @@ export function RunConsole({ config, onStop, onPause, onResume, onNew, backLabel
           <div className="term-controls">
             <span className="term-path">{path}</span>
             <ThemeToggle />
+            {showSelenoidLink && (
+              <a
+                className="icon-btn selenoid-link"
+                href={selenoidUrl!}
+                target="_blank"
+                rel="noreferrer"
+              >
+                selenoid ↗
+              </a>
+            )}
             {onOpenHistory && (
               <button type="button" className="icon-btn" onClick={() => setHistoryOpen(true)}>
                 recent runs
@@ -311,7 +374,7 @@ export function RunConsole({ config, onStop, onPause, onResume, onNew, backLabel
             )}
             {activeTab === 'files' && (
               <div className="term-pane-inner">
-                <FilesTab files={snapshot.files} tests={snapshot.tests} phase={filesPhase} runId={config.runId} />
+                <FilesTab files={snapshot.files} tests={snapshot.tests} phase={filesPhase} runId={config.runId} live={runIsLive} />
               </div>
             )}
             {activeTab === 'report' && (
@@ -322,6 +385,7 @@ export function RunConsole({ config, onStop, onPause, onResume, onNew, backLabel
                   reportIsReal={(snapshot.reportUrl ?? '').startsWith('/api/')}
                   clusters={snapshot.clusters}
                   reportText={snapshot.reportText}
+                  telemetry={snapshot.telemetry}
                 />
               </div>
             )}

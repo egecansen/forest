@@ -23,6 +23,20 @@ describe('console-config', () => {
     expect(cfg.jenkins.jobUrls).toHaveLength(1);
   });
 
+  it('loads an optional selenoidUrl when present, and leaves it undefined when absent', async () => {
+    await mkTmp();
+    process.env.HEKTOR_CONSOLE_HOME = tmp;
+    await fs.writeFile(path.join(tmp, 'config.json'), JSON.stringify({
+      repoPath: '/tmp/web-test', testbox: 'tb161',
+      jenkins: { baseUrl: 'https://jenkins.example', jobUrls: ['https://jenkins.example/job/web-test-s4-flaky'] },
+      es: { url: 'https://es.example', index: 'web-report' },
+      reportBase: 'https://report.example', pollMs: 15000,
+      selenoidUrl: 'https://selenoid.example/ui/#/sessions',
+    }));
+    const cfg = await loadConsoleConfig();
+    expect(cfg.selenoidUrl).toBe('https://selenoid.example/ui/#/sessions');
+  });
+
   it('imports jenkins + es from a quickly config.json', async () => {
     await mkTmp();
     const q = path.join(tmp, 'quickly.json');

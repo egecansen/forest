@@ -12,6 +12,7 @@ import { listDirectories } from './browse.js';
 import { isAllowedHost } from './host-guard.js';
 import { saveRun, listRuns, loadRun, isSafeRunId, resolveInsideRoot, resolveRunsDirSync } from './persistence.js';
 import { loadConsoleConfig, kitAllowlist } from './console-config.js';
+import { getWorktree } from './worktree.js';
 import { BuildsPoller } from './trackers/poller.js';
 import { fetchJenkinsUser } from './trackers/jenkins.js';
 import { notifyTerminal } from './notify.js';
@@ -119,6 +120,9 @@ async function main() {
       // An identity, not a secret — the client uses it purely to power the
       // builds board's "only mine" filter (see BuildsBoard.tsx).
       jenkinsUser,
+      // A URL, not a secret — powers the run console's "selenoid ↗" link
+      // (see RunConsole.tsx). Omitted (undefined) when unconfigured.
+      selenoidUrl: consoleConfig.selenoidUrl,
     });
   });
 
@@ -325,6 +329,27 @@ async function main() {
       });
     } catch {
       res.status(404).json({ error: 'not found' });
+    }
+  });
+
+  // Working-tree diff for the Files-tab diff viewer: what's changed on disk
+  // vs HEAD, so an operator can review before committing. Mirrors the /file
+  // route's guards (isSafeRunId + projectPathForRun) — same sandboxing
+  // rationale, read-only (getWorktree never mutates the repo).
+  app.get('/api/runs/:runId/worktree', async (req, res) => {
+    if (!isSafeRunId(req.params.runId)) {
+      res.status(400).json({ error: 'invalid run id' });
+      return;
+    }
+    const projectPath = await projectPathForRun(req.params.runId);
+    if (!projectPath) {
+      res.status(404).json({ error: 'unknown run' });
+      return;
+    }
+    try {
+      res.json(await getWorktree(projectPath));
+    } catch {
+      res.status(500).json({ error: 'failed to read working tree' });
     }
   });
 

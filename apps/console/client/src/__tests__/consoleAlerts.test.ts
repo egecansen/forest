@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { findLatestRateLimitWarning, isRateLimitLog, phaseWaitState } from '../consoleAlerts';
+import { findLatestRateLimitWarning, isRateLimitLog, isRunLive, phaseWaitState } from '../consoleAlerts';
 import type { LogEntry, PhaseState } from '../types';
 
 describe('isRateLimitLog', () => {
@@ -64,5 +64,25 @@ describe('phaseWaitState', () => {
     expect(phaseWaitState({ ...base, status: 'done' })).toBe('settled');
     expect(phaseWaitState({ ...base, status: 'failed' })).toBe('settled');
     expect(phaseWaitState({ ...base, status: 'skipped' })).toBe('settled');
+  });
+});
+
+describe('isRunLive', () => {
+  it('is live for running/awaiting-input/paused/preparing, not read-only', () => {
+    expect(isRunLive('running', false)).toBe(true);
+    expect(isRunLive('awaiting-input', false)).toBe(true);
+    expect(isRunLive('paused', false)).toBe(true);
+    expect(isRunLive('preparing', false)).toBe(true);
+  });
+
+  it('is never live in read-only (history) view, regardless of status', () => {
+    expect(isRunLive('running', true)).toBe(false);
+    expect(isRunLive('completed', true)).toBe(false);
+  });
+
+  it('is never live once the run reaches a terminal status', () => {
+    expect(isRunLive('completed', false)).toBe(false);
+    expect(isRunLive('failed', false)).toBe(false);
+    expect(isRunLive('cancelled', false)).toBe(false);
   });
 });

@@ -1,8 +1,18 @@
-import { describe, expect, it } from 'vitest';
-import { render, screen } from '@testing-library/react';
+import { describe, expect, it, vi } from 'vitest';
+import { render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { RunConsole } from '../components/RunConsole';
 import type { RunConfig, RunSnapshot } from '../types';
+
+function stubConfigFetch(json: unknown) {
+  vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => {
+    const url = String(input);
+    if (url.includes('/api/config')) return new Response(JSON.stringify(json), { status: 200 });
+    // Any other fetch (e.g. the Files-tab worktree poll) — a generic empty ok
+    // response is enough; these tests don't assert on it.
+    return new Response(JSON.stringify({ files: [], diff: '', truncated: false }), { status: 200 });
+  }));
+}
 
 const CONFIG: RunConfig = {
   projectPath: '/repo/web-test',
@@ -64,8 +74,44 @@ describe('RunConsole clusters tab', () => {
   });
 });
 
+describe('RunConsole selenoid link', () => {
+  it('shows a ghost "selenoid ↗" link opening selenoidUrl in a new tab while the run is live', async () => {
+    stubConfigFetch({ configured: true, selenoidUrl: 'https://selenoid.example/ui/#/sessions' });
+    const snap = snapshot({ status: 'running' });
+    render(<RunConsole config={CONFIG} onNew={() => {}} readOnly staticSnapshot={snap} />);
+    const link = await screen.findByRole('link', { name: /selenoid/i });
+    expect(link).toHaveAttribute('href', 'https://selenoid.example/ui/#/sessions');
+    expect(link).toHaveAttribute('target', '_blank');
+    expect(link).toHaveAttribute('rel', expect.stringContaining('noreferrer'));
+  });
+
+  it('also shows the link while awaiting-input', async () => {
+    stubConfigFetch({ configured: true, selenoidUrl: 'https://selenoid.example/ui/#/sessions' });
+    const snap = snapshot({ status: 'awaiting-input' });
+    render(<RunConsole config={CONFIG} onNew={() => {}} readOnly staticSnapshot={snap} />);
+    expect(await screen.findByRole('link', { name: /selenoid/i })).toBeInTheDocument();
+  });
+
+  it('hides the link once the run is no longer running/awaiting-input', async () => {
+    stubConfigFetch({ configured: true, selenoidUrl: 'https://selenoid.example/ui/#/sessions' });
+    const snap = snapshot({ status: 'completed' });
+    render(<RunConsole config={CONFIG} onNew={() => {}} readOnly staticSnapshot={snap} />);
+    // Give the config fetch a tick to resolve before asserting absence.
+    await waitFor(() => expect(vi.mocked(fetch)).toHaveBeenCalled());
+    expect(screen.queryByRole('link', { name: /selenoid/i })).not.toBeInTheDocument();
+  });
+
+  it('hides the link entirely when the config has no selenoidUrl', async () => {
+    stubConfigFetch({ configured: true });
+    const snap = snapshot({ status: 'running' });
+    render(<RunConsole config={CONFIG} onNew={() => {}} readOnly staticSnapshot={snap} />);
+    await waitFor(() => expect(vi.mocked(fetch)).toHaveBeenCalled());
+    expect(screen.queryByRole('link', { name: /selenoid/i })).not.toBeInTheDocument();
+  });
+});
+
 describe('RunConsole files tab badge', () => {
-  it('counts only files — a populated tests array never inflates the badge', () => {
+  it('counts only files — a populated tests array never inflates the badge (worktree endpoint unmocked here, so it falls back to snapshot.files.length)', () => {
     const snap = snapshot({
       files: [
         { id: 'f1', ts: 1, path: 'tests/e2e/specs/a.spec.ts', kind: 'created' },
@@ -78,6 +124,39 @@ describe('RunConsole files tab badge', () => {
       ],
     });
     render(<RunConsole config={CONFIG} onNew={() => {}} readOnly staticSnapshot={snap} />);
+    expect(screen.getByRole('tab', { name: /files/i })).toHaveTextContent('2');
+  });
+
+  it('prefers the worktree file count over snapshot.files.length once the endpoint resolves', async () => {
+    vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes('/worktree')) {
+        return new Response(
+          JSON.stringify({
+            files: [{ status: 'M', path: 'a' }, { status: 'M', path: 'b' }, { status: 'A', path: 'c' }],
+            diff: '',
+            truncated: false,
+          }),
+          { status: 200 }
+        );
+      }
+      return new Response(JSON.stringify({ configured: false }), { status: 200 });
+    }));
+    const snap = snapshot({ files: [{ id: 'f1', ts: 1, path: 'x', kind: 'created' }] });
+    render(<RunConsole config={CONFIG} onNew={() => {}} readOnly staticSnapshot={snap} />);
+    await waitFor(() => expect(screen.getByRole('tab', { name: /files/i })).toHaveTextContent('3'));
+  });
+
+  it('falls back to snapshot.files.length when the worktree endpoint is unavailable (e.g. a history run whose repo moved)', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => new Response('not found', { status: 404 })));
+    const snap = snapshot({
+      files: [
+        { id: 'f1', ts: 1, path: 'x', kind: 'created' },
+        { id: 'f2', ts: 2, path: 'y', kind: 'created' },
+      ],
+    });
+    render(<RunConsole config={CONFIG} onNew={() => {}} readOnly staticSnapshot={snap} />);
+    await waitFor(() => expect(vi.mocked(fetch)).toHaveBeenCalled());
     expect(screen.getByRole('tab', { name: /files/i })).toHaveTextContent('2');
   });
 });

@@ -42,9 +42,14 @@ test('board → deep link → demo triage run → clusters → pick → completi
   await page.getByRole('button', { name: /start triage/i }).click();
 
   // The demo driver publishes a cluster, then asks the pick — a genuine
-  // pause on the operator, not a logged-only tool call:
-  await expect(page.getByText(/needs a decision/i)).toBeVisible({ timeout: 15000 });
-  await page.getByRole('button', { name: /onetrust/i }).click();
+  // pause on the operator, not a logged-only tool call. Scoped to the
+  // question dock's region (not just a role+name match on "onetrust")
+  // because the Clusters tab's cluster row is now ALSO a button whose
+  // accessible name includes the cluster id "onetrust" (its expand/collapse
+  // affordance — see ClustersTab.tsx) — an unscoped query would be ambiguous.
+  const questionDock = page.getByRole('region', { name: /needs a decision/i });
+  await expect(questionDock).toBeVisible({ timeout: 15000 });
+  await questionDock.getByRole('button', { name: /onetrust/i }).click();
   await page.getByRole('button', { name: /send answer/i }).click();
 
   // Answering unblocks the demo driver: it fixes + verifies the picked

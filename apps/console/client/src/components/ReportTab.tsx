@@ -1,6 +1,9 @@
-import type { Cluster } from '../types';
-import { ClustersTab } from './ClustersTab';
+import type { ReactNode } from 'react';
+import type { Cluster, Telemetry } from '../types';
+import { clusterStateChip } from './ClustersTab';
 import { EmptyState } from './FindingsTab';
+import { costSplit, fmtCost, fmtTokens, formatDuration } from '../telemetry-format';
+import { parseReportMarkdown, type InlineToken } from '../report-markdown';
 
 interface Props {
   reportUrl: string | null;
@@ -10,6 +13,8 @@ interface Props {
   /** The agent's final result message (server-set on a successful run via
    *  Run.setReportText — see run-store.ts / driver.ts). */
   reportText?: string;
+  /** Powers the footer's "took <elapsed> · <tokens> tok · $<cost>" line. */
+  telemetry: Telemetry;
 }
 
 type ScoreboardState = 'green' | 'app-bug' | 'error' | 'skipped';
@@ -23,9 +28,10 @@ function isScoreboardState(state: Cluster['state']): state is ScoreboardState {
  * When the run is backed by the real engine, reportUrl points at an
  * actual qa-summary-deck.html served by the server — iframe it directly.
  * Otherwise (the common triage case — reportUrl is always null once the
- * run finishes), show the cluster scoreboard + the agent's final message.
+ * run finishes), show the cluster scoreboard + slim outcome rows + the
+ * agent's final message, rendered as the triage record.
  */
-export function ReportTab({ reportUrl, reportReady, reportIsReal, clusters, reportText }: Props) {
+export function ReportTab({ reportUrl, reportReady, reportIsReal, clusters, reportText, telemetry }: Props) {
   if (reportReady && reportIsReal && reportUrl) {
     return (
       <div className="report-tab report-tab-real">
@@ -57,6 +63,8 @@ export function ReportTab({ reportUrl, reportReady, reportIsReal, clusters, repo
     { green: 0, 'app-bug': 0, error: 0, skipped: 0 } as Record<ScoreboardState, number>
   );
 
+  const cost = costSplit(telemetry).total;
+
   return (
     <div className="report-tab">
       <div className="report-section">
@@ -67,14 +75,31 @@ export function ReportTab({ reportUrl, reportReady, reportIsReal, clusters, repo
           <ReportStat label="error" value={String(counts.error)} accent={counts.error > 0 ? 'warn' : 'neutral'} />
           <ReportStat label="skipped" value={String(counts.skipped)} accent="neutral" />
         </div>
-        <ClustersTab clusters={clusters} />
+        <div className="report-outcomes">
+          {clusters.map((c) => (
+            <div key={c.id} className={`report-outcome-row cluster-${c.state}`}>
+              <span className="cluster-id">{c.id}</span>
+              <span className="report-outcome-bucket">{c.bucket}</span>
+              <span className="report-outcome-chip">{clusterStateChip(c)}</span>
+              <span className="report-outcome-count">
+                {c.tests.length} test{c.tests.length === 1 ? '' : 's'}
+              </span>
+            </div>
+          ))}
+        </div>
       </div>
 
       <div className="report-section">
         <div className="report-section-head">Final report</div>
-        {/* file-viewer-pre: reuses the Files tab's mono/preformatted block
-            styling (see FilesTab.tsx) rather than introducing a new rule. */}
-        <pre className="report-text file-viewer-pre">{reportText || 'The agent finished without a final message.'}</pre>
+        {reportText ? (
+          <ReportMarkdown text={reportText} />
+        ) : (
+          <p className="field-note">The agent finished without a final message.</p>
+        )}
+      </div>
+
+      <div className="report-footer">
+        took {formatDuration(telemetry.elapsedMs)} · {fmtTokens(telemetry.tokens)} tok · {fmtCost(cost)} — review the working-tree diff in Files before committing.
       </div>
     </div>
   );
@@ -95,4 +120,37 @@ function ReportStat({
       <div className="report-stat-value">{value}</div>
     </div>
   );
+}
+
+/** Minimal, safe markdown rendering for the agent's final report text — no
+ *  markdown library, no `dangerouslySetInnerHTML`. See report-markdown.ts
+ *  for the parser; this just turns its typed blocks into React elements, so
+ *  anything unrecognized stays literal (auto-escaped) text. */
+function ReportMarkdown({ text }: { text: string }) {
+  const blocks = parseReportMarkdown(text);
+  return (
+    <div className="report-markdown">
+      {blocks.map((block, i) =>
+        block.kind === 'bullets' ? (
+          <ul key={i} className="report-md-list">
+            {block.items.map((item, j) => (
+              <li key={j}>{renderTokens(item)}</li>
+            ))}
+          </ul>
+        ) : (
+          <p key={i} className="report-md-p">
+            {renderTokens(block.tokens)}
+          </p>
+        )
+      )}
+    </div>
+  );
+}
+
+function renderTokens(tokens: InlineToken[]): ReactNode[] {
+  return tokens.map((t, i) => {
+    if (t.kind === 'bold') return <strong key={i}>{t.value}</strong>;
+    if (t.kind === 'code') return <code key={i}>{t.value}</code>;
+    return t.value;
+  });
 }

@@ -19,6 +19,14 @@ describe('buildPrompt', () => {
     );
   });
 
+  it('instructs the agent to include a short detail per cluster in the refined set_clusters call', () => {
+    const run = runStore.create(cfg);
+    const prompt = buildPrompt(run.snapshot.config!, { resume: false });
+    expect(prompt).toContain(
+      '- As soon as core/cluster.sh gives you the mechanical first cut, call mcp__hektor-console__set_clusters with those provisional clusters (state defaults to proposed; short provisional titles are fine). After the confirmation rerun, when you have the final meaning-bucket table and BEFORE asking the pick, call set_clusters again with the refined table — it replaces the provisional one; include a short detail per cluster: the failing signature, why it broke, and the intended fix approach.'
+    );
+  });
+
   it('extends the resume line to ask the agent to collect in-flight verification results first', () => {
     const run = runStore.create(cfg);
     const prompt = buildPrompt(run.snapshot.config!, { resume: true });
