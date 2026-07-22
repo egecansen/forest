@@ -18,7 +18,7 @@ and calls these; it MUST NOT mutate state except through them (kernel P2).
 | `dom-on-failure` | test-fqcn + tb → DOM dumped **at the failure point** (runs the real test; `DomDumpOnFailure` auto-registered) | flow-gated selector breaks (payment / posting / flag-detail) that single-URL `dom-capture` can't reach (N2); **proven tb161** |
 | `rerun` | FQCN list + `tb` → pass/fail (+ flaky-confidence over N) | **I2** existence via gradle discovery · **I9** health-check tb first |
 | `apply` | a fix patch → applied in the working tree (git-tracked, clean-tree check) + diff | **I3** confined to `source_roots`, git-reversible, kit never commits · **I10** rev-pin |
-| `ledger` | read/write run state | **I5** re-derive "applied" from source, never trust ledger for safety |
+| `ledger` | read/write run state via validated subcommands (v2: cluster-upsert / cluster-state / event / validate) | **I5** re-derive "applied" from source, never trust ledger for safety · **I11** `validate --final` gates session end |
 | `summary` | ledger → convergence report | **I7** allowlist emitted fields (no raw stackTrace / PII / tokens) |
 
 ## Invariant → module index (for review)
@@ -33,7 +33,7 @@ Implemented + exercised: `ingest` (+ **N6** phantom guard & `vrt_url`) · `clust
 `rerun` · `compile` (**N6-B**) · `apply` (guards proven: confinement→77, non-unique→65) · `ledger` ·
 `summary` · `dom-capture` (**proven tb128**: 385 KB DOM, 14 `_cllpsID` ids via `getPageSource()`) ·
 `dom-on-failure` (**proven tb161**). Gradle serialized via `_lock` (**N6-A** — concurrent `--rerun-tasks`
-corruption fixed). The full `apply → compile → green-proof → converge` loop ran live on **s4-flaky-1394**
+corruption fixed). `ledger` v2 has its own test suite: `bash core/tests/ledger-test.sh` (65 cases). The full `apply → compile → green-proof → converge` loop ran live on **s4-flaky-1394**
 (e.g. `testAllCriteriaPopup` fixed + green on tb161; `testWebSuggestionMapClassifiedsResults` VRT→count refactor green).
 
 The self-protection gate guards this dir (edits need `HEKTOR_FLAKYKIT_UNLOCK=1`). Its logic is
