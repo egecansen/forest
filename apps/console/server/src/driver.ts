@@ -13,16 +13,78 @@ export type QueryFn = (args: { prompt: string; options: Record<string, unknown> 
   AsyncIterable<Record<string, unknown>> & { interrupt?: () => Promise<void> };
 export type DriverHandle = (() => void) & { pause: () => void };
 
-const PHASE_BY_SCRIPT: Array<[RegExp, PhaseId]> = [
-  [/ingest\.sh/, 'ingest'],
-  [/cluster\.sh/, 'cluster'],
-  [/(apply|compile)\.sh/, 'fix'],
-  [/(rerun|dom-capture|dom-on-failure)\.sh/, 'verify'],
-  [/summary\.sh/, 'report'],
+// Core script -> phase mapping. A core-script mention only counts when a
+// segment's FIRST command token names the script itself — not when the
+// script merely appears as an argument further along (see inferPhase below).
+const SCRIPT_PHASE: Array<[string, PhaseId]> = [
+  ['ingest.sh', 'ingest'],
+  ['cluster.sh', 'cluster'],
+  ['apply.sh', 'fix'],
+  ['compile.sh', 'fix'],
+  ['rerun.sh', 'verify'],
+  ['dom-capture.sh', 'verify'],
+  ['dom-on-failure.sh', 'verify'],
+  ['summary.sh', 'report'],
 ];
 
+// Optional interpreter / source-builtin prefixes: `bash core/rerun.sh` and
+// `. core/rerun.sh` (source) still execute the script named in the NEXT
+// token, not the prefix itself.
+const RUNNER_PREFIXES = new Set(['bash', 'sh', '.', 'source']);
+
+// A bare leading env assignment (`FOO=bar cmd`, or a whole segment that is
+// just `KIT=…`) — stripped so the segment's real command token is found.
+const ENV_ASSIGNMENT_RE = /^[A-Za-z_][A-Za-z0-9_]*=(?:"[^"]*"|'[^']*'|\S*)$/;
+
+function stripQuotes(token: string): string {
+  if (token.length >= 2) {
+    const first = token[0];
+    const last = token[token.length - 1];
+    if ((first === '"' && last === '"') || (first === "'" && last === "'")) return token.slice(1, -1);
+  }
+  return token;
+}
+
+function scriptPhaseForToken(token: string): PhaseId | null {
+  const bare = stripQuotes(token);
+  for (const [script, phase] of SCRIPT_PHASE) {
+    if (bare === script || bare.endsWith(`/${script}`)) return phase;
+  }
+  return null;
+}
+
+/**
+ * A single pipeline/sequence segment maps to a phase only if its first
+ * command token — the thing actually run — is a core script (optionally
+ * after a runner prefix and/or leading env assignments). A core script named
+ * later in the segment (an argument to `sed`/`cat`/`grep`, i.e. inspection
+ * rather than execution) does not count.
+ */
+function inferSegmentPhase(segment: string): PhaseId | null {
+  const tokens = segment.trim().split(/\s+/).filter(Boolean);
+  let i = 0;
+  while (i < tokens.length && ENV_ASSIGNMENT_RE.test(tokens[i])) i++;
+  if (i >= tokens.length) return null;
+  if (RUNNER_PREFIXES.has(tokens[i])) i++;
+  if (i >= tokens.length) return null;
+  return scriptPhaseForToken(tokens[i]);
+}
+
+/**
+ * Maps a Bash tool-use command to the pipeline phase it EXECUTES, not merely
+ * mentions. `sed -n '1,120p' core/rerun.sh` (reading the script to plan) must
+ * NOT infer 'verify' — only a segment whose first command token is one of the
+ * core scripts counts as running it. The command is split on pipeline/
+ * sequence separators (`|`, `&&`, `||`, `;`, newline) so `cd kit && ./core/
+ * rerun.sh …` and `cat x.json | ./core/cluster.sh` are still recognized from
+ * whichever segment actually runs the script.
+ */
 export function inferPhase(command: string): PhaseId | null {
-  for (const [re, id] of PHASE_BY_SCRIPT) if (re.test(command)) return id;
+  const segments = command.split(/\|\||&&|\||;|\r?\n/);
+  for (const segment of segments) {
+    const phase = inferSegmentPhase(segment);
+    if (phase) return phase;
+  }
   return null;
 }
 
@@ -46,6 +108,21 @@ function advancePhase(run: Run, next: PhaseId) {
     if (cur.status === 'active' || cur.status === 'queued') run.setPhase(order[i], 'done');
   }
   if (targetPhase.status !== 'active') run.setPhase(next, 'active');
+}
+
+/**
+ * Phases that must not be inferred into 'active' from a core-script Bash
+ * execution until the cluster 'pick' has actually completed. The kit's real
+ * loop runs a confirmation `rerun.sh` EARLY, before clustering/pick — a
+ * genuine execution of it there must leave the pipeline's visible active
+ * phase at 'ingest'/'cluster', not jump ahead to 'verify'. 'pick' completes
+ * only via the AskUserQuestion bridge (driver-can-use-tool.ts / the demo
+ * driver's own bridge), which explicitly calls `setPhase('pick', 'done')`.
+ */
+const GATED_ON_PICK = new Set<PhaseId>(['fix', 'verify', 'report']);
+
+function pickIsDone(run: Run): boolean {
+  return run.snapshot.phases.find((p) => p.id === 'pick')?.status === 'done';
 }
 
 // The real SDK's `query()` takes a strongly-typed `Options` (and returns a
@@ -112,7 +189,16 @@ export function startDriver(
           run.setTelemetry({ thinking: true });
           startLedgerWatcherOnce();
         } else if (type === 'assistant') {
-          const content = ((m as { message?: { content?: Array<Record<string, unknown>> } }).message?.content ?? []);
+          const message = (m as {
+            message?: { content?: Array<Record<string, unknown>>; usage?: { output_tokens?: number } };
+          }).message;
+          // Live token telemetry: bump on every assistant turn that carries usage,
+          // so the meter moves during the run instead of staying at 0 until the
+          // final `result` message. `raiseTokens` on `result` remains the
+          // authoritative monotonic high-water mark.
+          const outputTokens = message?.usage?.output_tokens;
+          if (typeof outputTokens === 'number') run.bumpTokens(outputTokens);
+          const content = message?.content ?? [];
           for (const block of content) {
             if (block.type === 'text' && typeof block.text === 'string' && block.text.trim()) {
               run.log({ kind: 'info', text: (block.text as string).slice(0, 400) });
@@ -121,7 +207,7 @@ export function startDriver(
               const input = (block.input ?? {}) as Record<string, unknown>;
               if (name === 'Bash' && typeof input.command === 'string') {
                 const phase = inferPhase(input.command);
-                if (phase) advancePhase(run, phase);
+                if (phase && (!GATED_ON_PICK.has(phase) || pickIsDone(run))) advancePhase(run, phase);
                 run.log({ kind: 'bash', text: `Bash(${(input.command as string).slice(0, 160)})` });
               } else if (name === 'Edit' || name === 'Write') {
                 const file = (input.file_path as string) ?? '';
