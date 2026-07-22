@@ -48,11 +48,22 @@ describe('getWorktree', () => {
     expect(status.stdout).toContain(' M a.txt');
   });
 
-  it('reports an added (untracked) file too via name-status, once staged is not required', async () => {
-    // Working-tree diff vs HEAD only covers tracked changes; an untracked new
-    // file is intentionally NOT part of `git diff` (matches git's own
-    // semantics — this asserts the current tracked modification still shows
-    // even with an untracked file sitting alongside it).
+  it('reports staged modifications in the diff (git diff HEAD, not INDEX)', async () => {
+    // Working-tree diff must be against HEAD (committed state), not the INDEX
+    // (staging area). This ensures staged but uncommitted changes show up.
+    // The previous test left a.txt modified; stage it.
+    await git(['add', 'a.txt']);
+    const result = await getWorktree(repo);
+    // After staging, the diff should still appear (comparing HEAD → working tree).
+    expect(result.files).toEqual([{ status: 'M', path: 'a.txt' }]);
+    expect(result.diff).toContain('-line two');
+    expect(result.diff).toContain('+line TWO changed');
+  });
+
+  it('excludes untracked files until they are staged', async () => {
+    // Untracked files are intentionally NOT part of `git diff HEAD`
+    // (matches git's own semantics). This asserts the current tracked
+    // modification still shows even with an untracked file alongside it.
     await fs.writeFile(path.join(repo, 'untracked.txt'), 'new file');
     const result = await getWorktree(repo);
     expect(result.files.map((f) => f.path)).toEqual(['a.txt']);
@@ -65,5 +76,20 @@ describe('getWorktree', () => {
     const result = await getWorktree(repo);
     expect(result.truncated).toBe(true);
     expect(result.diff.length).toBe(512 * 1024);
+  });
+
+  it('parses rename status correctly (R* → destination path, no tabs)', async () => {
+    // Clean up from prior tests: reset any staged changes, then create and stage a rename.
+    // `git mv old new` stages the rename, and HEAD diff shows it as R[score]\told\tnew.
+    // parseNameStatus should use the LAST tab field for the destination path.
+    await git(['reset', 'HEAD']);
+    await git(['checkout', 'a.txt']);
+    await git(['mv', 'a.txt', 'a-renamed.txt']);
+    const result = await getWorktree(repo);
+    // Expect the rename to show with the new path (no tab embedded).
+    const renameEntry = result.files.find((f) => f.status.startsWith('R'));
+    expect(renameEntry).toBeDefined();
+    expect(renameEntry?.path).toBe('a-renamed.txt');
+    expect(renameEntry?.path).not.toContain('\t');
   });
 });

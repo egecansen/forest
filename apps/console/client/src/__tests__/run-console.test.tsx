@@ -78,7 +78,7 @@ describe('RunConsole selenoid link', () => {
   it('shows a ghost "selenoid ↗" link opening selenoidUrl in a new tab while the run is live', async () => {
     stubConfigFetch({ configured: true, selenoidUrl: 'https://selenoid.example/ui/#/sessions' });
     const snap = snapshot({ status: 'running' });
-    render(<RunConsole config={CONFIG} onNew={() => {}} readOnly staticSnapshot={snap} />);
+    render(<RunConsole config={CONFIG} onNew={() => {}} readOnly={false} staticSnapshot={snap} />);
     const link = await screen.findByRole('link', { name: /selenoid/i });
     expect(link).toHaveAttribute('href', 'https://selenoid.example/ui/#/sessions');
     expect(link).toHaveAttribute('target', '_blank');
@@ -88,14 +88,14 @@ describe('RunConsole selenoid link', () => {
   it('also shows the link while awaiting-input', async () => {
     stubConfigFetch({ configured: true, selenoidUrl: 'https://selenoid.example/ui/#/sessions' });
     const snap = snapshot({ status: 'awaiting-input' });
-    render(<RunConsole config={CONFIG} onNew={() => {}} readOnly staticSnapshot={snap} />);
+    render(<RunConsole config={CONFIG} onNew={() => {}} readOnly={false} staticSnapshot={snap} />);
     expect(await screen.findByRole('link', { name: /selenoid/i })).toBeInTheDocument();
   });
 
   it('hides the link once the run is no longer running/awaiting-input', async () => {
     stubConfigFetch({ configured: true, selenoidUrl: 'https://selenoid.example/ui/#/sessions' });
     const snap = snapshot({ status: 'completed' });
-    render(<RunConsole config={CONFIG} onNew={() => {}} readOnly staticSnapshot={snap} />);
+    render(<RunConsole config={CONFIG} onNew={() => {}} readOnly={false} staticSnapshot={snap} />);
     // Give the config fetch a tick to resolve before asserting absence.
     await waitFor(() => expect(vi.mocked(fetch)).toHaveBeenCalled());
     expect(screen.queryByRole('link', { name: /selenoid/i })).not.toBeInTheDocument();
@@ -104,7 +104,17 @@ describe('RunConsole selenoid link', () => {
   it('hides the link entirely when the config has no selenoidUrl', async () => {
     stubConfigFetch({ configured: true });
     const snap = snapshot({ status: 'running' });
+    render(<RunConsole config={CONFIG} onNew={() => {}} readOnly={false} staticSnapshot={snap} />);
+    await waitFor(() => expect(vi.mocked(fetch)).toHaveBeenCalled());
+    expect(screen.queryByRole('link', { name: /selenoid/i })).not.toBeInTheDocument();
+  });
+
+  it('hides the link in readOnly mode (history snapshots) even when status is running', async () => {
+    stubConfigFetch({ configured: true, selenoidUrl: 'https://selenoid.example/ui/#/sessions' });
+    const snap = snapshot({ status: 'running' });
     render(<RunConsole config={CONFIG} onNew={() => {}} readOnly staticSnapshot={snap} />);
+    // Wait for config fetch, then verify the selenoid link is not rendered because
+    // readOnly mode (history snapshots) should never show live links.
     await waitFor(() => expect(vi.mocked(fetch)).toHaveBeenCalled());
     expect(screen.queryByRole('link', { name: /selenoid/i })).not.toBeInTheDocument();
   });

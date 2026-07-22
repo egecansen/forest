@@ -59,7 +59,7 @@ export function RunConsole({ config, onStop, onPause, onResume, onNew, backLabel
     })();
     return () => { ignore = true; };
   }, []);
-  const showSelenoidLink = !!selenoidUrl && (snapshot.status === 'running' || snapshot.status === 'awaiting-input');
+  const showSelenoidLink = !!selenoidUrl && isRunLive(snapshot.status, readOnly) && (snapshot.status === 'running' || snapshot.status === 'awaiting-input');
 
   // Files tab badge (worktree file count, not the agent-touched snapshot.files
   // count — see the tabs[] definition below): fetched independently of
