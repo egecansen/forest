@@ -34,7 +34,9 @@ cc_have_jq || exit 0   # jq absent -> fail-open
 cc_read_input
 
 # Patterns mirror the Claude gate's bash-ERE prefilter (kept in sync with core/shell-guard.py's python flavor).
-SURF_RE='\.claude/skills/hektor-flaky-triage/(core/|hooks/[^[:space:]]*\.sh|SKILL\.md)'
+# Round2 re-review: also covers both harnesses' gate scripts + vendored libs (`.cursor/hooks/*` and
+# `.claude/hooks/lib/*` previously sat outside this pattern entirely — see the Claude gate's comment).
+SURF_RE='\.claude/skills/hektor-flaky-triage/(core/|hooks/[^[:space:]]*\.sh|SKILL\.md)|\.cursor/hooks/(flaky-kit-self-protection-gate\.sh|lib/)|\.claude/hooks/lib/'
 # Fallback ONLY when python3/shell-guard.py is unavailable (degraded precision, documented).
 MUT_RE='(>>?|[[:space:]]tee[[:space:]]|sed[[:space:]]+-i|(^|[;&|[:space:]])(cp|mv|rm|chmod|chown|truncate|dd|install|ln|rsync|patch)([[:space:]]|$)|(^|[;&|[:space:]])git[[:space:]]+(checkout|apply|restore|stash|reset|clean)([[:space:]]|$))'
 
@@ -60,9 +62,12 @@ except Exception:
 
 match_surface() {
   case "$1" in
-    */.claude/skills/hektor-flaky-triage/core/*)     SURFACE="kit core (invariant logic + config)"; return 0 ;;
-    */.claude/skills/hektor-flaky-triage/hooks/*.sh) SURFACE="kit protection hook"; return 0 ;;
-    */.claude/skills/hektor-flaky-triage/SKILL.md)   SURFACE="kit skill prompt"; return 0 ;;
+    */.claude/skills/hektor-flaky-triage/core/*)       SURFACE="kit core (invariant logic + config)"; return 0 ;;
+    */.claude/skills/hektor-flaky-triage/hooks/*.sh)   SURFACE="kit protection hook (Claude)"; return 0 ;;
+    */.claude/skills/hektor-flaky-triage/SKILL.md)     SURFACE="kit skill prompt"; return 0 ;;
+    */.cursor/hooks/flaky-kit-self-protection-gate.sh) SURFACE="kit protection hook (Cursor)"; return 0 ;;
+    */.cursor/hooks/lib/*)                             SURFACE="kit protection hook lib (Cursor)"; return 0 ;;
+    */.claude/hooks/lib/*)                             SURFACE="kit protection hook lib (Claude)"; return 0 ;;
     *) return 1 ;;
   esac
 }

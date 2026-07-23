@@ -63,8 +63,13 @@ INPUT=$(cat)
 TOOL_NAME=$(echo "$INPUT" | "$JQ" -r '.tool_name // empty' 2>/dev/null || echo "")
 CWD=$(echo "$INPUT" | "$JQ" -r '.cwd // empty' 2>/dev/null || echo "")
 
-# Surface = the kit's invariant logic, config, protection hooks, and skill prompt.
-SURF_RE='\.claude/skills/hektor-flaky-triage/(core/|hooks/[^[:space:]]*\.sh|SKILL\.md)'
+# Surface = the kit's invariant logic, config, protection hooks, and skill prompt — PLUS both
+# harnesses' self-protection gate scripts and their vendored libs (Round2 re-review: a prior audit
+# found `.cursor/hooks/*` and `.claude/hooks/lib/*` sat OUTSIDE this pattern entirely, so a Claude
+# session could freely Edit the Cursor gate — or this gate's own audit lib — and neither gate would
+# notice. Kept precise: only the gate filenames + their lib/ dirs, not the whole `.cursor/`/
+# `.claude/hooks/` trees, which hold plenty of unrelated, legitimately-editable files).
+SURF_RE='\.claude/skills/hektor-flaky-triage/(core/|hooks/[^[:space:]]*\.sh|SKILL\.md)|\.cursor/hooks/(flaky-kit-self-protection-gate\.sh|lib/)|\.claude/hooks/lib/'
 # Bash mutation indicators (redirect / in-place / copy / move / delete / perm / git-mutate / rsync /
 # patch) — heuristic, errs toward flagging. Used as the fallback ONLY when python3/shell-guard.py
 # is unavailable for the Bash branch below (degraded precision, documented, not silent).
@@ -94,9 +99,12 @@ except Exception:
 
 match_surface() {  # $1 = a path -> sets SURFACE and returns 0, or returns 1
   case "$1" in
-    */.claude/skills/hektor-flaky-triage/core/*)     SURFACE="kit core (invariant logic + config)"; return 0 ;;
-    */.claude/skills/hektor-flaky-triage/hooks/*.sh) SURFACE="kit protection hook"; return 0 ;;
-    */.claude/skills/hektor-flaky-triage/SKILL.md)   SURFACE="kit skill prompt"; return 0 ;;
+    */.claude/skills/hektor-flaky-triage/core/*)       SURFACE="kit core (invariant logic + config)"; return 0 ;;
+    */.claude/skills/hektor-flaky-triage/hooks/*.sh)   SURFACE="kit protection hook (Claude)"; return 0 ;;
+    */.claude/skills/hektor-flaky-triage/SKILL.md)     SURFACE="kit skill prompt"; return 0 ;;
+    */.cursor/hooks/flaky-kit-self-protection-gate.sh) SURFACE="kit protection hook (Cursor)"; return 0 ;;
+    */.cursor/hooks/lib/*)                             SURFACE="kit protection hook lib (Cursor)"; return 0 ;;
+    */.claude/hooks/lib/*)                             SURFACE="kit protection hook lib (Claude)"; return 0 ;;
     *) return 1 ;;
   esac
 }

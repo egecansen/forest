@@ -27,14 +27,40 @@
 #   command's top-level segments in order, updating a tracked "current directory" on every bare
 #   `cd <dir>` so a later segment's relative references resolve against where the command chain
 #   actually put us, not just their own literal text.
+#
+# Round2 re-review (still heuristic, NOT a hard wall — same honest framing as above):
+#   the cd-chain tracking above only ever walked the command's TOP-LEVEL segments — a `cd` INSIDE a
+#   `$(...)`/`(...)` body (`(cd core && sed -i '' config.json)`, `x=$(cd core && sed -i '' config.json)`,
+#   `cd core && (sed -i '' config.json)`) was invisible to it, because (a) `split_segments()` didn't
+#   treat those spans as atomic, so a `&&` inside one could fracture the OUTER top-level chain, and
+#   (b) the bodies extracted from them were re-checked against the ORIGINAL ambient cwd with no
+#   cd-tracking of their own at all. Fixed by making `split_segments()` copy `$(...)`/`` `...` ``/`(...)`
+#   spans through verbatim (their internal &&/||/;/& belong to the SUBSHELL's own chain, not the
+#   outer one) and by `scan()` — a recursive version of the old top-level walk — that tracks `cd`
+#   within every subshell/command-sub body too, seeded with the RUNNING cwd from whatever `cd`s
+#   preceded it in the parent chain (a subshell inherits the shell's cwd at the point it's launched;
+#   a `cd` inside one never escapes back out — both match real Bash semantics). Recursion is bounded
+#   (MAX_SUBSHELL_DEPTH) so a pathological input can't blow the stack. Also folded in here: the gate
+#   scripts (+ their vendored libs) themselves are now part of SURF (see below) — a prior re-review
+#   found `.cursor/hooks/` and `.claude/hooks/lib/` sat outside the protected surface entirely, so
+#   editing one gate/lib was invisible to the OTHER harness's own self-protection gate.
 import sys, re, os
 
-# Protected surface = the kit's own files. PATH-INDEPENDENT: set HEKTOR_FK_SURFACE to the kit's install
-# root and a kit installed ANYWHERE protects itself (the standalone gates do this). Unset → the in-repo
-# default below, so the live .claude gates keep their exact behavior with no env set.
+# Protected surface = the kit's own files, PLUS the self-protection gate scripts (both harnesses)
+# and their vendored libs — the audit found `.cursor/hooks/*` and `.claude/hooks/lib/*` sat outside
+# the surface entirely, so a session in one harness could freely disable the OTHER harness's gate
+# (or its own gate's audit lib). Kept precise: only the gate filenames + their lib/ dirs, not the
+# whole `.cursor/`/`.claude/hooks/` trees (which hold plenty of unrelated, legitimately-editable
+# files). PATH-INDEPENDENT: set HEKTOR_FK_SURFACE to the kit's install root and a kit installed
+# ANYWHERE protects itself (the standalone gates do this) — that override intentionally does NOT
+# also add the gate-script patterns below (a caller setting it owns its own root's scope). Unset →
+# the in-repo default below, so the live .claude/.cursor gates keep their exact behavior with no
+# env set.
 _SURF_ROOT = os.environ.get('HEKTOR_FK_SURFACE', '').strip().rstrip('/')
 SURF = re.compile(re.escape(_SURF_ROOT)) if _SURF_ROOT \
-    else re.compile(r'\.claude/skills/hektor-flaky-triage/(core/|hooks/\S*\.sh|SKILL\.md)')
+    else re.compile(r'\.claude/skills/hektor-flaky-triage/(core/|hooks/\S*\.sh|SKILL\.md)'
+                     r'|\.cursor/hooks/(flaky-kit-self-protection-gate\.sh|lib/)'
+                     r'|\.claude/hooks/lib/')
 # target-as-arg mutations: surface anywhere in the fragment is a write (conservative — `cp core/x /tmp`
 # reads the surface, but copying kit files out is itself worth surfacing). REDIR is target-position-aware.
 # Round2: added rsync/patch (file-clobbering copiers) and the git subcommands that can silently
@@ -51,7 +77,13 @@ INLINE = re.compile(r'(?:^|\s)-(?:c|e)\b')
 
 
 def split_segments(s):
-    """Split on && || ; & respecting quotes/escapes. Redirections (&>, >&, 2>&1) are NOT separators."""
+    """Split on && || ; & respecting quotes/escapes. Redirections (&>, >&, 2>&1) are NOT separators.
+    Round2-rereview: `$(...)`, `` `...` ``, and `(...)` spans are copied through VERBATIM (not
+    walked char-by-char for separator purposes) — their internal &&/||/;/& belong to the subshell's
+    OWN chain, not the outer one; splitting through them (the old behavior) could fracture a
+    `(cd core && sed -i '' config.json)` into two unrelated-looking top-level segments, hiding the
+    cd from the segment that used it. `scan()` below recurses into these spans itself via
+    `immediate_bodies()`, tracking their own cd-chain from the RUNNING outer cwd."""
     segs, cur, q = [], [], None
     i, n = 0, len(s)
     while i < n:
@@ -66,6 +98,20 @@ def split_segments(s):
             cur.append(ch + s[i + 1]); i += 2; continue
         if ch in ('"', "'"):
             q = ch; cur.append(ch); i += 1; continue
+        if ch == '`':                                          # backtick span: copy through verbatim
+            j = i + 1
+            while j < n and s[j] != '`':
+                j += 2 if s[j] == '\\' else 1
+            j = min(j + 1, n)
+            cur.append(s[i:j]); i = j; continue
+        if ch == '$' and i + 1 < n and s[i + 1] == '(':        # $(...) span: copy through verbatim
+            _b, end = _balanced_body(s, i + 2)
+            j = min(end + 1, n)
+            cur.append(s[i:j]); i = j; continue
+        if ch == '(':                                           # (...) span: copy through verbatim
+            _b, end = _balanced_body(s, i + 1)
+            j = min(end + 1, n)
+            cur.append(s[i:j]); i = j; continue
         nxt = s[i + 1] if i + 1 < n else ''
         prev = s[i - 1] if i > 0 else ''
         if ch == '&' and nxt == '&':
@@ -105,8 +151,13 @@ def _balanced_body(s, i):
     return ''.join(body), i
 
 
-def extract_command_subs(s):
-    """Bodies of $(...) and `...`; single-quotes are literal. Recurses into nested substitutions."""
+def immediate_bodies(s):
+    """Immediate (depth-1 only) bodies of $(...), `...`, and (...) in s. Deliberately NON-recursive:
+    `scan()` below recurses into whatever this returns itself, threading the RUNNING cwd at each
+    level (a plain flatten-everything extractor, like Round2's, can't do that — by the time you've
+    flattened a nested body out of its parent, you've lost which cwd it should have started from).
+    Single-quotes suppress expansion entirely (skipped outright); double-quotes still allow $(...)/
+    backtick expansion (bash semantics) but make a bare '(' just literal text, not a subshell."""
     out, inS, inD, i, n = [], False, False, 0, len(s)
     while i < n:
         ch = s[i]; prev = s[i - 1] if i > 0 else ''
@@ -126,41 +177,19 @@ def extract_command_subs(s):
                 body.append(s[i]); i += 1
             b = ''.join(body)
             if b.strip():
-                out.append(b); out.extend(extract_command_subs(b))
+                out.append(b)
             i += 1; continue
         if ch == '$' and i + 1 < n and s[i + 1] == '(':
             b, i = _balanced_body(s, i + 2)
             if b.strip():
-                out.append(b); out.extend(extract_command_subs(b))
+                out.append(b)
             i += 1; continue
-        i += 1
-    return out
-
-
-def extract_subshells(s):
-    """Bodies of plain (...) subshells (skip $(...) and backtick spans). Recurses."""
-    out, inS, inD, i, n = [], False, False, 0, len(s)
-    while i < n:
-        ch = s[i]; prev = s[i - 1] if i > 0 else ''
-        if ch == '\\' and not inS:
-            i += 2; continue
-        if ch == "'" and not inD and prev != '\\':
-            inS = not inS; i += 1; continue
-        if ch == '"' and not inS and prev != '\\':
-            inD = not inD; i += 1; continue
-        if inS or inD:
-            i += 1; continue
-        if ch == '$' and i + 1 < n and s[i + 1] == '(':       # skip command-sub span
-            _b, i = _balanced_body(s, i + 2); i += 1; continue
-        if ch == '`':                                          # skip backtick span
-            i += 1
-            while i < n and s[i] != '`':
-                i += 2 if s[i] == '\\' else 1
+        if inD:                                                # bare '(' inside "..." is literal text
             i += 1; continue
         if ch == '(':
             b, i = _balanced_body(s, i + 1)
             if b.strip():
-                out.append(b); out.extend(extract_subshells(b))
+                out.append(b)
             i += 1; continue
         i += 1
     return out
@@ -215,13 +244,6 @@ def resolve_path(tok, base):
             return tok
 
 
-def fragments(cmd):
-    frags = list(split_segments(cmd))
-    for body in extract_command_subs(cmd) + extract_subshells(cmd):
-        frags.extend(split_segments(body))
-    return frags
-
-
 CD_RE = re.compile(r'^cd\s+(\S+)\s*$')
 
 
@@ -255,28 +277,48 @@ def is_surface_write(frag, base=None):
     return False
 
 
-def main():
-    cmd = sys.stdin.read()
-    base = os.environ.get('HEKTOR_FK_CWD', '').strip() or None
-    # Round2 item 3: walk the TOP-LEVEL segments in order, tracking cwd across a leading/chained
-    # `cd <dir> &&` / `cd <dir>;` — closes `cd core && sed -i '' config.json` (cwd-blindness): a
-    # pure `cd` segment updates the tracked dir instead of being checked itself; every later
-    # segment's relative references resolve against wherever the chain actually put us.
-    cur = base
+# Round2-rereview: bounds the recursion into nested $(...)/`...`/(...) bodies — a pathological
+# input (deeply nested parens) can't blow the stack. Real-world nesting is 1-2 levels deep; this
+# is generous headroom, not a tuned limit.
+MAX_SUBSHELL_DEPTH = 8
+
+
+def scan(cmd, cwd, depth=0):
+    """Walk cmd's top-level segments (bounded correctly now that split_segments() treats
+    $(...)/`...`/(...) as atomic — see its docstring), tracking a `cd`-updated cwd across them
+    exactly like the original top-level loop did, and recursing into every subshell/command-sub
+    body found in EACH segment with that RUNNING cwd as its start (a `cd` earlier in the parent
+    chain is inherited by a subshell launched after it — matches real Bash semantics; a `cd` INSIDE
+    a subshell/command-sub never escapes back out, so it does NOT affect the cwd `scan()` returns
+    to the caller — there is no return value at all, only True/False). Returns True (deny) if any
+    segment/body at any depth is a surface write."""
+    if depth > MAX_SUBSHELL_DEPTH:
+        return False                                     # pathological nesting: stop recursing, don't crash
+    cur = cwd
     for seg in split_segments(cmd):
         m = CD_RE.match(dequote(seg).strip())
         if m:
             cur = resolve_path(m.group(1), cur)
             continue
         if is_surface_write(seg, cur):
-            sys.exit(0)                                  # surface write -> gate denies
-    # command-substitution / subshell bodies run in their own subshell cwd — anchor each on the
-    # ORIGINAL base (not the outer chain's `cur`), not the outer command's accumulated cd chain.
-    for body in extract_command_subs(cmd) + extract_subshells(cmd):
-        for seg in split_segments(body):
-            if is_surface_write(seg, base):
-                sys.exit(0)
-    sys.exit(1)                                          # allow
+            return True                                  # surface write -> gate denies
+        for body in immediate_bodies(seg):
+            if scan(body, cur, depth + 1):
+                return True
+    return False
+
+
+def main():
+    cmd = sys.stdin.read()
+    base = os.environ.get('HEKTOR_FK_CWD', '').strip() or None
+    if not base:
+        # Round2-rereview item 3: previously this degraded to os.getcwd() (the guard PROCESS's own
+        # ambient cwd, almost certainly NOT the Bash tool call's real cwd) with no signal at all —
+        # a silent precision loss in a security gate. Same allow/deny floor as before (this is
+        # observability only): resolve_path()/_abs_dir() still fall back to os.getcwd() exactly as
+        # they did pre-Round2-rereview; only the stderr note is new.
+        print('shell-guard: cwd unavailable — cd-tracking degraded', file=sys.stderr)
+    sys.exit(0 if scan(cmd, base) else 1)                 # 0 = surface write (deny); 1 = allow
 
 
 main()
