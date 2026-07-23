@@ -7,6 +7,11 @@ export interface ConsoleConfig {
   testbox: string;
   jenkins: { baseUrl: string; jobUrls: string[]; username?: string; apiToken?: string };
   es: { url: string; index: string; username?: string; password?: string };
+  /** Optional SRP (testbox reservation) wiring. `baseUrl` is the gateway root
+   *  the SRP SPA calls; `cookie` is the operator's SRP session (a secret,
+   *  redacted like the Jenkins token). Absent → SHBDN- runs fall back to a
+   *  user-provided box (no auto-detect / reserve). */
+  srp?: { baseUrl: string; cookie?: string; username?: string };
   reportBase: string;
   pollMs: number;
   /** Selenoid session-grid URL — a live link, not a secret; shown in the run

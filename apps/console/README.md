@@ -53,6 +53,11 @@ Copy-paste and fill in:
     "username": "you",
     "password": "…"
   },
+  "srp": {
+    "baseUrl": "https://srp.example.net/<gateway>",
+    "cookie": "SESSION=…",
+    "username": "you"
+  },
   "reportBase": "https://report-with-elastic-data.example.net",
   "pollMs": 15000
 }
@@ -61,6 +66,10 @@ Copy-paste and fill in:
 - `repoPath`, `testbox`, `reportBase`, `jenkins.{baseUrl,jobUrls}`, `es.{url,index}`
   are required; `jenkins.{username,apiToken}` and `es.{username,password}` are
   optional (omit for anonymous access). `pollMs` defaults to `15000` (floor `5000`).
+- `srp` is **optional** — it powers testbox auto-detection & reservation (below).
+  Omit it and the start form still works; `SHBDN-` runs just fall back to a
+  user-typed box. `srp.cookie` is a secret and is redacted from run logs like the
+  Jenkins token.
 - The report-URL **host allowlist** used by `POST /api/runs` is read separately,
   from the kit already installed at `repoPath`: `<repoPath>/.claude/skills/hektor-flaky-triage/core/config.json`'s
   `es.host_allowlist`. A triage run against a report URL whose origin isn't in that
@@ -91,6 +100,48 @@ console.log("wrote", configFile);
 ```
 
 Then open `~/.hektor-console/config.json` and fill in whatever the import left blank.
+
+## Testbox auto-detection & reservation (SRP)
+
+The start form's **`detect ↗`** button (next to the report-url field) resolves a
+pasted URL and auto-fills the testbox. It accepts **either**:
+
+- a **Jenkins build URL** (`…/job/web-test-s4-tag/2256/`) — resolved to its s-report
+  URL via the build's `timestamp` (Jenkins `/api/json`, existing token auth) + the
+  exact `fullTestBuildName` from ES; or
+- an **s-report URL** — used as-is.
+
+It then routes the testbox on the build's Jira ticket prefix (read from the report's
+`FAILED` docs):
+
+| Ticket | Box |
+|---|---|
+| `DEP-*` (preprod dedicated) | the box the run itself used — from the report's `testbox`; needs no SRP |
+| `SHBDN-*` (dev branch) | a box you already hold in SRP (`reservation/v1/records`, status `OK`); else **needs-reservation** |
+| (a box you type) | always wins — an explicit override skips SRP entirely |
+
+When routing returns **needs-reservation**, a **`reserve a box (24h) ↗`** button
+appears. It calls the confirm-gated `POST /api/reserve-testbox`, then re-detects.
+
+**Auth model.** All SRP/Jenkins calls are **server-side** (the console client is
+localhost, so a browser-direct call would be CORS-blocked). Jenkins uses the config
+`username:apiToken`; SRP uses `srp.cookie` sent as a `Cookie:` header. Reservations
+are **24h user leases**, not per-run locks, so release is an explicit operator action
+(`POST /api/release-testbox`) — never auto-fired at run end.
+
+> **⚠️ Before enabling reserve/release against live SRP:** the exact request bodies
+> for `reservation/v1/records` (reserve) and `reservation/v1/acts` (`revoke`) are
+> best-evidence from SRP's SPA action verbs — its minified bundle hides the payloads.
+> Capture one reserve + one release XHR from SRP devtools and reconcile the two bodies
+> in `server/src/trackers/srp.ts` (marked with a `PAYLOAD NOTE`). Both endpoints are
+> confirm-gated (`confirm:true` required), so nothing can misfire before you do — a
+> wrong shape fails loudly rather than mis-reserving. Read-only detection (records
+> lookup + routing) needs no such verification and works as soon as `srp.{baseUrl,
+> cookie}` are set.
+
+To find `srp.baseUrl`: open SRP with devtools → Network, and read the origin+prefix
+of a `reservation/v1/records` request (the SPA computes it at runtime, so it can't be
+inferred statically).
 
 ## Deep-link format
 

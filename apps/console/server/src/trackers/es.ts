@@ -40,3 +40,44 @@ export function sReportUrl(
   u.searchParams.set('fullTestBuildName', fullTestBuildName);
   return u.toString();
 }
+
+/** The two facts the box-router needs from a build's FAILED docs: the
+ *  build-level `jiraTicket` (e.g. "DEP-11495" / "SHBDN-253190") and the set of
+ *  `testbox` values the run used. Returns empty facts on any failure so the
+ *  router degrades to a user-provided box rather than throwing. */
+export async function fetchBuildFacts(
+  es: ConsoleConfig['es'],
+  jobName: string,
+  buildNumber: number,
+  fetchImpl: typeof fetch = fetch
+): Promise<{ jiraTicket: string | null; testboxes: Array<string | number> }> {
+  const headers: Record<string, string> = { 'Content-Type': 'application/json' };
+  if (es.username && es.password)
+    headers.Authorization = `Basic ${Buffer.from(`${es.username}:${es.password}`).toString('base64')}`;
+  const body = {
+    size: 200,
+    _source: ['jiraTicket', 'testbox'],
+    query: { bool: { must: [
+      { wildcard: { 'testBuildName.keyword': `*${jobName}-${buildNumber}` } },
+      { term: { 'testStatus.keyword': 'FAILED' } },
+    ] } },
+  };
+  try {
+    const res = await fetchImpl(`${es.url}/${es.index}/_search`, { method: 'POST', headers, body: JSON.stringify(body) });
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    const data = (await res.json()) as {
+      hits?: { hits?: Array<{ _source?: { jiraTicket?: string; testbox?: string | number } }> };
+    };
+    const hits = data.hits?.hits ?? [];
+    let jiraTicket: string | null = null;
+    const testboxes: Array<string | number> = [];
+    for (const h of hits) {
+      const s = h._source ?? {};
+      if (!jiraTicket && typeof s.jiraTicket === 'string' && s.jiraTicket) jiraTicket = s.jiraTicket;
+      if (s.testbox !== undefined && s.testbox !== null) testboxes.push(s.testbox);
+    }
+    return { jiraTicket, testboxes };
+  } catch {
+    return { jiraTicket: null, testboxes: [] };
+  }
+}

@@ -4,6 +4,7 @@ import { SelectDropdown } from './SelectDropdown';
 import type { DropdownOption } from './SelectDropdown';
 import { FolderPicker } from './FolderPicker';
 import { RunConflictError } from '../run-conflict';
+import { resolveStart, reserveBox, type StartResolution } from '../start-logic';
 
 const PERMISSION_OPTIONS: DropdownOption<RunConfig['permissionPolicy']>[] = [
   {
@@ -117,6 +118,50 @@ export function StartScreen({ onStart, prefillReportUrl, prefillTestbox, onBrows
   const [submitting, setSubmitting] = useState(false);
   const [err, setErr] = useState<string | null>(null);
   const [pickerOpen, setPickerOpen] = useState(false);
+  // `detect ↗`: normalize a Jenkins/s-report URL and auto-route the testbox.
+  // `testboxTouched` guards auto-fill — a box the user typed is never overwritten.
+  const [testboxTouched, setTestboxTouched] = useState(false);
+  const [detecting, setDetecting] = useState(false);
+  const [detectResult, setDetectResult] = useState<StartResolution | null>(null);
+  const [reserving, setReserving] = useState(false);
+
+  const canDetect = /^https?:\/\/\S+$/.test(targetUrl.trim()) && !detecting && !demo;
+
+  const detect = async () => {
+    setDetectResult(null);
+    setDetecting(true);
+    try {
+      const r = await resolveStart(targetUrl.trim(), testboxTouched ? testbox : '');
+      if (r.targetUrl && r.targetUrl !== targetUrl) setTargetUrl(r.targetUrl);
+      if (r.status === 'resolved' && r.testbox && !testboxTouched) {
+        setTestbox(stripTbPrefix(r.testbox));
+      }
+      setDetectResult(r);
+    } catch (e) {
+      setDetectResult({ targetUrl, status: 'error', note: (e as Error).message });
+    } finally {
+      setDetecting(false);
+    }
+  };
+
+  // Only surfaced when routing said `needs-reservation` (a SHBDN- run with no
+  // held box). Confirm-gated server-side; on success we re-detect to pick up
+  // the freshly-reserved box.
+  const reserve = async () => {
+    setReserving(true);
+    try {
+      const r = await reserveBox(undefined);
+      if (r.ok) {
+        await detect();
+      } else {
+        setDetectResult({ targetUrl, status: 'error', note: r.note });
+      }
+    } finally {
+      setReserving(false);
+    }
+  };
+
+  const detectNote = detectResult ? { ok: detectResult.status === 'resolved', text: detectResult.note } : null;
 
   const showDemoToggle = computeShowDemoToggle(prefillReportUrl);
 
@@ -209,16 +254,46 @@ export function StartScreen({ onStart, prefillReportUrl, prefillTestbox, onBrows
 
           <div className="field">
             <label htmlFor="url">report url</label>
-            <input
-              id="url"
-              placeholder="https://report-with-elastic-data.example.net/web-test-s4-flaky/2127?..."
-              value={targetUrl}
-              onChange={(e) => setTargetUrl(e.target.value)}
-              spellCheck={false}
-              autoComplete="off"
-            />
-            {!urlValid && (
-              <p className="field-note">must be a valid link that includes fullTestBuildName</p>
+            <div className="field-with-action">
+              <input
+                id="url"
+                placeholder="s-report URL, or a Jenkins build URL (…/web-test-s4-tag/2256/)"
+                value={targetUrl}
+                onChange={(e) => {
+                  setTargetUrl(e.target.value);
+                  setDetectResult(null);
+                }}
+                spellCheck={false}
+                autoComplete="off"
+              />
+              <button
+                type="button"
+                className="browse-btn"
+                onClick={detect}
+                disabled={!canDetect}
+                title="Resolve a Jenkins build to its report and auto-detect the testbox"
+              >
+                {detecting ? 'detecting…' : 'detect ↗'}
+              </button>
+            </div>
+            {detectNote && (
+              <p className={detectNote.ok ? 'field-note field-note-ok' : 'field-note'}>{detectNote.text}</p>
+            )}
+            {detectResult?.status === 'needs-reservation' && (
+              <button
+                type="button"
+                className="btn btn-ghost"
+                onClick={reserve}
+                disabled={reserving}
+                title="Reserve a testbox for 24h via SRP, then re-detect"
+              >
+                {reserving ? 'reserving…' : 'reserve a box (24h) ↗'}
+              </button>
+            )}
+            {!detectNote && !urlValid && (
+              <p className="field-note">
+                must be an s-report link that includes fullTestBuildName — or paste a Jenkins build URL and hit detect
+              </p>
             )}
           </div>
 
@@ -230,7 +305,10 @@ export function StartScreen({ onStart, prefillReportUrl, prefillTestbox, onBrows
                 id="testbox"
                 placeholder="161"
                 value={testbox}
-                onChange={(e) => setTestbox(e.target.value.replace(/\D/g, '').slice(0, 4))}
+                onChange={(e) => {
+                  setTestbox(e.target.value.replace(/\D/g, '').slice(0, 4));
+                  setTestboxTouched(true);
+                }}
                 inputMode="numeric"
                 maxLength={4}
                 spellCheck={false}

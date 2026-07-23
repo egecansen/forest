@@ -15,7 +15,7 @@ const MIN_SECRET_LENGTH = 5;
  */
 export function buildRedactList(cfg: ConsoleConfig | null): string[] {
   if (!cfg) return [];
-  const candidates = [cfg.jenkins?.apiToken, cfg.es?.password];
+  const candidates = [cfg.jenkins?.apiToken, cfg.es?.password, cfg.srp?.cookie];
   return candidates.filter(
     (s): s is string => typeof s === 'string' && s.length >= MIN_SECRET_LENGTH
   );

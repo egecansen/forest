@@ -14,6 +14,9 @@ import { saveRun, listRuns, loadRun, isSafeRunId, resolveInsideRoot, resolveRuns
 import { loadConsoleConfig, kitAllowlist, buildSelenoidUrlRegex } from './console-config.js';
 import { buildRedactList, makeRedactor } from './redact.js';
 import { findRunConflict } from './run-conflict.js';
+import { resolveRunTestbox, parseReportUrl } from './resolve-run-testbox.js';
+import { resolveReportFromJenkins, isJenkinsBuildUrl } from './resolve-report-from-jenkins.js';
+import { reserveTestbox, releaseTestbox } from './trackers/srp.js';
 import { getWorktree } from './worktree.js';
 import { BuildsPoller } from './trackers/poller.js';
 import { fetchJenkinsUser } from './trackers/jenkins.js';
@@ -187,6 +190,118 @@ async function main() {
       res.json(await listDirectories(p));
     } catch (err) {
       res.status(400).json({ error: `cannot read directory: ${(err as Error).message}` });
+    }
+  });
+
+  // Resolve a pasted URL to an s-report targetUrl. Accepts EITHER a Jenkins
+  // build URL (…/job/web-test-s4-tag/2256/) — resolved via the build timestamp
+  // + ES exact fullTestBuildName — OR an already-formed s-report URL (passed
+  // through). Read-only; feeds the start form so an operator can paste a Jenkins
+  // link. Returns { targetUrl, ...facts } or 422 when it can't resolve.
+  app.post('/api/resolve-report', async (req, res) => {
+    if (!consoleConfig) {
+      res.status(503).json({ error: 'console not configured' });
+      return;
+    }
+    const inputUrl = typeof req.body?.url === 'string' ? req.body.url.trim() : '';
+    if (!inputUrl) {
+      res.status(400).json({ error: 'url is required' });
+      return;
+    }
+    if (!isJenkinsBuildUrl(consoleConfig.jenkins.baseUrl, inputUrl)) {
+      // Not a Jenkins host — treat as an s-report URL; validate its shape.
+      if (!parseReportUrl(inputUrl)) {
+        res.status(400).json({ error: 'url must be a Jenkins build URL or an s-report URL ending in /<job>/<build>' });
+        return;
+      }
+      res.json({ targetUrl: inputUrl, source: 'report-url' });
+      return;
+    }
+    try {
+      const resolved = await resolveReportFromJenkins(consoleConfig, inputUrl);
+      if (!resolved) {
+        res.status(422).json({ error: 'could not resolve Jenkins build to a report (unauthenticated Jenkins, or no ES doc for this build yet)' });
+        return;
+      }
+      res.json({ ...resolved, source: 'jenkins' });
+    } catch (err) {
+      res.status(502).json({ error: `resolve failed: ${(err as Error).message}` });
+    }
+  });
+
+  // Read-only box recommendation for the start form: given the s-report URL (and
+  // any box the operator already typed), route on the build's ticket prefix —
+  // DEP-* → the report's dedicated box, SHBDN-* → a box the operator holds in
+  // SRP, else "needs-reservation". Nothing is reserved here; the operator still
+  // confirms in the UI (their explicit box always wins). SRP/ES failures degrade
+  // inside resolveRunTestbox rather than erroring the form.
+  app.post('/api/resolve-testbox', async (req, res) => {
+    if (!consoleConfig) {
+      res.status(503).json({ error: 'console not configured' });
+      return;
+    }
+    const targetUrl = typeof req.body?.targetUrl === 'string' ? req.body.targetUrl : '';
+    const parsed = parseReportUrl(targetUrl);
+    if (!parsed) {
+      res.status(400).json({ error: 'targetUrl must be an s-report URL ending in /<job>/<build>' });
+      return;
+    }
+    try {
+      const routing = await resolveRunTestbox(consoleConfig, {
+        jobName: parsed.jobName,
+        buildNumber: parsed.buildNumber,
+        userProvidedTestbox: req.body?.testbox ?? null,
+        username: jenkinsUser,
+      });
+      res.json(routing);
+    } catch (err) {
+      res.status(502).json({ error: `resolve failed: ${(err as Error).message}` });
+    }
+  });
+
+  // Reserve a testbox in SRP — the console's one OUTWARD, shared-resource action.
+  // Confirm-gated: requires `confirm: true` in the body (the UI sends it only
+  // from a deliberate "reserve" click), and SRP must be configured with a
+  // session cookie. Never auto-fired. Returns SRP's raw result so the UI can
+  // re-detect the (now reserved) box.
+  app.post('/api/reserve-testbox', async (req, res) => {
+    if (!consoleConfig?.srp?.baseUrl) {
+      res.status(503).json({ error: 'SRP not configured (srp.baseUrl / srp.cookie)' });
+      return;
+    }
+    if (req.body?.confirm !== true) {
+      res.status(400).json({ error: 'reserve requires explicit confirm:true' });
+      return;
+    }
+    try {
+      const result = await reserveTestbox(consoleConfig.srp, {
+        testbox: typeof req.body?.testbox === 'string' ? req.body.testbox : undefined,
+        durationHours: typeof req.body?.durationHours === 'number' ? req.body.durationHours : undefined,
+      });
+      res.status(result.ok ? 200 : 502).json(result);
+    } catch (err) {
+      res.status(502).json({ error: `reserve failed: ${(err as Error).message}` });
+    }
+  });
+
+  // Release a reservation the operator holds (by SRP record id). Confirm-gated,
+  // same as reserve. Reservations are 24h user leases (not per-run locks), so
+  // release is an explicit operator action, never auto-fired at run end.
+  app.post('/api/release-testbox', async (req, res) => {
+    if (!consoleConfig?.srp?.baseUrl) {
+      res.status(503).json({ error: 'SRP not configured (srp.baseUrl / srp.cookie)' });
+      return;
+    }
+    const reservationId = typeof req.body?.reservationId === 'string' ? req.body.reservationId : '';
+    if (req.body?.confirm !== true || !reservationId) {
+      res.status(400).json({ error: 'release requires confirm:true and a reservationId' });
+      return;
+    }
+    try {
+      const result = await releaseTestbox(consoleConfig.srp, reservationId);
+      res.status(result.ok ? 200 : 502).json(result);
+    } catch (err) {
+      res.status(502).json({ error: `release failed: ${(err as Error).message}` });
     }
   });
 
