@@ -161,5 +161,81 @@ CORRUPT7="$TMP/corrupt-vrt-newline.json"
 jq '.clusters[0].tests[0].vrt="https://vrt-x.example/9\n"' "$F" > "$CORRUPT7"
 expect 65 "validate rejects trailing-newline-corrupted vrt" -- "$LEDGER" validate "$CORRUPT7"
 
+# --- round4 fix 1 (P7): concurrent event writes must ALL survive (locked read-modify-write).
+# Pre-fix this dropped ~55% of writers (last mv wins, unlocked jq>tmp&&mv race).
+CF="$TMP/concurrent.json"
+"$LEDGER" init "$CF" >/dev/null 2>&1
+CN=40
+for i in $(seq 1 "$CN"); do "$LEDGER" event "$CF" "ev$i" >/dev/null 2>&1 & done
+wait
+CGOT="$(jq '.events | length' "$CF")"
+[ "$CGOT" = "$CN" ] && ok || bad "concurrent event writes: expected $CN survivors, got $CGOT"
+[ -d "$CF.lock.d" ] && bad "lock dir leaked after concurrent writers" || ok
+
+# --- round4 fix 2: validate enforces bucket ∈ six + tier ∈ 1-4 (mirrors the write-path enum checks)
+BADBUCKET="$TMP/bad-bucket.json"
+jq -n '{run:{},clusters:[{id:"bb1",status:"proposed",tests:[],bucket:"garbage"}],events:[]}' > "$BADBUCKET"
+expect 65 "validate rejects garbage bucket" -- "$LEDGER" validate "$BADBUCKET"
+OUT="$("$LEDGER" validate "$BADBUCKET" 2>&1 1>/dev/null || true)"
+case "$OUT" in *bad-bucket*) ok ;; *) bad "validate reason includes bad-bucket (got: $OUT)" ;; esac
+
+BADTIER="$TMP/bad-tier.json"
+jq -n '{run:{},clusters:[{id:"bt1",status:"proposed",tests:[],tier:99}],events:[]}' > "$BADTIER"
+expect 65 "validate rejects tier 99 (out of 1-4)" -- "$LEDGER" validate "$BADTIER"
+OUT="$("$LEDGER" validate "$BADTIER" 2>&1 1>/dev/null || true)"
+case "$OUT" in *bad-tier*) ok ;; *) bad "validate reason includes bad-tier (got: $OUT)" ;; esac
+
+GOODBT="$TMP/good-bucket-tier.json"
+jq -n '{run:{},clusters:[{id:"gb1",status:"proposed",tests:[],bucket:"selector",tier:2}],events:[]}' > "$GOODBT"
+expect 0 "validate accepts a valid bucket+tier" -- "$LEDGER" validate "$GOODBT"
+
+# --- round4 fix 3: init refuses to clobber a populated ledger without --force
+INITF="$TMP/init-guard.json"
+"$LEDGER" init "$INITF" >/dev/null 2>&1
+"$LEDGER" cluster-upsert "$INITF" populated --title t >/dev/null 2>&1
+expect 65 "init refuses to clobber populated ledger" -- "$LEDGER" init "$INITF"
+[ "$(jq '.clusters|length' "$INITF")" = "1" ] && ok || bad "init guard left populated ledger untouched"
+expect 0 "init --force clobbers populated ledger" -- "$LEDGER" init "$INITF" --force
+[ "$(jq '.clusters|length' "$INITF")" = "0" ] && ok || bad "init --force actually cleared clusters"
+EMPTYINIT="$TMP/init-empty.json"
+"$LEDGER" init "$EMPTYINIT" >/dev/null 2>&1
+expect 0 "init on an existing-but-empty ledger succeeds without --force" -- "$LEDGER" init "$EMPTYINIT"
+
+# --- round4 fix 4: a bare trailing flag must die(64) cleanly, not crash on `set -u`
+expect 64 "cluster-upsert --title with no value"      -- "$LEDGER" cluster-upsert "$F" cflag1 --title
+expect 64 "cluster-upsert --detail with no value"     -- "$LEDGER" cluster-upsert "$F" cflag1 --detail
+expect 64 "cluster-upsert --bucket with no value"     -- "$LEDGER" cluster-upsert "$F" cflag1 --bucket
+expect 64 "cluster-upsert --tier with no value"       -- "$LEDGER" cluster-upsert "$F" cflag1 --tier
+expect 64 "cluster-upsert --signature with no value"  -- "$LEDGER" cluster-upsert "$F" cflag1 --signature
+expect 64 "cluster-upsert --fix-vs-bug with no value" -- "$LEDGER" cluster-upsert "$F" cflag1 --fix-vs-bug
+expect 64 "cluster-upsert --tests with no value"      -- "$LEDGER" cluster-upsert "$F" cflag1 --tests
+
+"$LEDGER" cluster-upsert "$F" cflagstate --title t >/dev/null 2>&1
+"$LEDGER" cluster-state  "$F" cflagstate selected >/dev/null 2>&1
+expect 64 "cluster-state --passes with no value" -- "$LEDGER" cluster-state "$F" cflagstate applied --passes
+expect 64 "cluster-state --runs with no value"   -- "$LEDGER" cluster-state "$F" cflagstate applied --runs
+expect 64 "cluster-state --test with no value"   -- "$LEDGER" cluster-state "$F" cflagstate applied --test
+
+expect 64 "event --phase with no value" -- "$LEDGER" event "$F" someevent --phase
+expect 64 "event --who with no value"   -- "$LEDGER" event "$F" someevent --who
+
+# --- round4 fix 5: validate rejects duplicate cluster ids (breaks cluster-state's FROM lookup otherwise)
+DUPF="$TMP/dup-ids.json"
+jq -n '{run:{},clusters:[{id:"same",status:"proposed",tests:[]},{id:"same",status:"proposed",tests:[]}],events:[]}' > "$DUPF"
+expect 65 "validate rejects duplicate cluster ids" -- "$LEDGER" validate "$DUPF"
+OUT="$("$LEDGER" validate "$DUPF" 2>&1 1>/dev/null || true)"
+case "$OUT" in *dup-id*) ok ;; *) bad "validate reason includes dup-id (got: $OUT)" ;; esac
+
+# --- round4 fix 6: validate emits {id, reason} — spot-check two more reason strings
+OVERLONG="$TMP/overlong-title.json"
+jq -n --arg t "$(printf 'x%.0s' {1..81})" '{run:{},clusters:[{id:"ot1",status:"proposed",tests:[],title:$t}],events:[]}' > "$OVERLONG"
+OUT="$("$LEDGER" validate "$OVERLONG" 2>&1 1>/dev/null || true)"
+case "$OUT" in *overlong-title*) ok ;; *) bad "validate reason includes overlong-title (got: $OUT)" ;; esac
+
+PGR="$TMP/passes-gt-runs.json"
+jq -n '{run:{},clusters:[{id:"pgr1",status:"proposed",tests:[],passes:5,runs:2}],events:[]}' > "$PGR"
+OUT="$("$LEDGER" validate "$PGR" 2>&1 1>/dev/null || true)"
+case "$OUT" in *"passes>runs"*) ok ;; *) bad "validate reason includes passes>runs (got: $OUT)" ;; esac
+
 echo "ledger-test: $pass passed, $fail failed"
 [ "$fail" -eq 0 ]

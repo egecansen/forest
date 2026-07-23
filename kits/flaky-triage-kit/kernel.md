@@ -194,8 +194,9 @@ All writes go through ledger.sh subcommands (cluster-upsert / cluster-state / ev
 ## 9. Output — convergence summary
 
 Sections: **fixed (+green proof)** · **flagged-as-suspected-bug** (TODO + evidence, *not* filed)
-· **deferred** · **still-flaky** · **resolved-upstream**. This is the artifact the user reviews
-and commits against.
+· **deferred** · **resolved-upstream**. This is the artifact the user reviews and commits against.
+*(A 5th "still-flaky" section was removed — kernel §8's `status` enum has no such value; its would-be
+members are exactly the four terminal statuses above, each already rendered under its own heading.)*
 
 ## 10. Config seam (sahibinden defaults — the portable part)
 
