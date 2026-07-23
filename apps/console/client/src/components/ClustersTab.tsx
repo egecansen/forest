@@ -1,5 +1,6 @@
 import { useState } from 'react';
 import type { Cluster } from '../types';
+import { deriveRound } from '../run-round-logic';
 
 export const CHIP: Record<Cluster['state'], string> = {
   proposed: '· proposed', picked: '◇ picked', skipped: '– skipped', fixing: '⚒ fixing',
@@ -23,6 +24,12 @@ export function ClustersTab({ clusters }: { clusters: Cluster[] }) {
   const [openIds, setOpenIds] = useState<Set<string>>(() => new Set());
   if (clusters.length === 0) return <p className="field-note">no clusters yet — they appear after the cluster phase</p>;
 
+  // Coarse "which pass are we on" hint (see run-round-logic.ts) — a cluster
+  // still `proposed` once the run is past round 1 (i.e. at least one other
+  // cluster has already landed a terminal verdict) is new to THIS round, not
+  // carried over from round 1 — surfaced as a subtle `new` tag below.
+  const round = deriveRound(clusters);
+
   const toggle = (id: string) =>
     setOpenIds((prev) => {
       const next = new Set(prev);
@@ -34,6 +41,7 @@ export function ClustersTab({ clusters }: { clusters: Cluster[] }) {
     <div className="clusters-list">
       {clusters.map((c) => {
         const isOpen = openIds.has(c.id);
+        const isNew = c.state === 'proposed' && round > 1;
         return (
           <div key={c.id} className={`cluster-row cluster-${c.state} ${isOpen ? 'is-open' : ''}`}>
             <button
@@ -50,6 +58,7 @@ export function ClustersTab({ clusters }: { clusters: Cluster[] }) {
                 {c.tests.length === 1 ? c.tests[0] : `${c.tests.length} tests`}
               </span>
               <span className="cluster-state-chip">
+                {isNew && <span className="board-chip cluster-new-chip">new</span>}
                 {clusterStateChip(c)}
                 {c.note ? <span className="field-note"> · {c.note}</span> : null}
               </span>

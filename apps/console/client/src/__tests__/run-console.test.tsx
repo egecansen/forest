@@ -74,6 +74,51 @@ describe('RunConsole clusters tab', () => {
   });
 });
 
+describe('RunConsole round chip', () => {
+  it('renders "round 2" once a terminal verdict has landed alongside a still-proposed cluster', async () => {
+    const snap = snapshot({
+      clusters: [
+        { id: 'onetrust', title: 'OneTrust overlay', bucket: 'easy-fix', tests: ['A'], state: 'green' },
+        { id: 'another', title: 'Another flake', bucket: 'selector', tests: ['B'], state: 'proposed' },
+      ],
+    });
+    render(<RunConsole config={CONFIG} onNew={() => {}} readOnly staticSnapshot={snap} />);
+    expect(await screen.findByText(/round 2/i)).toBeInTheDocument();
+  });
+
+  it('does not render a round chip before any clusters exist', () => {
+    const snap = snapshot({ clusters: [] });
+    render(<RunConsole config={CONFIG} onNew={() => {}} readOnly staticSnapshot={snap} />);
+    expect(screen.queryByText(/round \d/i)).not.toBeInTheDocument();
+  });
+});
+
+describe('RunConsole clusters tab — new-cluster marker', () => {
+  it('a proposed cluster shows "new" once the run is past round 1 (a sibling already has a terminal verdict)', async () => {
+    const snap = snapshot({
+      clusters: [
+        { id: 'onetrust', title: 'OneTrust overlay', bucket: 'easy-fix', tests: ['A'], state: 'green' },
+        { id: 'another', title: 'Another flake', bucket: 'selector', tests: ['B'], state: 'proposed' },
+      ],
+    });
+    render(<RunConsole config={CONFIG} onNew={() => {}} readOnly staticSnapshot={snap} />);
+    expect(await screen.findByText('Another flake')).toBeInTheDocument();
+    expect(screen.getByText('new')).toBeInTheDocument();
+  });
+
+  it('round 1 (no terminal cluster yet) shows no "new" tag on any proposed row', async () => {
+    const snap = snapshot({
+      clusters: [
+        { id: 'onetrust', title: 'OneTrust overlay', bucket: 'easy-fix', tests: ['A'], state: 'proposed' },
+        { id: 'another', title: 'Another flake', bucket: 'selector', tests: ['B'], state: 'proposed' },
+      ],
+    });
+    render(<RunConsole config={CONFIG} onNew={() => {}} readOnly staticSnapshot={snap} />);
+    expect(await screen.findByText('OneTrust overlay')).toBeInTheDocument();
+    expect(screen.queryByText('new')).not.toBeInTheDocument();
+  });
+});
+
 describe('RunConsole selenoid link', () => {
   it('only a config selenoidUrl (no live detection yet) → link uses the config url', async () => {
     stubConfigFetch({ configured: true, selenoidUrl: 'https://selenoid.example/ui/#/sessions' });

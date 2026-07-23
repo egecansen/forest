@@ -337,6 +337,57 @@ describe('startLedgerWatcher — v2 (run.version: 2)', () => {
     expect(run.snapshot.clusters[0].tests).toEqual(['com.x.BarTest', 'com.x.FooTest#a']);
   });
 
+  it('(j) multi-round regression: a round-2 ledger read that adds a new cluster carries A(green) and B(proposed) forward — the iterative loop never drops a terminal cluster when a later round\'s cluster appears', async () => {
+    // Round 1: the ledger already carries A (green — terminal) and B
+    // (proposed). The watcher's first tick creates the board from these two.
+    const round1 = {
+      run: { version: 2 },
+      clusters: [
+        { id: 'a-selectors', title: 'A cluster', bucket: 'selector', status: 'green', tests: [{ fqcn: 'com.x.ATest' }] },
+        { id: 'b-vrt', title: 'B cluster', bucket: 'vrt', status: 'proposed', tests: [{ fqcn: 'com.x.BTest' }] },
+      ],
+      events: [],
+    };
+    const run = runStore.create(cfg); // no clusters published — nothing to carry forward yet
+    await fs.writeFile(path.join(dir, 'ledger.json'), JSON.stringify(round1), 'utf8');
+    const stop = startLedgerWatcher(run, dir, { intervalMs: 20 });
+    stops.push(stop);
+
+    await waitFor(() => run.snapshot.clusters.length === 2);
+    expect(run.snapshot.clusters.find((c) => c.id === 'a-selectors')?.state).toBe('green');
+    expect(run.snapshot.clusters.find((c) => c.id === 'b-vrt')?.state).toBe('proposed');
+
+    // Round 2: the re-cluster pass rewrites the ledger — A stays green, B is
+    // untouched, and a brand-new proposed cluster C shows up (the next
+    // round's freshly-clustered failure). This is the shape a real
+    // cluster-from-report → pick → rerun → re-cluster round produces: the
+    // whole ledger.clusters array is rewritten, not just appended to.
+    const round2 = {
+      run: { version: 2 },
+      clusters: [
+        { id: 'a-selectors', title: 'A cluster', bucket: 'selector', status: 'green', tests: [{ fqcn: 'com.x.ATest' }] },
+        { id: 'b-vrt', title: 'B cluster', bucket: 'vrt', status: 'proposed', tests: [{ fqcn: 'com.x.BTest' }] },
+        { id: 'c-new', title: 'C cluster (round 2)', bucket: 'easy-fix', status: 'proposed', tests: [{ fqcn: 'com.x.CTest' }] },
+      ],
+      events: [],
+    };
+    await fs.writeFile(path.join(dir, 'ledger.json'), JSON.stringify(round2), 'utf8');
+
+    await waitFor(() => run.snapshot.clusters.length === 3);
+
+    const ids = run.snapshot.clusters.map((c) => c.id).sort();
+    expect(ids).toEqual(['a-selectors', 'b-vrt', 'c-new']);
+
+    // The carry-forward holds across rounds: A's terminal verdict is not
+    // dropped when C appears in a later round, and B is unchanged.
+    const a = run.snapshot.clusters.find((c) => c.id === 'a-selectors')!;
+    expect(a.state).toBe('green');
+    const b = run.snapshot.clusters.find((c) => c.id === 'b-vrt')!;
+    expect(b.state).toBe('proposed');
+    const c = run.snapshot.clusters.find((c) => c.id === 'c-new')!;
+    expect(c.state).toBe('proposed');
+  });
+
   it('(i) a reordered-but-set-equal vrt array does not trigger a spurious updateCluster', async () => {
     // Seeded snapshot cluster whose `vrt` order differs from the ledger's —
     // same fqcn/url set, different array order — everything else identical

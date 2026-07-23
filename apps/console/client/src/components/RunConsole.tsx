@@ -2,6 +2,7 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import type { RunConfig, RunSnapshot, RunSummary } from '../types';
 import { useRunStream, isTerminalStatus } from '../useRunStream';
 import { findLatestRateLimitWarning, findLatestError, isRunLive, runStatusTone } from '../consoleAlerts';
+import { deriveRound } from '../run-round-logic';
 import { TerminalLog } from './TerminalLog';
 import { Sidebar } from './Sidebar';
 import { Footer } from './Footer';
@@ -228,6 +229,11 @@ export function RunConsole({ config, onStop, onPause, onResume, onNew, backLabel
     report: counts.report > seen.report,
   };
 
+  // Coarse "which pass are we on" hint for the iterative cluster-first loop
+  // (cluster-from-report → pick → rerun picked cluster → re-cluster each
+  // round) — derived client-side from the clusters the board already has, no
+  // server/schema change. Only shown once there's something to count.
+  const round = useMemo(() => deriveRound(snapshot.clusters), [snapshot.clusters]);
   const reportReady = snapshot.phases.find((p) => p.id === 'report')?.status === 'done';
   const filesPhase = snapshot.phases.find((p) => p.id === 'fix');
   const runIsLive = isRunLive(snapshot.status, readOnly);
@@ -268,6 +274,11 @@ export function RunConsole({ config, onStop, onPause, onResume, onNew, backLabel
             <span className="term-title-name">{runTitle}</span>
             <span className="dot" />
             <span className="mode">{runStatusLabel(snapshot.status)}</span>
+            {config.mode === 'triage' && snapshot.clusters.length > 0 && (
+              <span className="pipeline-status round-chip" title="coarse pass count — how many rounds of verdicts have landed">
+                round {round}
+              </span>
+            )}
             {readOnly && (
               <span className="pipeline-status archived-badge" title="past run, read-only — viewed from history">
                 archived · read-only
