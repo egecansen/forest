@@ -50,12 +50,16 @@ export function RunConsole({ config, onStop, onPause, onResume, onNew, backLabel
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [snapshot.status]);
 
-  // Selenoid live-session link (GET /api/config's `selenoidUrl`) — a URL, not a
-  // secret, so it's fetched the same best-effort way BuildsBoard/StartScreen
-  // fetch their own slice of /api/config. Stays null (hiding the header link
-  // entirely) when the console isn't wired up to a Selenoid grid, or the
+  // Selenoid live-session link — PREFERS the URL detected live from this run's
+  // own tool-result output (snapshot.selenoidUrl, set by the driver's
+  // extractSelenoidUrl/run.setSelenoidUrl — see driver.ts/run-store.ts), and
+  // falls back to the static GET /api/config's `selenoidUrl` (a URL, not a
+  // secret, fetched the same best-effort way BuildsBoard/StartScreen fetch
+  // their own slice of /api/config) only when nothing has been detected yet.
+  // Both stay unset (hiding the header link entirely) when the console isn't
+  // wired up to a Selenoid grid AND nothing has been detected, or the config
   // fetch itself fails.
-  const [selenoidUrl, setSelenoidUrl] = useState<string | null>(null);
+  const [configSelenoidUrl, setConfigSelenoidUrl] = useState<string | null>(null);
   useEffect(() => {
     let ignore = false;
     (async () => {
@@ -63,13 +67,14 @@ export function RunConsole({ config, onStop, onPause, onResume, onNew, backLabel
         const res = await fetch('/api/config');
         if (!res.ok) return;
         const json = (await res.json()) as { selenoidUrl?: string };
-        if (!ignore) setSelenoidUrl(json.selenoidUrl ?? null);
+        if (!ignore) setConfigSelenoidUrl(json.selenoidUrl ?? null);
       } catch {
         // Best-effort: the console still works with the selenoid link just unavailable.
       }
     })();
     return () => { ignore = true; };
   }, []);
+  const selenoidUrl = snapshot.selenoidUrl || configSelenoidUrl;
   const showSelenoidLink = !!selenoidUrl && isRunLive(snapshot.status, readOnly) && (snapshot.status === 'running' || snapshot.status === 'awaiting-input');
 
   // Files tab badge (worktree file count, not the agent-touched snapshot.files

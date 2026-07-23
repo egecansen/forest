@@ -94,6 +94,15 @@ describe('RunStore.restore', () => {
     expect(runStore.restore(snapshot)).toBeNull();
   });
 
+  it('carries selenoidUrl over from the persisted snapshot', () => {
+    const snapshot = makeSnapshot({
+      config: { ...baseConfig, runId: 'restore-run-selenoid' },
+      selenoidUrl: 'https://selenoid.example/ui/#/sessions/abc123',
+    });
+    const run = runStore.restore(snapshot);
+    expect(run!.snapshot.selenoidUrl).toBe('https://selenoid.example/ui/#/sessions/abc123');
+  });
+
   it('seeds session clock on resume-after-restore to exclude downtime gap', () => {
     // Simulate a paused snapshot: started 2 hours ago, but only 10 min active (prior elapsed),
     // now idle for ~110 min waiting to be resumed.

@@ -216,6 +216,8 @@ export function applyEvent(prev: RunSnapshot, ev: ServerEvent): RunSnapshot {
         : prev;
     case 'nudging':
       return { ...prev, nudging: ev.nudging };
+    case 'selenoidUrl':
+      return { ...prev, selenoidUrl: ev.url };
     default:
       return prev;
   }

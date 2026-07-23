@@ -12,8 +12,42 @@ export interface ConsoleConfig {
   /** Selenoid session-grid URL — a live link, not a secret; shown in the run
    *  console header while a run is live so the operator can jump straight to
    *  the browser session. Optional: unset when the console isn't wired up
-   *  to a Selenoid grid. */
+   *  to a Selenoid grid. Used only as a fallback when no live URL has been
+   *  detected in the run's own output — see `selenoidUrlPattern` below. */
   selenoidUrl?: string;
+  /** JS-regex SOURCE (no slashes/flags) matched, case-insensitively, against
+   *  live tool-result text to detect the actual per-run Selenoid live-session
+   *  URL (driver.ts) — the real URL is dynamic per rerun, unlike the static
+   *  `selenoidUrl` above. Server-side detection knob only; never echoed to
+   *  the client. Optional: falls back to `DEFAULT_SELENOID_URL_PATTERN` when
+   *  absent, or when the configured source is not a valid regex. */
+  selenoidUrlPattern?: string;
+}
+
+/** Matches a Selenoid grid URL (host contains "selenoid") or a generic
+ *  Selenium-grid session-viewer URL (`.../#/sessions/<id>`). */
+export const DEFAULT_SELENOID_URL_PATTERN =
+  '(https?://\\S*selenoid\\S*|https?://\\S+/#/sessions/\\S+)';
+
+/**
+ * Builds the RegExp driver.ts uses to detect a Selenoid live-session URL in
+ * tool-result text. Always case-insensitive. `pattern` is the operator's
+ * optional `ConsoleConfig.selenoidUrlPattern`; when absent, or when it isn't
+ * a valid regex source, falls back to `DEFAULT_SELENOID_URL_PATTERN` — a bad
+ * config value degrades detection, it never crashes the console. Invalid
+ * configured patterns log a warning so a typo doesn't fail silently forever.
+ */
+export function buildSelenoidUrlRegex(pattern?: string): RegExp {
+  if (pattern) {
+    try {
+      return new RegExp(pattern, 'i');
+    } catch (e) {
+      console.warn(
+        `[hektor-console] invalid selenoidUrlPattern (${(e as Error).message}) — using default`
+      );
+    }
+  }
+  return new RegExp(DEFAULT_SELENOID_URL_PATTERN, 'i');
 }
 
 const home = () => process.env.HEKTOR_CONSOLE_HOME ?? path.join(os.homedir(), '.hektor-console');

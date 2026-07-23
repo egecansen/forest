@@ -1,8 +1,8 @@
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
-import { importDefaults, kitAllowlist, loadConsoleConfig } from '../console-config.js';
+import { buildSelenoidUrlRegex, importDefaults, kitAllowlist, loadConsoleConfig } from '../console-config.js';
 
 let tmp: string;
 const mkTmp = async () => (tmp = await fs.mkdtemp(path.join(os.tmpdir(), 'hcfg-')));
@@ -55,5 +55,35 @@ describe('console-config', () => {
     await fs.mkdir(core, { recursive: true });
     await fs.writeFile(path.join(core, 'config.json'), JSON.stringify({ es: { host_allowlist: ['https://ok.example'] } }));
     expect(await kitAllowlist(tmp)).toEqual(['https://ok.example']);
+  });
+});
+
+describe('buildSelenoidUrlRegex', () => {
+  it('uses the built-in default pattern (case-insensitive) when no pattern is configured', () => {
+    const re = buildSelenoidUrlRegex();
+    expect(re.flags).toContain('i');
+    expect('SESSION AT HTTPS://SELENOID.EXAMPLE/UI/#/SESSIONS/ABC READY'.match(re)?.[0]).toMatch(/selenoid/i);
+    expect('grid at https://grid.example/#/sessions/xyz789 ready'.match(re)?.[0]).toContain('sessions/xyz789');
+    expect('no url here at all'.match(re)).toBeNull();
+  });
+
+  it('falls back to the default and warns when the configured pattern is not a valid regex', () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const re = buildSelenoidUrlRegex('(unterminated[');
+    expect(warn).toHaveBeenCalled();
+    expect('https://selenoid.example/wd/hub'.match(re)?.[0]).toBe('https://selenoid.example/wd/hub');
+    warn.mockRestore();
+  });
+
+  it('uses a valid custom pattern verbatim, without warning', () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const re = buildSelenoidUrlRegex('https?://my-grid\\.internal/session/\\S+');
+    expect(warn).not.toHaveBeenCalled();
+    expect('watch it live: https://my-grid.internal/session/abc123'.match(re)?.[0]).toBe(
+      'https://my-grid.internal/session/abc123'
+    );
+    // The default pattern's "selenoid" case wouldn't match this custom one.
+    expect('https://selenoid.example/ui'.match(re)).toBeNull();
+    warn.mockRestore();
   });
 });

@@ -11,7 +11,7 @@ import { normalizeRunBody } from './validate.js';
 import { listDirectories } from './browse.js';
 import { isAllowedHost, isAllowedOrigin } from './host-guard.js';
 import { saveRun, listRuns, loadRun, isSafeRunId, resolveInsideRoot, resolveRunsDirSync } from './persistence.js';
-import { loadConsoleConfig, kitAllowlist } from './console-config.js';
+import { loadConsoleConfig, kitAllowlist, buildSelenoidUrlRegex } from './console-config.js';
 import { buildRedactList, makeRedactor } from './redact.js';
 import { findRunConflict } from './run-conflict.js';
 import { getWorktree } from './worktree.js';
@@ -117,6 +117,11 @@ async function main() {
   // log/report/cluster text can never echo a config secret back to the board
   // or persisted history.
   const secretRedactor = makeRedactor(buildRedactList(consoleConfig));
+  // Built once from the loaded config's optional selenoidUrlPattern (falls
+  // back to the default pattern, warning on an invalid one) and handed to
+  // every driver so the live Selenoid link can be detected from a run's own
+  // tool-result output (driver.ts).
+  const selenoidUrlRegex = buildSelenoidUrlRegex(consoleConfig?.selenoidUrlPattern);
   // Boot-time restore: bring back every run a PRIOR process parked as
   // 'paused' on shutdown (see parkAllRuns/run-park.ts) so it's live on the
   // board again — GET /api/runs lists it (restoreParkedRuns registers it in
@@ -228,7 +233,7 @@ async function main() {
     }
     const run = runStore.create(parsed.value, secretRedactor);
     const runId = run.snapshot.config!.runId;
-    const stop = startDriver(run, parsed.value.demo === true ? makeDemoQueryFn(run) : undefined);
+    const stop = startDriver(run, parsed.value.demo === true ? makeDemoQueryFn(run) : undefined, { selenoidUrlRegex });
     drivers.set(runId, stop);
     attachPersistence(run, runId);
 
@@ -279,7 +284,7 @@ async function main() {
       res.status(409).json({ error: `cannot resume a run in status "${run.snapshot.status}"` });
       return;
     }
-    drivers.set(id, startDriver(run, undefined, { resume: true }));
+    drivers.set(id, startDriver(run, undefined, { resume: true, selenoidUrlRegex }));
     res.json({ ok: true });
   });
 

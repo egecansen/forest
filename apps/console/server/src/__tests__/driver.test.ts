@@ -546,3 +546,124 @@ describe('HEKTOR_DISABLE_MCP acceptance switch', () => {
     expect(capturedOptions).toHaveProperty('mcpServers');
   });
 });
+
+describe('Selenoid live-session URL detection (tool RESULTS, not tool calls)', () => {
+  // A tool_result's `content` may be a plain string or an array of
+  // `{type:'text', text}` parts (see @anthropic-ai/sdk's
+  // ToolResultBlockParam) — cover both shapes.
+  const userToolResult = (content: unknown) =>
+    msg({ type: 'user', message: { content: [{ type: 'tool_result', tool_use_id: 't1', content }] } });
+
+  it('a tool_result carrying a Selenoid URL (string content) → setSelenoidUrl called once with it', async () => {
+    const run = runStore.create(cfg);
+    const spy = vi.spyOn(run, 'setSelenoidUrl');
+    const done = new Promise<void>((r) => run.on('event', (e) => { if (e.type === 'status' && e.status === 'completed') r(); }));
+    startDriver(run, scripted([
+      msg({ type: 'system', subtype: 'init', session_id: 'sess-selenoid-1' }),
+      userToolResult('starting rerun… live at https://selenoid.example/ui/#/sessions/abc123 now'),
+      msg({ type: 'result', subtype: 'success', total_cost_usd: 0.01, usage: { output_tokens: 10 }, result: 'done' }),
+    ]), { ledgerWatcherImpl: noopLedgerWatcher });
+    await done;
+
+    expect(spy).toHaveBeenCalledTimes(1);
+    expect(spy).toHaveBeenCalledWith('https://selenoid.example/ui/#/sessions/abc123');
+    expect(run.snapshot.selenoidUrl).toBe('https://selenoid.example/ui/#/sessions/abc123');
+  });
+
+  it('a tool_result carrying a Selenoid URL (array-of-text-parts content) is also detected', async () => {
+    const run = runStore.create(cfg);
+    const spy = vi.spyOn(run, 'setSelenoidUrl');
+    const done = new Promise<void>((r) => run.on('event', (e) => { if (e.type === 'status' && e.status === 'completed') r(); }));
+    startDriver(run, scripted([
+      msg({ type: 'system', subtype: 'init', session_id: 'sess-selenoid-2' }),
+      userToolResult([{ type: 'text', text: 'grid ready: https://grid.example/#/sessions/xyz789 go watch' }]),
+      msg({ type: 'result', subtype: 'success', total_cost_usd: 0.01, usage: { output_tokens: 10 }, result: 'done' }),
+    ]), { ledgerWatcherImpl: noopLedgerWatcher });
+    await done;
+
+    expect(spy).toHaveBeenCalledTimes(1);
+    expect(spy).toHaveBeenCalledWith('https://grid.example/#/sessions/xyz789');
+  });
+
+  it('a second, IDENTICAL url is not re-surfaced', async () => {
+    const run = runStore.create(cfg);
+    const spy = vi.spyOn(run, 'setSelenoidUrl');
+    const done = new Promise<void>((r) => run.on('event', (e) => { if (e.type === 'status' && e.status === 'completed') r(); }));
+    startDriver(run, scripted([
+      msg({ type: 'system', subtype: 'init', session_id: 'sess-selenoid-3' }),
+      userToolResult('live at https://selenoid.example/ui/#/sessions/abc123 now'),
+      userToolResult('still running, session https://selenoid.example/ui/#/sessions/abc123 unchanged'),
+      msg({ type: 'result', subtype: 'success', total_cost_usd: 0.01, usage: { output_tokens: 10 }, result: 'done' }),
+    ]), { ledgerWatcherImpl: noopLedgerWatcher });
+    await done;
+
+    expect(spy).toHaveBeenCalledTimes(1);
+  });
+
+  it('a DIFFERENT url (a rerun spun a new session) is surfaced again', async () => {
+    const run = runStore.create(cfg);
+    const spy = vi.spyOn(run, 'setSelenoidUrl');
+    const done = new Promise<void>((r) => run.on('event', (e) => { if (e.type === 'status' && e.status === 'completed') r(); }));
+    startDriver(run, scripted([
+      msg({ type: 'system', subtype: 'init', session_id: 'sess-selenoid-4' }),
+      userToolResult('live at https://selenoid.example/ui/#/sessions/abc123 now'),
+      userToolResult('rerun spun a new one: https://selenoid.example/ui/#/sessions/def456 now'),
+      msg({ type: 'result', subtype: 'success', total_cost_usd: 0.01, usage: { output_tokens: 10 }, result: 'done' }),
+    ]), { ledgerWatcherImpl: noopLedgerWatcher });
+    await done;
+
+    expect(spy).toHaveBeenCalledTimes(2);
+    expect(spy).toHaveBeenNthCalledWith(1, 'https://selenoid.example/ui/#/sessions/abc123');
+    expect(spy).toHaveBeenNthCalledWith(2, 'https://selenoid.example/ui/#/sessions/def456');
+  });
+
+  it('a tool_result with no url is never called', async () => {
+    const run = runStore.create(cfg);
+    const spy = vi.spyOn(run, 'setSelenoidUrl');
+    const done = new Promise<void>((r) => run.on('event', (e) => { if (e.type === 'status' && e.status === 'completed') r(); }));
+    startDriver(run, scripted([
+      msg({ type: 'system', subtype: 'init', session_id: 'sess-selenoid-5' }),
+      userToolResult('42 examples, 0 failures'),
+      msg({ type: 'result', subtype: 'success', total_cost_usd: 0.01, usage: { output_tokens: 10 }, result: 'done' }),
+    ]), { ledgerWatcherImpl: noopLedgerWatcher });
+    await done;
+
+    expect(spy).not.toHaveBeenCalled();
+  });
+
+  it('a malformed user-message shape never throws and never calls setSelenoidUrl', async () => {
+    const run = runStore.create(cfg);
+    const spy = vi.spyOn(run, 'setSelenoidUrl');
+    const done = new Promise<void>((r) => run.on('event', (e) => { if (e.type === 'status' && e.status === 'completed') r(); }));
+    startDriver(run, scripted([
+      msg({ type: 'system', subtype: 'init', session_id: 'sess-selenoid-6' }),
+      msg({ type: 'user' }), // no `message` at all
+      msg({ type: 'user', message: {} }), // no `content`
+      msg({ type: 'user', message: { content: 'a plain string, not an array' } }),
+      msg({ type: 'user', message: { content: [null, 42, { type: 'tool_result' }, { type: 'tool_result', content: 123 }] } }),
+      msg({ type: 'result', subtype: 'success', total_cost_usd: 0.01, usage: { output_tokens: 10 }, result: 'done' }),
+    ]), { ledgerWatcherImpl: noopLedgerWatcher });
+    await done;
+
+    expect(spy).not.toHaveBeenCalled();
+    expect(run.snapshot.status).toBe('completed');
+  });
+
+  it('a custom selenoidUrlRegex (via opts) is used instead of the default', async () => {
+    const run = runStore.create(cfg);
+    const spy = vi.spyOn(run, 'setSelenoidUrl');
+    const done = new Promise<void>((r) => run.on('event', (e) => { if (e.type === 'status' && e.status === 'completed') r(); }));
+    startDriver(run, scripted([
+      msg({ type: 'system', subtype: 'init', session_id: 'sess-selenoid-7' }),
+      // Does NOT match the default pattern (no "selenoid", no "/#/sessions/").
+      userToolResult('watch it live: https://my-grid.internal/session/abc123 now'),
+      msg({ type: 'result', subtype: 'success', total_cost_usd: 0.01, usage: { output_tokens: 10 }, result: 'done' }),
+    ]), {
+      ledgerWatcherImpl: noopLedgerWatcher,
+      selenoidUrlRegex: /https?:\/\/my-grid\.internal\/session\/\S+/i,
+    });
+    await done;
+
+    expect(spy).toHaveBeenCalledWith('https://my-grid.internal/session/abc123');
+  });
+});

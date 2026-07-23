@@ -258,6 +258,15 @@ describe('applyEvent: question', () => {
   });
 });
 
+describe('applyEvent: selenoidUrl', () => {
+  it('sets snapshot.selenoidUrl and a later match replaces it', () => {
+    let s = applyEvent(base, { type: 'selenoidUrl', url: 'https://selenoid.example/ui/#/sessions/abc123' });
+    expect(s.selenoidUrl).toBe('https://selenoid.example/ui/#/sessions/abc123');
+    s = applyEvent(s, { type: 'selenoidUrl', url: 'https://selenoid.example/ui/#/sessions/def456' });
+    expect(s.selenoidUrl).toBe('https://selenoid.example/ui/#/sessions/def456');
+  });
+});
+
 describe('phase activeMs streaming (F15)', () => {
   it('merges activeMs from a phase event and keeps the prior value when absent', () => {
     const withPhases = { ...base, phases: basePhases.map((p) => ({ ...p })) };

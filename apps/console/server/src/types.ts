@@ -175,6 +175,13 @@ export interface RunSnapshot {
    *  it has detected the ledger-write-gate denial and will nudge the reviewer
    *  re-dispatch on the next resume. Drives the client's "recovering" chip. (#10) */
   nudging?: boolean;
+  /** Selenoid live-session URL detected live from the running triage's own
+   *  tool-result output (driver.ts) — the header "watch live" link prefers
+   *  this over the static config `selenoidUrl` fallback. Unset until the
+   *  first match of this run's session; persists across a rerun's new
+   *  session (each rerun spins a fresh Selenoid session, so a later match
+   *  replaces an earlier one). */
+  selenoidUrl?: string;
 }
 
 export type ServerEvent =
@@ -210,7 +217,8 @@ export type ServerEvent =
   | { type: 'pipelineStatus'; pipelineStatus: string | null }
   | { type: 'question'; question: PendingQuestion }
   | { type: 'questionResolved'; questionId: string }
-  | { type: 'nudging'; nudging: boolean };
+  | { type: 'nudging'; nudging: boolean }
+  | { type: 'selenoidUrl'; url: string };
 
 export const PHASE_ORDER: PhaseId[] = ['ingest', 'cluster', 'pick', 'fix', 'verify', 'report'];
 

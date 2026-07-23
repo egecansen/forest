@@ -465,6 +465,25 @@ export class Run extends EventEmitter {
     this.emitEvent({ type: 'reportText', reportText: redacted });
   }
 
+  /**
+   * Surfaces the Selenoid live-session URL detected in this run's own
+   * tool-result output (driver.ts) — sets the snapshot field, emits a
+   * `selenoidUrl` event, and appends one `success`-kind "watch live: <url>"
+   * log entry. `url` is agent/tool-output-derived text, so it's routed
+   * through the same secretRedactor as log()/setReportText() below. A no-op
+   * when `url` is unchanged from the currently-surfaced one — a rerun spins
+   * a fresh Selenoid session and calls this again with a genuinely new url,
+   * but repeats of the same url (the driver's own dedupe should already
+   * prevent most of these) must not spam the log or re-emit the event.
+   */
+  setSelenoidUrl(url: string) {
+    const redacted = this.secretRedactor(url)!;
+    if (this.snapshot.selenoidUrl === redacted) return;
+    this.snapshot.selenoidUrl = redacted;
+    this.emitEvent({ type: 'selenoidUrl', url: redacted });
+    this.log({ kind: 'success', text: `watch live: ${redacted}` });
+  }
+
   setSubStage(subStage: string | null) {
     // Agent/ledger-authored free text — route through the injected
     // secretRedactor (not the legacy no-op redact()), same as setPhase's
@@ -615,6 +634,7 @@ export class Run extends EventEmitter {
     run.snapshot.reportUrl = snapshot.reportUrl;
     if (snapshot.reportText !== undefined) run.snapshot.reportText = snapshot.reportText;
     if (snapshot.sessionId) run.snapshot.sessionId = snapshot.sessionId;
+    if (snapshot.selenoidUrl !== undefined) run.snapshot.selenoidUrl = snapshot.selenoidUrl;
     run.snapshot.pendingQuestion = null;
     run.snapshot.status = 'paused';
     run.costBase = snapshot.telemetry.priorCostUsd ?? 0;

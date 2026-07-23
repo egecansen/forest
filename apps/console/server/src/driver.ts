@@ -8,6 +8,7 @@ import { makeCanUseTool } from './driver-can-use-tool.js';
 import { hektorMcpServer } from './driver-mcp.js';
 import { pendingAnswers } from './pending-answers.js';
 import { startLedgerWatcher } from './ledger-watcher.js';
+import { buildSelenoidUrlRegex } from './console-config.js';
 
 export type QueryFn = (args: { prompt: string; options: Record<string, unknown> }) =>
   AsyncIterable<Record<string, unknown>> & { interrupt?: () => Promise<void> };
@@ -125,6 +126,74 @@ function pickIsDone(run: Run): boolean {
   return run.snapshot.phases.find((p) => p.id === 'pick')?.status === 'done';
 }
 
+// Cap on how much tool-result text a single 'user' message contributes to the
+// Selenoid scan — a rerun's stdout capture can be huge, and this is scan
+// input, not anything ever logged/persisted wholesale.
+const SELENOID_SCAN_CAP = 200_000;
+// Plausibility guard on a regex MATCH before it's ever surfaced via
+// run.setSelenoidUrl: must look like an actual http(s) URL, contain no
+// whitespace (a greedy \S* alternative could otherwise straddle unrelated
+// text), and stay within a sane length.
+const MAX_PLAUSIBLE_URL_LENGTH = 500;
+function isPlausibleUrl(candidate: string): boolean {
+  return (
+    /^https?:\/\//i.test(candidate) &&
+    !/\s/.test(candidate) &&
+    candidate.length <= MAX_PLAUSIBLE_URL_LENGTH
+  );
+}
+
+/**
+ * Scans a single SDK stream message's `user`-type tool_result content for a
+ * Selenoid live-session URL. The SDK types `message.content` as `string |
+ * Array<ContentBlockParam>`, and a `tool_result` block's own `content` as
+ * `string | Array<TextBlockParam | ...>` (see @anthropic-ai/sdk's
+ * ToolResultBlockParam) — both shapes are handled here, plus the absence of
+ * either. Defensive by construction (every access is optional-chained /
+ * type-guarded) and additionally wrapped in try/catch so a genuinely
+ * unexpected shape from a future SDK version can never crash the driver's
+ * stream loop — it just means this message contributes no match.
+ *
+ * Returns the first plausible match's raw text, or null.
+ */
+export function extractSelenoidUrl(m: Record<string, unknown>, pattern: RegExp): string | null {
+  try {
+    const message = (m as { message?: { content?: unknown } }).message;
+    const blocks = message?.content;
+    if (!Array.isArray(blocks)) return null;
+
+    let scanned = '';
+    for (const block of blocks) {
+      if (scanned.length >= SELENOID_SCAN_CAP) break;
+      if (!block || typeof block !== 'object') continue;
+      if ((block as { type?: unknown }).type !== 'tool_result') continue;
+      const content = (block as { content?: unknown }).content;
+      if (typeof content === 'string') {
+        scanned += content;
+      } else if (Array.isArray(content)) {
+        for (const part of content) {
+          if (
+            part &&
+            typeof part === 'object' &&
+            (part as { type?: unknown }).type === 'text' &&
+            typeof (part as { text?: unknown }).text === 'string'
+          ) {
+            scanned += (part as { text: string }).text;
+          }
+        }
+      }
+    }
+    if (!scanned) return null;
+
+    const match = scanned.slice(0, SELENOID_SCAN_CAP).match(pattern);
+    const candidate = match?.[0];
+    if (!candidate) return null;
+    return isPlausibleUrl(candidate) ? candidate : null;
+  } catch {
+    return null;
+  }
+}
+
 // The real SDK's `query()` takes a strongly-typed `Options` (and returns a
 // `Query` — an AsyncGenerator<SDKMessage, void> with several control methods
 // beyond `interrupt`). `QueryFn` deliberately types both sides loosely
@@ -139,11 +208,25 @@ const realQueryFn: QueryFn = ({ prompt, options }) =>
 export function startDriver(
   run: Run,
   queryFn: QueryFn = realQueryFn,
-  opts: { resume?: boolean; ledgerWatcherImpl?: typeof startLedgerWatcher } = {}
+  opts: {
+    resume?: boolean;
+    ledgerWatcherImpl?: typeof startLedgerWatcher;
+    /** Regex used to detect a Selenoid live-session URL in tool-result text
+     *  (see extractSelenoidUrl below). Defaults to the built-in pattern —
+     *  production callers (index.ts) pass one built from the operator's
+     *  optional ConsoleConfig.selenoidUrlPattern. */
+    selenoidUrlRegex?: RegExp;
+  } = {}
 ): DriverHandle {
   const config = run.snapshot.config!;
   const abort = new AbortController();
   let pausing = false;
+  const selenoidUrlRegex = opts.selenoidUrlRegex ?? buildSelenoidUrlRegex();
+  // The last Selenoid URL this driver has surfaced — so a rerun that keeps
+  // logging the SAME live url every tick doesn't call run.setSelenoidUrl (and
+  // thus re-log "watch live: …") on every single tool result. A genuinely
+  // DIFFERENT url (a fresh rerun's new session) still gets surfaced.
+  let lastSelenoidUrl: string | null = null;
   // Injectable seam (tests only — production always gets the real watcher):
   // every pre-existing driver test scripts a non-demo run, so without this
   // seam each one silently spins up a REAL fs.watch/poll timer against its
@@ -219,6 +302,17 @@ export function startDriver(
                 run.log({ kind: 'skill', text: name });
               }
             }
+          }
+        } else if (type === 'user') {
+          // Tool RESULTS (not tool calls) stream back as 'user' messages —
+          // this is where a rerun's gradle/Selenium stdout (and thus the
+          // Selenoid live-session URL) actually appears. Only the matched
+          // URL ever flows out via run.setSelenoidUrl — the raw tool-result
+          // text itself is never logged wholesale.
+          const url = extractSelenoidUrl(m, selenoidUrlRegex);
+          if (url && url !== lastSelenoidUrl) {
+            lastSelenoidUrl = url;
+            run.setSelenoidUrl(url);
           }
         } else if (type === 'result') {
           const r = m as { subtype?: string; total_cost_usd?: number; usage?: { output_tokens?: number }; result?: string };

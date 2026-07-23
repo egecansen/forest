@@ -178,6 +178,10 @@ export interface RunSnapshot {
   /** True while the driver is recovering from an approver-registration block —
    *  drives the "recovering" chip in the run header. (#10) */
   nudging?: boolean;
+  /** Selenoid live-session URL detected live from the running triage's own
+   *  tool-result output — the header "watch live" link prefers this over the
+   *  static config `selenoidUrl` fallback (see RunConsole.tsx). */
+  selenoidUrl?: string;
 }
 
 export type ServerEvent =
@@ -213,7 +217,8 @@ export type ServerEvent =
   | { type: 'pipelineStatus'; pipelineStatus: string | null }
   | { type: 'question'; question: PendingQuestion }
   | { type: 'questionResolved'; questionId: string }
-  | { type: 'nudging'; nudging: boolean };
+  | { type: 'nudging'; nudging: boolean }
+  | { type: 'selenoidUrl'; url: string };
 
 /**
  * Lightweight, list-friendly projection of a persisted `RunSnapshot` — what
