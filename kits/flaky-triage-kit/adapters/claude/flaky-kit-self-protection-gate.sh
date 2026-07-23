@@ -24,10 +24,27 @@
 # not a wall — this harness doesn't honor PreToolUse `deny`, and the unlock is
 # settable — the point is to convert casual / injected self-modification into a
 # deliberate, audited act. It now also matches Bash commands that mutate the
-# surface (redirect / sed -i / cp / mv / rm / chmod), closing the Write|Edit-only
-# gap heuristically. The REAL wall (an OS read-only bit) is `core/lock-kit.sh`,
-# also keyed to HEKTOR_FLAKYKIT_UNLOCK. Legitimate kit maintenance sets the unlock
-# flag; the use is logged to docs/hektor/.hook-audit.log.
+# surface (redirect / sed -i / cp / mv / rm / chmod / git checkout|apply|restore|
+# stash|reset|clean / rsync / patch), closing the Write|Edit-only gap heuristically.
+# The REAL wall (an OS read-only bit) is `core/lock-kit.sh`, also keyed to
+# HEKTOR_FLAKYKIT_UNLOCK. Legitimate kit maintenance sets the unlock flag; the use
+# is logged to docs/hektor/.hook-audit.log.
+#
+# Round2 — path canonicalization (honest framing: this is defense-in-depth, raising
+# the bar against NATURAL, single-command, accidental/self-defeating bypasses — it
+# is NOT a hard wall against a shell-capable agent; `base64 | bash`, a compiled
+# helper, or any writer that doesn't go through this literal command string always
+# exists). The Write/Edit `case` glob and the Bash SURF_RE both required literal
+# path adjacency, so a `./` no-op segment, a `../`-then-back-in reversal, a symlink
+# whose OWN path doesn't mention the surface, or a bare cwd-relative reference all
+# sailed past unmatched. `canon_path()` resolves the presented path with realpath
+# (same realpath-first discipline as core/apply.sh's I3 fix), anchored on the
+# hook's `.cwd` when the path itself is relative, before the surface check —
+# degrades to the raw string if python3 is unavailable (best-effort, not silently
+# unsafe: the raw check still runs). The Bash branch also THREADS that same `.cwd`
+# into core/shell-guard.py (HEKTOR_FK_CWD) so its own cd-chain tracking can anchor
+# a bare relative reference on the command's REAL starting directory, not just
+# text parsed out of the command itself.
 #
 # Failure -> action
 # -----------------
@@ -44,36 +61,70 @@ JQ="$(command -v jq || true)"
 
 INPUT=$(cat)
 TOOL_NAME=$(echo "$INPUT" | "$JQ" -r '.tool_name // empty' 2>/dev/null || echo "")
+CWD=$(echo "$INPUT" | "$JQ" -r '.cwd // empty' 2>/dev/null || echo "")
 
 # Surface = the kit's invariant logic, config, protection hooks, and skill prompt.
 SURF_RE='\.claude/skills/hektor-flaky-triage/(core/|hooks/[^[:space:]]*\.sh|SKILL\.md)'
-# Bash mutation indicators (redirect / in-place / copy / move / delete / perm) — heuristic, errs toward flagging.
-MUT_RE='(>>?|[[:space:]]tee[[:space:]]|sed[[:space:]]+-i|(^|[;&|[:space:]])(cp|mv|rm|chmod|chown|truncate|dd|install|ln)([[:space:]]|$))'
+# Bash mutation indicators (redirect / in-place / copy / move / delete / perm / git-mutate / rsync /
+# patch) — heuristic, errs toward flagging. Used as the fallback ONLY when python3/shell-guard.py
+# is unavailable for the Bash branch below (degraded precision, documented, not silent).
+MUT_RE='(>>?|[[:space:]]tee[[:space:]]|sed[[:space:]]+-i|(^|[;&|[:space:]])(cp|mv|rm|chmod|chown|truncate|dd|install|ln|rsync|patch)([[:space:]]|$)|(^|[;&|[:space:]])git[[:space:]]+(checkout|apply|restore|stash|reset|clean)([[:space:]]|$))'
+
+# Best-effort realpath canonicalization of a possibly relative/./ /../ /symlinked path, anchored on
+# $CWD when the path itself isn't absolute. Never fails the caller: any python3 error falls back to
+# printing the raw path unchanged, so the ORIGINAL literal-match behavior is the floor, never worse.
+canon_path() {
+  local raw="$1"
+  [ -n "$raw" ] || { printf '%s' "$raw"; return; }
+  if command -v python3 >/dev/null 2>&1; then
+    CWD="$CWD" python3 -c '
+import os, sys
+raw = sys.argv[1]
+base = os.environ.get("CWD") or os.getcwd()
+p = raw if os.path.isabs(raw) else os.path.join(base, raw)
+try:
+    print(os.path.realpath(p))
+except Exception:
+    print(os.path.normpath(p))
+' "$raw" 2>/dev/null || printf '%s' "$raw"
+  else
+    printf '%s' "$raw"
+  fi
+}
+
+match_surface() {  # $1 = a path -> sets SURFACE and returns 0, or returns 1
+  case "$1" in
+    */.claude/skills/hektor-flaky-triage/core/*)     SURFACE="kit core (invariant logic + config)"; return 0 ;;
+    */.claude/skills/hektor-flaky-triage/hooks/*.sh) SURFACE="kit protection hook"; return 0 ;;
+    */.claude/skills/hektor-flaky-triage/SKILL.md)   SURFACE="kit skill prompt"; return 0 ;;
+    *) return 1 ;;
+  esac
+}
 
 case "$TOOL_NAME" in
   Write|Edit)
     TARGET=$(echo "$INPUT" | "$JQ" -r '.tool_input.file_path // empty' 2>/dev/null || echo "")
     [ -n "$TARGET" ] || exit 0
-    # Is the target on the kit's safety surface?
-    case "$TARGET" in
-      */.claude/skills/hektor-flaky-triage/core/*)     SURFACE="kit core (invariant logic + config)" ;;
-      */.claude/skills/hektor-flaky-triage/hooks/*.sh) SURFACE="kit protection hook" ;;
-      */.claude/skills/hektor-flaky-triage/SKILL.md)   SURFACE="kit skill prompt" ;;
-      *) exit 0 ;;
-    esac ;;
+    # Check the CANONICAL form first (closes ./ ../ symlink/cwd-relative bypasses); fall back to the
+    # raw TARGET so an already-literal path still matches even if canon_path degraded to a no-op.
+    if match_surface "$(canon_path "$TARGET")"; then :; elif match_surface "$TARGET"; then :; else exit 0; fi ;;
   Bash)
     # Bash file-writes bypass the Write|Edit matcher — close that gap. Flag only when a command both
     # TOUCHES the surface AND MUTATES it (a read like `cat core/x.sh` passes through untouched).
     CMDSTR=$(echo "$INPUT" | "$JQ" -r '.tool_input.command // empty' 2>/dev/null || echo "")
     [ -n "$CMDSTR" ] || exit 0
-    # cheap prefilter: no surface reference anywhere → not our concern (fast path, no python spawn)
-    printf '%s' "$CMDSTR" | grep -qE "$SURF_RE" || exit 0
-    # precise, quote/subshell-aware decision via core/shell-guard.py (the SAME helper the Cursor
-    # adapter uses — write-once). Fail-open to the whole-string MUT grep if python3/helper absent.
+    # precise, quote/subshell/canonicalization-aware decision via core/shell-guard.py (the SAME
+    # helper the Cursor adapter uses — write-once). No cheap grep prefilter here: a canonicalizable
+    # (./ ../ symlink/cwd-relative) surface reference can lack the literal SURF_RE substring
+    # entirely, so a prefilter that greps for it would exit 0 before shell-guard.py — which DOES
+    # canonicalize — ever runs. Every Bash command now pays one python3 spawn when the guard is
+    # available; correctness over the fast path for a self-protection gate. Fail-open to the
+    # whole-string MUT grep only if python3/the guard is unavailable (degraded, documented).
     GUARD="$(cd "$(dirname "${BASH_SOURCE[0]}")/../core" 2>/dev/null && pwd)/shell-guard.py"
     if command -v python3 >/dev/null 2>&1 && [ -f "$GUARD" ]; then
-      printf '%s' "$CMDSTR" | python3 "$GUARD" || exit 0
+      printf '%s' "$CMDSTR" | HEKTOR_FK_CWD="$CWD" python3 "$GUARD" || exit 0
     else
+      printf '%s' "$CMDSTR" | grep -qE "$SURF_RE" || exit 0
       printf '%s' "$CMDSTR" | grep -qE "$MUT_RE" || exit 0
     fi
     SURFACE="kit safety surface (Bash write)"; TARGET="$CMDSTR" ;;

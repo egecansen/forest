@@ -11,6 +11,17 @@
 #
 # NOTE: Cursor exposes no reliable before-file-edit block, so the Write|Edit branch is best-effort. The
 # OS-level wall that holds in EVERY harness (and against interpreter/compiled writers) is `core/lock-kit.sh lock`.
+#
+# Round2 — path canonicalization (honest framing: defense-in-depth, raising the bar against
+# NATURAL, single-command, accidental/self-defeating bypasses — NOT a hard wall against a
+# shell-capable agent; `base64 | bash`, a compiled helper, etc. always exist). SAME fix as the
+# Claude gate: `canon_path()` realpath-canonicalizes a presented path (anchored on the reported
+# cwd when relative) before the surface check, closing `./`, `../`, symlink, and bare cwd-relative
+# bypasses; the Bash branch threads that same cwd into core/shell-guard.py (HEKTOR_FK_CWD) for its
+# cd-chain tracking, and no longer prefilters with a plain grep (see the Claude gate's comment —
+# a canonicalizable reference can lack the literal substring the prefilter greps for). Kept in
+# sync with the Claude gate MANUALLY (this file has no shared-module mechanism with `.claude/`) —
+# diffed after each change to confirm the detection core stays identical.
 set -uo pipefail
 
 _DIR="$(dirname "${BASH_SOURCE[0]}")"
@@ -24,29 +35,58 @@ cc_read_input
 
 # Patterns mirror the Claude gate's bash-ERE prefilter (kept in sync with core/shell-guard.py's python flavor).
 SURF_RE='\.claude/skills/hektor-flaky-triage/(core/|hooks/[^[:space:]]*\.sh|SKILL\.md)'
-MUT_RE='(>>?|[[:space:]]tee[[:space:]]|sed[[:space:]]+-i|(^|[;&|[:space:]])(cp|mv|rm|chmod|chown|truncate|dd|install|ln)([[:space:]]|$))'
+# Fallback ONLY when python3/shell-guard.py is unavailable (degraded precision, documented).
+MUT_RE='(>>?|[[:space:]]tee[[:space:]]|sed[[:space:]]+-i|(^|[;&|[:space:]])(cp|mv|rm|chmod|chown|truncate|dd|install|ln|rsync|patch)([[:space:]]|$)|(^|[;&|[:space:]])git[[:space:]]+(checkout|apply|restore|stash|reset|clean)([[:space:]]|$))'
+
+# Same canon_path()/match_surface() as the Claude gate (kept in sync manually — see header note).
+canon_path() {
+  local raw="$1" cwd="$2"
+  [ -n "$raw" ] || { printf '%s' "$raw"; return; }
+  if command -v python3 >/dev/null 2>&1; then
+    CWD="$cwd" python3 -c '
+import os, sys
+raw = sys.argv[1]
+base = os.environ.get("CWD") or os.getcwd()
+p = raw if os.path.isabs(raw) else os.path.join(base, raw)
+try:
+    print(os.path.realpath(p))
+except Exception:
+    print(os.path.normpath(p))
+' "$raw" 2>/dev/null || printf '%s' "$raw"
+  else
+    printf '%s' "$raw"
+  fi
+}
+
+match_surface() {
+  case "$1" in
+    */.claude/skills/hektor-flaky-triage/core/*)     SURFACE="kit core (invariant logic + config)"; return 0 ;;
+    */.claude/skills/hektor-flaky-triage/hooks/*.sh) SURFACE="kit protection hook"; return 0 ;;
+    */.claude/skills/hektor-flaky-triage/SKILL.md)   SURFACE="kit skill prompt"; return 0 ;;
+    *) return 1 ;;
+  esac
+}
 
 CMD="$(cc_command)"
 FP="$(cc_file_path)"
+CWD="$(cc_json '.cwd // .workspace_roots[0] // .workspaceRoots[0] // .workspace_root // empty')"
 
 if [ -n "$CMD" ]; then
-  # beforeShellExecution: cheap prefilter, then the shared quote/subshell-aware surface-write check.
-  printf '%s' "$CMD" | grep -qE "$SURF_RE" || exit 0
+  # beforeShellExecution: no cheap grep prefilter (see header note) — go straight to the shared
+  # quote/subshell/canonicalization-aware surface-write check, threading cwd for its cd tracking.
   REPO="$(cc_repo_root)"
   GUARD="$REPO/.claude/skills/hektor-flaky-triage/core/shell-guard.py"
   if command -v python3 >/dev/null 2>&1 && [ -f "$GUARD" ]; then
-    printf '%s' "$CMD" | python3 "$GUARD" || exit 0
+    printf '%s' "$CMD" | HEKTOR_FK_CWD="$CWD" python3 "$GUARD" || exit 0
   else
+    printf '%s' "$CMD" | grep -qE "$SURF_RE" || exit 0
     printf '%s' "$CMD" | grep -qE "$MUT_RE" || exit 0
   fi
   SURFACE="kit safety surface (Bash write)"; TARGET="$CMD"
 elif [ -n "$FP" ]; then
-  case "$FP" in
-    */.claude/skills/hektor-flaky-triage/core/*)     SURFACE="kit core (invariant logic + config)" ;;
-    */.claude/skills/hektor-flaky-triage/hooks/*.sh) SURFACE="kit protection hook" ;;
-    */.claude/skills/hektor-flaky-triage/SKILL.md)   SURFACE="kit skill prompt" ;;
-    *) exit 0 ;;
-  esac
+  # Check the CANONICAL form first (closes ./ ../ symlink/cwd-relative bypasses); fall back to the
+  # raw FP so an already-literal path still matches even if canon_path degraded to a no-op.
+  if match_surface "$(canon_path "$FP" "$CWD")"; then :; elif match_surface "$FP"; then :; else exit 0; fi
   TARGET="$FP"
 else
   exit 0

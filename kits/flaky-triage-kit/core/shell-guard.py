@@ -8,9 +8,25 @@
 #   2) evasion — a write hidden by quoting (`s\ed -i core/x`, `'rm' core/x`), `$(...)`, backticks,
 #      a `(subshell)`, or a `sh -c "..."` wrapper sails past a substring match (cf. GHSA-4v57-ph3x-gf55).
 #
-# stdin = the command string. exit 0  => some fragment both references the surface AND mutates it
-# (the gate then denies);  exit 1 => allow. Patterns are python-flavored and kept in sync with the
-# gate's bash-ERE prefilter (SURF_RE / MUT_RE in flaky-kit-self-protection-gate.sh).
+# stdin = the command string. env HEKTOR_FK_CWD (optional) = the Bash tool call's actual working
+# directory (the hook's `.cwd`) — used ONLY to canonicalize relative/dot/symlink path references
+# (Round2, item 2/3 below); absent it, canonicalization still works for any `cd` chain fully
+# contained in the command, just not one anchored to the real ambient cwd. exit 0 => some fragment
+# both references the surface AND mutates it (the gate then denies); exit 1 => allow. Patterns are
+# python-flavored and kept in sync with the gate's bash-ERE prefilter (SURF_RE / MUT_RE in
+# flaky-kit-self-protection-gate.sh).
+#
+# Round2 — path canonicalization + cwd tracking (still heuristic, NOT a hard wall; see module intro):
+#   a literal-substring SURF match is bypassed by `./` noise, a `../` reversal, a symlink whose OWN
+#   path doesn't mention the surface but resolves onto it, a bare cwd-relative reference, or a
+#   `cd <dir> &&`/`cd <dir>;` prefix that changes what a later bare reference in the SAME command
+#   means. `resolve_path()` below canonicalizes a token against a tracked base directory
+#   (os.path.realpath — same realpath-first discipline as core/apply.sh's I3 fix: it resolves
+#   whatever prefix of the path already exists on disk, incl. symlinks, and normalizes the rest
+#   lexically, so a not-yet-created Write target still canonicalizes correctly); `main()` walks the
+#   command's top-level segments in order, updating a tracked "current directory" on every bare
+#   `cd <dir>` so a later segment's relative references resolve against where the command chain
+#   actually put us, not just their own literal text.
 import sys, re, os
 
 # Protected surface = the kit's own files. PATH-INDEPENDENT: set HEKTOR_FK_SURFACE to the kit's install
@@ -21,7 +37,11 @@ SURF = re.compile(re.escape(_SURF_ROOT)) if _SURF_ROOT \
     else re.compile(r'\.claude/skills/hektor-flaky-triage/(core/|hooks/\S*\.sh|SKILL\.md)')
 # target-as-arg mutations: surface anywhere in the fragment is a write (conservative — `cp core/x /tmp`
 # reads the surface, but copying kit files out is itself worth surfacing). REDIR is target-position-aware.
-VERB  = re.compile(r'\bsed\s+-i\b|\b(?:tee|cp|mv|rm|chmod|chown|truncate|dd|install|ln)\b')
+# Round2: added rsync/patch (file-clobbering copiers) and the git subcommands that can silently
+# overwrite a tracked file from another ref/stash/patch (checkout/restore/reset — HEAD or index reset;
+# apply/stash — replay a patch; clean — delete untracked files, incl. a not-yet-committed new surface file).
+VERB  = re.compile(r'\bsed\s+-i\b|\b(?:tee|cp|mv|rm|chmod|chown|truncate|dd|install|ln|rsync|patch)\b'
+                    r'|\bgit\s+(?:checkout|apply|restore|stash|reset|clean)\b')
 REDIR = re.compile(r'>>?')
 # interpreter inline-code (`python3 -c`, `perl -e`, `node -e`, ...) can write a file via open()/print —
 # invisible to verb/redirect matching. Flag conservatively when one touches the surface (read OR write).
@@ -169,6 +189,32 @@ def dequote(seg):
     return ''.join(out)
 
 
+def _abs_dir(base):
+    """Best-effort absolute form of a tracked base directory; empty/relative -> anchor on the
+    guard PROCESS's own cwd (the closest available approximation when HEKTOR_FK_CWD is unset)."""
+    if not base:
+        return os.getcwd()
+    return base if os.path.isabs(base) else os.path.normpath(os.path.join(os.getcwd(), base))
+
+
+def resolve_path(tok, base):
+    """Canonicalize `tok` (possibly relative, possibly `.`/`..`-noisy, possibly a symlink) against
+    `base`. Never raises; the target need not exist on disk — os.path.realpath resolves symlinks in
+    whatever prefix already exists and lexically normalizes the rest, so a not-yet-created Write/
+    new-file target still canonicalizes correctly. Falls back to a pure lexical normpath, then to
+    the raw token, on any error (still a heuristic gate, not a hard wall — see module docstring)."""
+    if not tok:
+        return tok
+    try:
+        p = tok if os.path.isabs(tok) else os.path.join(_abs_dir(base), tok)
+        return os.path.realpath(p)
+    except Exception:
+        try:
+            return os.path.normpath(tok)
+        except Exception:
+            return tok
+
+
 def fragments(cmd):
     frags = list(split_segments(cmd))
     for body in extract_command_subs(cmd) + extract_subshells(cmd):
@@ -176,26 +222,60 @@ def fragments(cmd):
     return frags
 
 
-def is_surface_write(frag):
+CD_RE = re.compile(r'^cd\s+(\S+)\s*$')
+
+
+def is_surface_write(frag, base=None):
     dq = dequote(frag)                                   # dequoted catches s\ed / 'rm' / sh -c "..."
-    if not (SURF.search(frag) or SURF.search(dq)):
+    surf_hit = bool(SURF.search(frag) or SURF.search(dq))
+    if not surf_hit:
+        # Round2 canonicalization pass: a `./`, `../`, symlink-aliased, or bare cwd-relative token
+        # can land on the surface with no literal substring match at all — resolve each non-flag
+        # whitespace token against `base` (the tracked cwd) and re-check.
+        for tok in dq.split():
+            if tok.startswith('-'):
+                continue
+            if SURF.search(resolve_path(tok, base)):
+                surf_hit = True
+                break
+    if not surf_hit:
         return False
-    if VERB.search(dq):                                  # rm/sed -i/chmod/...: surface as any arg counts
+    if VERB.search(dq):                                  # rm/sed -i/chmod/git checkout/rsync/...: surface as any arg counts
         return True
     if INTERP.search(dq) and INLINE.search(dq):          # python3 -c / perl -e / ... touching the surface
         return True
     for src in (dq, frag):                               # >/>>: surface must be the TARGET (right of the op),
         for m in REDIR.finditer(src):                    # so `cat core/x > /tmp/y` (read, redirect elsewhere) is allowed
-            if SURF.search(src[m.end():m.end() + 200]):
+            tail = src[m.end():m.end() + 200]
+            if SURF.search(tail):
+                return True
+            tail_tok = tail.split()[0] if tail.split() else ''
+            if tail_tok and SURF.search(resolve_path(tail_tok, base)):
                 return True
     return False
 
 
 def main():
     cmd = sys.stdin.read()
-    for f in fragments(cmd):
-        if is_surface_write(f):
+    base = os.environ.get('HEKTOR_FK_CWD', '').strip() or None
+    # Round2 item 3: walk the TOP-LEVEL segments in order, tracking cwd across a leading/chained
+    # `cd <dir> &&` / `cd <dir>;` — closes `cd core && sed -i '' config.json` (cwd-blindness): a
+    # pure `cd` segment updates the tracked dir instead of being checked itself; every later
+    # segment's relative references resolve against wherever the chain actually put us.
+    cur = base
+    for seg in split_segments(cmd):
+        m = CD_RE.match(dequote(seg).strip())
+        if m:
+            cur = resolve_path(m.group(1), cur)
+            continue
+        if is_surface_write(seg, cur):
             sys.exit(0)                                  # surface write -> gate denies
+    # command-substitution / subshell bodies run in their own subshell cwd — anchor each on the
+    # ORIGINAL base (not the outer chain's `cur`), not the outer command's accumulated cd chain.
+    for body in extract_command_subs(cmd) + extract_subshells(cmd):
+        for seg in split_segments(body):
+            if is_surface_write(seg, base):
+                sys.exit(0)
     sys.exit(1)                                          # allow
 
 
