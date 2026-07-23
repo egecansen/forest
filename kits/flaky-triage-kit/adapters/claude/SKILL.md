@@ -1,9 +1,9 @@
 ---
 name: hektor-flaky-triage
 description: >
-  Triage a flaky testbox run: take an s-report URL + a testbox, re-run the failing tests on
-  that tb, and present ONE clusters table ordered easy-fix → likely-bug for the user to pick
-  from — then fix the picked ones end-to-end, verified green, flagging suspected app-bugs.
+  Triage a flaky testbox run: take an s-report URL + a testbox, cluster the report's failures
+  and present ONE clusters table ordered easy-fix → likely-bug for the user to pick from — then
+  rerun each picked cluster to confirm and fix it end-to-end, verified green, flagging suspected app-bugs.
   Keep it simple: one table, one decision, execute, report once. Triggers on "triage this
   flaky run", "the s4-flaky build is red", "<report-url> + tb<NN>", "cluster and fix the flaky
   failures". Testbox-only. Never commits, files tickets, or disables tests.
@@ -12,8 +12,8 @@ description: >
 
 # Hektor Flaky-Triage — loop driver
 
-You drive a simple loop: **re-run the report's fails on the tb → one easy→bug table → user
-picks → fix the picked ones end-to-end → report once.** The deterministic work is in `core/`;
+You drive an iterative loop: **cluster the report's fails → one easy→bug table → user picks →
+rerun each picked cluster to confirm, then fix it end-to-end → re-cluster → report once.** The deterministic work is in `core/`;
 you do the reasoning and call core (kernel P2: no direct gradle; route edits through `core/apply`).
 
 The point of this kit is a crisp map and a single decision — **not** an audit trail of the
