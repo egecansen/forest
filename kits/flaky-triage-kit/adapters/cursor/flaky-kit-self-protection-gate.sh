@@ -22,6 +22,18 @@
 # a canonicalizable reference can lack the literal substring the prefilter greps for). Kept in
 # sync with the Claude gate MANUALLY (this file has no shared-module mechanism with `.claude/`) —
 # diffed after each change to confirm the detection core stays identical.
+#
+# Round 3 (LAST Bash-gate round) — two bypasses the Round-2-rereview REWRITE ITSELF introduced were
+# closed in core/shell-guard.py: its MAX_SUBSHELL_DEPTH bound used to fail OPEN past the bound
+# (allowing a surface write wrapped in one nesting level too many), and `{ ...; }` brace groups went
+# untracked entirely (their `cd` never matched, so the write inside sailed through). Both now deny.
+# Honest framing, stated plainly because this is the last round that chases shell constructs here:
+# this gate (Write/Edit best-effort match + Bash/shell-guard.py string analysis) is BEST-EFFORT
+# defense-in-depth against natural/accidental and simple adversarial surface writes. It CANNOT be
+# made complete against a shell-capable agent — `base64 ... | bash`, `eval`, process substitution,
+# exotic quoting, and compiled writers all bypass it by construction, no matter how much more
+# pattern-matching is added. The REAL wall is `core/lock-kit.sh lock` (an OS-level read-only bit,
+# now directory-level) — this gate is friction on top of that wall, never a substitute for it.
 set -uo pipefail
 
 _DIR="$(dirname "${BASH_SOURCE[0]}")"

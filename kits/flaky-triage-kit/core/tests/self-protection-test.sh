@@ -8,6 +8,18 @@
 #     — a Claude session could freely Edit the Cursor gate (and vice versa).
 #   Fix 3 (MINOR): HEKTOR_FK_CWD absent degrades cd-tracking silently — now noted on stderr.
 #
+# LAST Bash-gate round (see "Fix 4/5" below + shell-guard.py's module docstring): two more
+# bypasses the Round-2 REWRITE ITSELF introduced —
+#   Fix 4 (CRITICAL): `scan()`'s MAX_SUBSHELL_DEPTH guard FAILED OPEN (`return False` = ALLOW)
+#     once nesting exceeded the bound — a deeply-nested subshell wrapping a real surface write
+#     sailed straight past detection. Now fails CLOSED (`return True` = deny) instead.
+#   Fix 5 (IMPORTANT): `{ ...; }` brace groups were untracked — `split_segments()` had no
+#     handling for them, so `{ cd core && sed -i '' config.json; }`'s `cd` (mangled to `"{ cd
+#     core"` by the naive splitter) never matched `CD_RE` and the write sailed through.
+# After this round, no further fixes chase shell constructs here — see the honest-framing note
+# in shell-guard.py: this string-analysis gate is best-effort friction, not a hard wall; the
+# real wall is `core/lock-kit.sh lock` (OS read-only, dir-level).
+#
 # Plain bash asserts, no framework (mirrors apply-test.sh's style). Runs entirely against /tmp
 # fixtures that mimic install.sh's real on-disk layout for BOTH harnesses, sharing one core/ copy:
 #   <proj>/.claude/skills/hektor-flaky-triage/{core,hooks}
@@ -148,6 +160,61 @@ LOCK_STATUS="$("$SKILL/core/lock-kit.sh" status 2>/dev/null)"  # captured first:
 printf '%s\n' "$LOCK_STATUS" | grep -q 'r-  core/config.json' \
   && ok || bad "locked kit: status shows core/config.json read-only"
 HEKTOR_FLAKYKIT_UNLOCK=1 "$SKILL/core/lock-kit.sh" unlock >/dev/null 2>&1
+
+# --- helpers: build N-deep nested parens / mixed $(...)/(...) around an inner command ---
+nest_parens() {  # $1=depth $2=inner -> ((...(inner)...))
+  local n="$1" out="$2" i
+  for ((i = 0; i < n; i++)); do out="($out)"; done
+  printf '%s' "$out"
+}
+nest_mixed() {    # $1=depth $2=inner -> alternating $(...) / (...), N layers deep
+  local n="$1" out="$2" i
+  for ((i = 0; i < n; i++)); do
+    if (( i % 2 == 0 )); then out="\$($out)"; else out="($out)"; fi
+  done
+  printf '%s' "$out"
+}
+
+echo "== Fix 4 (CRITICAL): MAX_SUBSHELL_DEPTH must fail CLOSED, not open (must DENY, both gates) ==" >&2
+SURFACE_CMD="cd core && sed -i '' config.json"
+assert_claude_bash_deny "$(nest_parens 9  "$SURFACE_CMD")"    # depth 9  (bound is 8) — all parens
+assert_cursor_bash_deny "$(nest_parens 9  "$SURFACE_CMD")"
+assert_claude_bash_deny "$(nest_parens 12 "$SURFACE_CMD")"    # depth 12
+assert_cursor_bash_deny "$(nest_parens 12 "$SURFACE_CMD")"
+assert_claude_bash_deny "$(nest_parens 20 "$SURFACE_CMD")"    # depth 20
+assert_cursor_bash_deny "$(nest_parens 20 "$SURFACE_CMD")"
+assert_claude_bash_deny "$(nest_mixed  9  "$SURFACE_CMD")"    # depth 9, mixed $(...)/(...)
+assert_cursor_bash_deny "$(nest_mixed  9  "$SURFACE_CMD")"
+
+echo "== Fix 4: deny-on-excess-depth is intentional even for a BENIGN 9-deep nest (documented fail-closed, not a bug) ==" >&2
+assert_claude_bash_deny "$(nest_parens 9 "echo hi")"
+assert_cursor_bash_deny "$(nest_parens 9 "echo hi")"
+
+echo "== Fix 4 controls: a NORMAL shallow (depth <= 2) triage command still ALLOWs ==" >&2
+assert_claude_bash_allow "bash core/rerun.sh --suite nightly"                 # depth 0, real kit usage shape
+assert_cursor_bash_allow "bash core/rerun.sh --suite nightly"
+assert_claude_bash_allow "$(nest_parens 1 "echo hi && ls /tmp")"              # depth 1, benign
+assert_cursor_bash_allow "$(nest_parens 1 "echo hi && ls /tmp")"
+assert_claude_bash_allow "$(nest_parens 2 "echo hi")"                         # depth 2, benign
+assert_cursor_bash_allow "$(nest_parens 2 "echo hi")"
+
+echo "== Fix 5 (IMPORTANT): brace groups '{ ...; }' must be cd-tracked (must DENY, both gates) ==" >&2
+assert_claude_bash_deny "{ cd core && sed -i '' config.json; }"
+assert_cursor_bash_deny "{ cd core && sed -i '' config.json; }"
+assert_claude_bash_deny "{ cd core; }; sed -i '' config.json"   # cd PERSISTS past the closing brace
+assert_cursor_bash_deny "{ cd core; }; sed -i '' config.json"
+
+echo "== Fix 5 controls: a brace group with no surface write still ALLOWs, both gates ==" >&2
+assert_claude_bash_allow "{ echo hi; ls /tmp; }"
+assert_cursor_bash_allow "{ echo hi; ls /tmp; }"
+assert_claude_bash_allow "{ cd /tmp; sed -i '' x; }"            # cd is OUT of the surface entirely
+assert_cursor_bash_allow "{ cd /tmp; sed -i '' x; }"
+
+echo "== Fix 5 regression: unquoted \${VAR}-style expansion / brace-expansion tokens are NOT mistaken for a group ==" >&2
+assert_claude_bash_allow 'echo ${HOME} && ls /tmp'
+assert_cursor_bash_allow 'echo ${HOME} && ls /tmp'
+assert_claude_bash_allow 'ls /tmp/{a,b}'
+assert_cursor_bash_allow 'ls /tmp/{a,b}'
 
 echo "self-protection-test: $pass passed, $fail failed"
 [ "$fail" -eq 0 ]

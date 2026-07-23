@@ -44,6 +44,37 @@
 #   scripts (+ their vendored libs) themselves are now part of SURF (see below) — a prior re-review
 #   found `.cursor/hooks/` and `.claude/hooks/lib/` sat outside the protected surface entirely, so
 #   editing one gate/lib was invisible to the OTHER harness's own self-protection gate.
+#
+# Round 3 (LAST Bash-gate round — see honest framing below) — the Round2-rereview REWRITE ITSELF
+# introduced two bypasses, both closed here:
+#   1) (CRITICAL) `scan()`'s MAX_SUBSHELL_DEPTH bound FAILED OPEN: hitting it returned `False`
+#      (allow), so `(((((((((cd core && sed -i '' config.json)))))))))` (9+ levels deep — one past
+#      the bound) sailed through undetected instead of tripping the "can't recurse further" guard.
+#      A security bound must fail CLOSED: an anomalously deep nest is itself suspicious (real triage
+#      commands are 0-2 levels deep — see `core/tests/self-protection-test.sh`'s controls), so
+#      exceeding it now DENIES rather than silently allowing. This is intentionally coarse — it also
+#      denies a benign 9-deep `(((((((( echo hi ))))))))`, accepted as the cost of failing closed.
+#   2) (IMPORTANT) `{ ...; }` brace groups were untracked: `split_segments()` had no handling for
+#      `{`/`}` at all, so `{ cd core && sed -i '' config.json; }` fractured into `"{ cd core"` (which
+#      doesn't match `CD_RE`, so the `cd` was silently dropped) and `" sed -i '' config.json"` (checked
+#      against the STALE cwd, no surface hit). Fixed by treating a whitespace-bounded `{`/`}` — real
+#      Bash's own grammar for the reserved word (must be its own token, `{` followed by a blank,
+#      `}` preceded by one) — as a bare segment delimiter in `split_segments()`, the same way `;` is:
+#      a brace group does NOT fork a subshell, so its `cd` correctly persists into segments AFTER the
+#      closing `}` too, by simply flowing through the SAME top-level cd-tracking chain `scan()` already
+#      walks (no new recursion/depth needed). `${VAR}` and brace-expansion (`{a,b}`, `{1..5}`) are
+#      never mistaken for a group — bash never puts a blank right after a real word-forming `{` in
+#      those forms, which is exactly the guard used here.
+#
+# Honest framing (repeated here deliberately — this is the LAST round that chases shell constructs):
+#   this module is BEST-EFFORT defense-in-depth against NATURAL/accidental and simple adversarial
+#   surface writes. It is NOT, and cannot be made, complete against a shell-capable agent that really
+#   wants to bypass it — `base64 ... | bash`, `eval "$x"`, process substitution, exotic quoting, a
+#   compiled writer, or any construct that doesn't reduce to a literal, parseable Bash command string
+#   all bypass by construction, no matter how much more string-analysis is layered on. Past this
+#   round, further hardening does NOT mean chasing more shell constructs here — the REAL wall is
+#   `core/lock-kit.sh lock` (an OS-level read-only bit, now directory-level, unaffected by any of the
+#   above). Do not read completeness into anything below.
 import sys, re, os
 
 # Protected surface = the kit's own files, PLUS the self-protection gate scripts (both harnesses)
@@ -83,7 +114,18 @@ def split_segments(s):
     OWN chain, not the outer one; splitting through them (the old behavior) could fracture a
     `(cd core && sed -i '' config.json)` into two unrelated-looking top-level segments, hiding the
     cd from the segment that used it. `scan()` below recurses into these spans itself via
-    `immediate_bodies()`, tracking their own cd-chain from the RUNNING outer cwd."""
+    `immediate_bodies()`, tracking their own cd-chain from the RUNNING outer cwd.
+
+    Round 3: `{`/`}` brace GROUPS are the opposite of a subshell — `{ cmd; }` does NOT fork, so a
+    `cd` inside it persists into whatever comes after the closing `}` in the SAME chain. That means
+    a brace group must NOT be copied through verbatim like `(...)`/`$(...)` (which WOULD hide its
+    `cd` from the rest of the chain, backwards from real Bash semantics) — instead a whitespace-
+    bounded `{`/`}` is treated as a bare, content-free delimiter (like `;`), so `cd core` inside one
+    becomes an ordinary top-level segment `scan()` already cd-tracks, and the segments before/inside/
+    after the group all share one flat, ordered chain. Guarded to bash's own grammar for the reserved
+    word (`{` must be its own token followed by a blank; `}` must be preceded by one) so `${VAR}`
+    param-expansion and brace-expansion (`{a,b}`, `{1..5}`) — which never have that blank — are left
+    untouched as literal text."""
     segs, cur, q = [], [], None
     i, n = 0, len(s)
     while i < n:
@@ -112,6 +154,10 @@ def split_segments(s):
             _b, end = _balanced_body(s, i + 1)
             j = min(end + 1, n)
             cur.append(s[i:j]); i = j; continue
+        if ch == '{' and s[i - 1:i] in ('', ' ', '\t', ';', '&', '|') and s[i + 1:i + 2] in (' ', '\t'):
+            segs.append(''.join(cur)); cur = []; i += 1; continue   # brace-group open: bare delimiter
+        if ch == '}' and s[i - 1:i] in (' ', '\t') and s[i + 1:i + 2] in ('', ' ', '\t', ';', '&', '|', ')'):
+            segs.append(''.join(cur)); cur = []; i += 1; continue   # brace-group close: bare delimiter
         nxt = s[i + 1] if i + 1 < n else ''
         prev = s[i - 1] if i > 0 else ''
         if ch == '&' and nxt == '&':
@@ -291,9 +337,18 @@ def scan(cmd, cwd, depth=0):
     chain is inherited by a subshell launched after it — matches real Bash semantics; a `cd` INSIDE
     a subshell/command-sub never escapes back out, so it does NOT affect the cwd `scan()` returns
     to the caller — there is no return value at all, only True/False). Returns True (deny) if any
-    segment/body at any depth is a surface write."""
+    segment/body at any depth is a surface write.
+
+    Round 3: the depth guard below used to `return False` (allow) once nesting exceeded
+    MAX_SUBSHELL_DEPTH — a security bound that FAILED OPEN, so wrapping a real surface write in one
+    more layer of parens than the bound (`(((((((((cd core && sed -i '' config.json)))))))))`, 9
+    deep) sailed straight past detection instead of tripping it. Fixed to fail CLOSED: exceeding the
+    bound now denies (`True`), the same as finding an actual surface write. An anomalously deep nest
+    is itself suspicious — real triage commands run 0-2 levels deep (see the self-protection-test
+    controls) — so this intentionally also denies a benign 9-deep no-op nest; accepted as the cost
+    of not silently allowing past the bound."""
     if depth > MAX_SUBSHELL_DEPTH:
-        return False                                     # pathological nesting: stop recursing, don't crash
+        return True                  # excess nesting depth: fail CLOSED (deny), not open — see above
     cur = cwd
     for seg in split_segments(cmd):
         m = CD_RE.match(dequote(seg).strip())
