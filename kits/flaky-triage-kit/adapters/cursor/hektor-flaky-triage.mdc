@@ -32,7 +32,7 @@ Triage a flaky testbox run. The deterministic engine is `.claude/skills/hektor-f
    question: which clusters?**
 3. **Take the picked clusters end-to-end, then report once.** `core/apply` (working tree, diff, never
    commit) → `core/compile` → **green-proof = pass^N** (green on ALL N re-runs, `confidence==1.0`; one
-   green run is NOT proof — a flaky test passes ~half the time). Record progress with core/ledger.sh cluster-state (selected → applied --passes/--runs → green|flagged), and phase transitions with core/ledger.sh event phase-enter --phase <p>. Widen to blast radius for shared layouts.
+   green run is NOT proof — a flaky test passes ~half the time). Record progress with core/ledger.sh cluster-state (selected → applied --passes/--runs → green|flagged), and phase transitions with core/ledger.sh event phase-enter --phase <p>. For vrt-bucket clusters, record each failing test's vrt_url (ingest tags it) via core/ledger.sh cluster-vrt <id> <fqcn> <url> so the console can surface the baseline-vs-regression review. Widen to blast radius for shared layouts.
 4. **Converge** — short scoreboard: fixed (+green) · flagged 🐛 (evidence, not filed) · left for owners.
 
 ## Don'ts (hard)

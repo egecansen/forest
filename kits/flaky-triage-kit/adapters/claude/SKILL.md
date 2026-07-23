@@ -54,7 +54,7 @@ discipline** below — it is the most important section.
    slow tb run) → **green-proof** on the tb. **Green-proof = pass^N**: the test is green on *all* N
    re-runs (`core/rerun` reports per-test `confidence`; require `confidence==1.0` over `runs≥N`) —
    **one green run is NOT proof** (a flaky test passes ~half the time, so a single green is the most
-   likely false "fixed"). Record progress with core/ledger.sh cluster-state (selected → applied --passes/--runs → green|flagged), and phase transitions with core/ledger.sh event phase-enter --phase <p>. Widen to the blast radius if you touched a shared Page/Layout. Make the
+   likely false "fixed"). Record progress with core/ledger.sh cluster-state (selected → applied --passes/--runs → green|flagged), and phase transitions with core/ledger.sh event phase-enter --phase <p>. For vrt-bucket clusters, record each failing test's vrt_url (ingest tags it) via core/ledger.sh cluster-vrt <id> <fqcn> <url> so the console can surface the baseline-vs-regression review. Widen to the blast radius if you touched a shared Page/Layout. Make the
    obvious fix calls yourself and note them in one line; don't open a separate question per item.
    Report the batch result in a single message.
 4. **Converge** — short scoreboard: fixed (+green) · flagged 🐛 (evidence, not filed) · left for

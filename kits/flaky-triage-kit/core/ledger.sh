@@ -8,7 +8,7 @@
 set -uo pipefail
 command -v jq >/dev/null || { echo "ledger: jq required" >&2; exit 69; }
 CMD="${1:-}"; FILE="${2:-}"
-[ -n "$CMD" ] && [ -n "$FILE" ] || { echo "usage: ledger.sh init|get|set|cluster-upsert|cluster-state|event|validate <file> [...]" >&2; exit 64; }
+[ -n "$CMD" ] && [ -n "$FILE" ] || { echo "usage: ledger.sh init|get|set|cluster-upsert|cluster-state|cluster-vrt|event|validate <file> [...]" >&2; exit 64; }
 
 BUCKETS="easy-fix selector vrt app-change infra likely-bug"
 PHASES="ingest confirm cluster pick fix verify report"
@@ -17,6 +17,7 @@ FQCN_RE='^[A-Za-z_][A-Za-z0-9_.]*(#[A-Za-z0-9_]+)?$'
 ID_RE='^[a-z0-9-]{1,40}$'
 TIER_RE='^[1-4]$'
 INT_RE='^[0-9]+$'
+VRT_RE='^https://vrt-[^[:space:]]+$'
 
 die() { echo "ledger: $1" >&2; exit "${2:-65}"; }
 has_word() { case " $1 " in *" $2 "*) return 0;; *) return 1;; esac; }
@@ -108,6 +109,19 @@ case "$CMD" in
         --arg id "$ID" --arg fq "${up%%=*}" --arg st "${up#*=}"
     done ;;
 
+  cluster-vrt)
+    ID="${3:-}"; FQ="${4:-}"; URL="${5:-}"
+    [ -n "$ID" ] && [ -n "$FQ" ] && [ -n "$URL" ] || die "cluster-vrt: need <id> <fqcn> <url>" 64
+    jq -e --arg id "$ID" 'any(.clusters[]; .id==$id)' "$FILE" >/dev/null || die "unknown cluster id: $ID" 66
+    [[ "$FQ"  =~ $FQCN_RE ]] || die "invalid fqcn: $FQ"
+    [ ${#URL} -le 500 ] || die "vrt url >500 chars"
+    [[ "$URL" =~ $VRT_RE ]] || die "invalid vrt url (must be ^https://vrt- , no whitespace): $URL"
+    jset '.clusters |= map(if .id==$id then
+            .tests |= (map(if .fqcn==$fq then .vrt=$url else . end)
+                       + (if any(.[]; .fqcn==$fq) then [] else [{fqcn:$fq, vrt:$url}] end))
+          else . end)' \
+      --arg id "$ID" --arg fq "$FQ" --arg url "$URL" ;;
+
   event)
     WHAT="${3:-}"; [ -n "$WHAT" ] || die "event: need <what>" 64; shift 3
     PHASE=""; WHO="${USER:-unknown}"
@@ -132,7 +146,8 @@ case "$CMD" in
         (has("passes") and has("runs") and .passes > .runs) or
         ((.tests? // []) | any(.[];
             (((.fqcn? // "" | test("'"$FQCN_RE"'")) | not) or (.fqcn? // "" | test("\n"))) or
-            (has("status") and ((.status) as $ts | (["red","green","skipped"] | index($ts) | not)))))
+            (has("status") and ((.status) as $ts | (["red","green","skipped"] | index($ts) | not))))) or
+        (any(.tests[]?; has("vrt") and (.vrt|test("^https://vrt-[^\\s]+$")|not)))
       ) | .id // "?"] | join(",")' "$FILE" 2>/dev/null)" || die "validate: unreadable/malformed ledger"
     [ -z "$BAD" ] || die "schema violations in clusters: $BAD"
     if [ "$MODE" = "--final" ]; then

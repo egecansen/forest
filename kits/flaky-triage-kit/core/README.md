@@ -18,7 +18,7 @@ and calls these; it MUST NOT mutate state except through them (kernel P2).
 | `dom-on-failure` | test-fqcn + tb → DOM dumped **at the failure point** (runs the real test; `DomDumpOnFailure` auto-registered) | flow-gated selector breaks (payment / posting / flag-detail) that single-URL `dom-capture` can't reach (N2); **proven tb161** |
 | `rerun` | FQCN list + `tb` → pass/fail (+ flaky-confidence over N) | **I2** existence via gradle discovery · **I9** health-check tb first |
 | `apply` | a fix patch → applied in the working tree (git-tracked, clean-tree check) + diff | **I3** confined to `source_roots`, git-reversible, kit never commits · **I10** rev-pin |
-| `ledger` | read/write run state via validated subcommands (v2: cluster-upsert / cluster-state / event / validate) | **I5** re-derive "applied" from source, never trust ledger for safety · **I11** `validate --final` gates session end |
+| `ledger` | read/write run state via validated subcommands (v2: cluster-upsert / cluster-state / event / validate · cluster-vrt) | **I5** re-derive "applied" from source, never trust ledger for safety · **I11** `validate --final` gates session end |
 | `summary` | ledger → convergence report | **I7** allowlist emitted fields (no raw stackTrace / PII / tokens) |
 
 ## Invariant → module index (for review)

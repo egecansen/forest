@@ -143,5 +143,18 @@ printf '{not valid json' > "$MJ"
 expect 65 "malformed-JSON validate rejected" -- "$LEDGER" validate "$MJ"
 expect 65 "missing-file validate rejected" -- "$LEDGER" validate "$TMP/does-not-exist.json"
 
+# --- cluster-vrt
+"$LEDGER" cluster-upsert "$F" c-vrt --bucket vrt --title "VRT drift" --tests "com.x.VrtTest#a" >/dev/null 2>&1
+expect 0  "valid vrt url set"        -- "$LEDGER" cluster-vrt "$F" c-vrt com.x.VrtTest#a "https://vrt-test.example/compare/123"
+[ "$(jq -r '.clusters[]|select(.id=="c-vrt")|.tests[0].vrt' "$F")" = "https://vrt-test.example/compare/123" ] && ok || bad "vrt url recorded"
+expect 65 "non-vrt url rejected"     -- "$LEDGER" cluster-vrt "$F" c-vrt com.x.VrtTest#a "https://evil.example/x"
+expect 65 "url with space rejected"  -- "$LEDGER" cluster-vrt "$F" c-vrt com.x.VrtTest#a "https://vrt-x.example/a b"
+expect 66 "unknown cluster rejected" -- "$LEDGER" cluster-vrt "$F" nope com.x.VrtTest#a "https://vrt-x.example/a"
+expect 0  "vrt creates missing test entry" -- "$LEDGER" cluster-vrt "$F" c-vrt com.x.NewTest "https://vrt-x.example/9"
+[ "$(jq -r '.clusters[]|select(.id=="c-vrt")|.tests|length' "$F")" = "2" ] && ok || bad "vrt added new test entry"
+# validate catches a hand-corrupted vrt url
+jq '.clusters[0].tests[0].vrt="http://not-vrt"' "$F" > "$TMP/bad.json"
+expect 65 "validate rejects bad tests[].vrt" -- "$LEDGER" validate "$TMP/bad.json"
+
 echo "ledger-test: $pass passed, $fail failed"
 [ "$fail" -eq 0 ]

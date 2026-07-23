@@ -180,12 +180,14 @@ cluster: { id, title,                  # ≤80 chars, human phrasing — I7-gove
            detail,                     # ≤600 chars evidence summary; may quote signatures, never full traces
            signature, tier, bucket,    # bucket ∈ the six (closed enum, kernel-canonical)
            fixVsBug, evidence,
-           tests[ {fqcn, status?} ],   # status ∈ red|green|skipped, present only when diverging
+           tests[ {fqcn, status?, vrt?} ], # status ∈ red|green|skipped, present only when diverging
            status: proposed|selected|applied|green|deferred|flagged|resolved-upstream,
            passes, runs,               # green-proof progress; integers; passes ≤ runs
            diffRef, lineage, greenProofScope }
 event:   { who, what, when, phase? }   # what gains 'phase-enter'; phase ∈ ingest|confirm|cluster|pick|fix|verify|report
 ```
+
+vrt = baseline-vs-regression URL for a VRT failure (ingest's vrt_url tag), set via ledger.sh cluster-vrt.
 
 All writes go through ledger.sh subcommands (cluster-upsert / cluster-state / event) — hand-edited JSON violates P2. v1 files (no version) remain readable.
 
