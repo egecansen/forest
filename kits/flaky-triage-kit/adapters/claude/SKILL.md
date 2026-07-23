@@ -36,28 +36,42 @@ discipline** below — it is the most important section.
 
 ## The loop
 
+Present the cluster table BEFORE any full rerun — only a cheap health-check precedes it; the
+per-cluster confirmation rerun happens after the pick, before applying that cluster.
+
 0. **Input** — s-report URL + a tb. `core/ingest` (pin the build by `@timestamp`, not build
    number — anti-stale).
-1. **Re-run** the fails on that tb — `core/rerun` (health-check the box first; a near-all-fail
-   box is broken, not a finding). Confirm what's actually real.
-2. **Cluster by MEANING, present easy→bug — then STOP for one decision.** Group by a root cause
-   a human recognizes — *selector moved · VRT baseline drift · app behavior change · redesign
-   migration · flaky-infra · likely app-bug*. `core/cluster` is a mechanical first cut by
-   exception signature; **re-group it into meaning buckets** — never present raw-exception
-   clusters. One table, ordered **easy fix → likely bug**, one line per row:
+1. **Health-check the tb** — a cheap known-good probe / per-test ES history (I9), NOT a full
+   rerun. Near-all-fail or unreachable box ⇒ broken box: stop, say so, present NO table (a broken
+   box makes every failure look real). Seconds, not minutes.
+2. **Cluster from the report, present easy→bug — then STOP for one decision.** Group the
+   report's FAILED docs by a root cause a human recognizes — *selector moved · VRT baseline drift
+   · app behavior change · redesign migration · flaky-infra · likely app-bug*. `core/cluster` is a
+   mechanical first cut by exception signature; **re-group it into meaning buckets** — never
+   present raw-exception clusters. One table, ordered **easy fix → likely bug**, one line per row:
    `test · one-line cause · bucket`. Skip anything already green in current code. `ingest` tags
    each fail: mark **`working_tree_modified`** rows ("you already touched this — may be fixed,
-   re-proof") and link **`vrt_url`** on VRT rows (one-click baseline-vs-regression). Publish as you go: after the mechanical cut, upsert provisional clusters (core/ledger.sh cluster-upsert — short titles fine); refine title/detail/bucket via the same command before presenting. The table you present IS the ledger's clusters — never two divergent copies. **Ask one
-   question: which clusters?**
-3. **Take the picked clusters end-to-end, then report once.** For each: `core/apply` (working
-   tree, diff, never commit) → `core/compile` (fast compile-check, right JDK baked in — before the
-   slow tb run) → **green-proof** on the tb. **Green-proof = pass^N**: the test is green on *all* N
-   re-runs (`core/rerun` reports per-test `confidence`; require `confidence==1.0` over `runs≥N`) —
-   **one green run is NOT proof** (a flaky test passes ~half the time, so a single green is the most
-   likely false "fixed"). Record progress with core/ledger.sh cluster-state (selected → applied --passes/--runs → green|flagged), and phase transitions with core/ledger.sh event phase-enter --phase <p>. For vrt-bucket clusters, record each failing test's vrt_url (ingest tags it) via core/ledger.sh cluster-vrt <id> <fqcn> <url> so the console can surface the baseline-vs-regression review. Widen to the blast radius if you touched a shared Page/Layout. Make the
-   obvious fix calls yourself and note them in one line; don't open a separate question per item.
-   Report the batch result in a single message.
-4. **Converge** — short scoreboard: fixed (+green) · flagged 🐛 (evidence, not filed) · left for
+   re-proof") and link **`vrt_url`** on VRT rows (one-click baseline-vs-regression). Publish as you go: after the mechanical cut, upsert provisional clusters (core/ledger.sh cluster-upsert — short titles fine); refine title/detail/bucket via the same command before presenting. The table you present IS the ledger's clusters — never two divergent copies. No confirmation rerun has
+   run yet — this table is built straight from the ingested report. **Ask one question: which
+   clusters?** (multi-pick allowed).
+3. **Per picked cluster: confirm, then take it end-to-end; report once.** First, rerun only the
+   picked cluster's FQCNs on the tb (clean) — `core/rerun` — to confirm real vs flaky/already-green
+   (I4/I9 evidence: golden BEFORE vs tb NOW; dismiss any that pass). Then, for the confirmed-real
+   ones: `core/apply` (working tree, diff, never commit) → `core/compile` (fast compile-check,
+   right JDK baked in — before the slow tb run) → **green-proof** on the tb. **Green-proof =
+   pass^N**: the test is green on *all* N re-runs (`core/rerun` reports per-test `confidence`;
+   require `confidence==1.0` over `runs≥N`) — **one green run is NOT proof** (a flaky test passes
+   ~half the time, so a single green is the most likely false "fixed"). Record progress with
+   core/ledger.sh cluster-state (selected → applied --passes/--runs → green|flagged), and phase
+   transitions with core/ledger.sh event phase-enter --phase <p>. For vrt-bucket clusters, record
+   each failing test's vrt_url (ingest tags it) via core/ledger.sh cluster-vrt <id> <fqcn> <url> so
+   the console can surface the baseline-vs-regression review. Widen to the blast radius if you
+   touched a shared Page/Layout. Make the obvious fix calls yourself and note them in one line;
+   don't open a separate question per item. Report the batch result in a single message.
+4. **Re-cluster and re-present.** Re-cluster the REMAINING + any newly-surfaced failures; present
+   the UPDATED table (same discipline as step 2 — ledger upsert, meaning buckets). Steering may
+   split/redefine. Loop to step 2's decision — one prompt, not per-item.
+5. **Converge** — short scoreboard: fixed (+green) · flagged 🐛 (evidence, not filed) · left for
    owners/redesign. The user reviews the diff and commits. Offer remaining buckets in one line.
 
 ## Presentation discipline (this is the point)

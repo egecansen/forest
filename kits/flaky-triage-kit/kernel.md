@@ -46,26 +46,28 @@ fixes **verified green on that tb**, and flag suspected app-bugs for the user's 
 ```
 0. INPUT        s-report + tb                                    [validated §3]
 1. INGEST&PIN   pull FAILED docs for the pinned build from ES
-2. RE-RUN/tb    run exactly those failing tests on tb, clean.
-                flaky = a CONFIDENCE (N re-runs / retry+fail counters), not one pass
-                → splits  real | flaky | per-box | noise
-3. CLUSTER      group by MEANING a human recognizes (selector moved · VRT baseline drift ·
-                app behavior change · redesign migration · flaky-infra · likely-bug) —
-                re-group the mechanical signature; NEVER present raw-exception buckets.
-                per cluster: bucket · fix-vs-🐛 (evidence-gated) · action.
+2. HEALTH-CHECK cheap tb probe (I9) — a known-good check / per-test ES history, NOT a full
+   /tb          rerun. Near-all-fail or unreachable box ⇒ broken box: stop, say so, present NO
+                table (a broken box makes every failure look real). Seconds, not minutes.
+3. CLUSTER      group the report's FAILED docs by MEANING a human recognizes (selector moved ·
+   (from report) VRT baseline drift · app behavior change · redesign migration · flaky-infra ·
+                likely-bug) — re-group the mechanical signature; NEVER raw-exception buckets.
+                per cluster: bucket · fix-vs-🐛 (evidence-gated) · action · its tests.
                 skip clusters already green in current code.
-                ONE table, easy-fix → likely-bug, one line each  ── STOP: one decision ──
-4. SELECT&APPLY user picks cluster(s) and/or steers; take them END-TO-END:
-                apply to the WORKING TREE (clean-tree check, diff, never commit) →
-                GREEN-PROOF (widened to the shared-layout blast radius when the edit hits
-                a shared Page/Layout). Make obvious fix calls yourself; report the batch ONCE.
-5. RE-ENGAGE    one short prompt for the REMAINING clusters (not per-item);
-                steering may split/redefine → new clusters → loop to 4
-6. CONVERGE     emit the convergence summary.
-                user reviews the diff and commits.   ── the kit NEVER commits ──
+                ONE table, easy-fix → likely-bug, one line each  ── STOP: which cluster(s)? ──
+                (multi-pick allowed; NO confirmation rerun has run yet — cluster from the report)
+4. CONFIRM&APPLY for each picked cluster: RE-RUN ONLY ITS TESTS on tb (clean) — confirm real vs
+   (per cluster) flaky/already-green (I4/I9 evidence: golden BEFORE vs tb NOW; dismiss any that
+                pass). Then take the confirmed-real ones END-TO-END: apply to the WORKING TREE
+                (clean-tree check, diff, never commit) → GREEN-PROOF (widen to the shared-layout
+                blast radius when the edit hits a shared Page/Layout). Report the batch ONCE.
+5. RE-CLUSTER   re-cluster the REMAINING + any newly-surfaced failures; present the UPDATED table.
+   &RE-ENGAGE   steering may split/redefine. loop to 3's decision (pick the next). one prompt,
+                not per-item.
+6. CONVERGE     emit the convergence summary. user reviews the diff and commits.  ── kit NEVER commits ──
 ```
 
-Two human gates only: **cluster-selection** (step 4) and **review-commit** (step 6) — do not
+Two human gates only: **cluster-selection** (step 3) and **review-commit** (step 6) — do not
 add a third by stopping for mechanics or per-item micro-approvals.
 
 **Keep it simple (the operating style).** The user drives this and reads every turn; give the
