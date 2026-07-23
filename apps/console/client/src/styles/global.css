@@ -3128,6 +3128,11 @@ textarea {
   text-decoration: underline;
 }
 
+.vrt-card-link:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
 /* Row tints mirror the builds board (`.board-table tr.is-*`): a tinted head
    background + an inset left rail in the row's tone, so a cluster's
    disposition reads at a glance down the list. */
