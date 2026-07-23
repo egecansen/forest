@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { render, screen, waitFor } from '@testing-library/react';
+import { render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { StartScreen } from '../components/StartScreen';
 import { RunConflictError } from '../run-conflict';
@@ -232,6 +232,27 @@ describe('StartScreen', () => {
       stubConfigFetch({ configured: false });
       render(<StartScreen onStart={vi.fn()} onBrowseBuilds={vi.fn()} />);
       expect(screen.queryByText(/triage running/i)).not.toBeInTheDocument();
+    });
+
+    it('renders every permissions option alongside afterForm content when the dropdown is open (guards the previous-triages panel layering fix — see .start-card:has(.dropdown-button.open) in global.css)', async () => {
+      stubConfigFetch({ configured: false });
+      render(
+        <StartScreen
+          onStart={vi.fn()}
+          onBrowseBuilds={vi.fn()}
+          afterForm={<div className="history-panel previous-triages">previous triages go here</div>}
+        />
+      );
+      const user = userEvent.setup();
+      await user.click(screen.getByRole('button', { name: 'permissions' }));
+
+      const listbox = screen.getByRole('listbox');
+      expect(within(listbox).getByRole('option', { name: /confirm applies/i })).toBeInTheDocument();
+      expect(within(listbox).getByRole('option', { name: /auto-approve recipe fixes/i })).toBeInTheDocument();
+      // Both the open menu and the afterForm panel it must layer above are
+      // present at once — the actual stacking is CSS-only (not RTL-testable),
+      // verified separately via Playwright screenshots in both themes.
+      expect(screen.getByText('previous triages go here')).toBeInTheDocument();
     });
   });
 });

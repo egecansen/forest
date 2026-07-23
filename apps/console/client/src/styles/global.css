@@ -383,6 +383,19 @@ textarea {
   z-index: 40;
 }
 
+/* .start-card's own `backdrop-filter` (see its rule below) makes IT a
+   stacking context too, one level further out — so no z-index inside it,
+   however high, can ever out-paint a later sibling in .start-stack (the
+   previous-triages panel, which forms its own stacking context via its own
+   backdrop-filter). Both sit at stacking level 0 by default, and the later
+   one in DOM order wins, so the previous-triages panel paints over the
+   whole card — including an open dropdown-menu trapped inside it. Promote
+   the card itself above that sibling only while one of its dropdowns is
+   open. */
+.start-card:has(.dropdown-button.open) {
+  z-index: 1;
+}
+
 .dropdown-button {
   width: 100%;
   background: var(--surface-2);
