@@ -156,5 +156,10 @@ expect 0  "vrt creates missing test entry" -- "$LEDGER" cluster-vrt "$F" c-vrt c
 jq '.clusters[0].tests[0].vrt="http://not-vrt"' "$F" > "$TMP/bad.json"
 expect 65 "validate rejects bad tests[].vrt" -- "$LEDGER" validate "$TMP/bad.json"
 
+# --- fix 9: validate must reject trailing-newline-corrupted tests[].vrt
+CORRUPT7="$TMP/corrupt-vrt-newline.json"
+jq '.clusters[0].tests[0].vrt="https://vrt-x.example/9\n"' "$F" > "$CORRUPT7"
+expect 65 "validate rejects trailing-newline-corrupted vrt" -- "$LEDGER" validate "$CORRUPT7"
+
 echo "ledger-test: $pass passed, $fail failed"
 [ "$fail" -eq 0 ]

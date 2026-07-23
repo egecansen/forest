@@ -33,7 +33,7 @@ Implemented + exercised: `ingest` (+ **N6** phantom guard & `vrt_url`) · `clust
 `rerun` · `compile` (**N6-B**) · `apply` (guards proven: confinement→77, non-unique→65) · `ledger` ·
 `summary` · `dom-capture` (**proven tb128**: 385 KB DOM, 14 `_cllpsID` ids via `getPageSource()`) ·
 `dom-on-failure` (**proven tb161**). Gradle serialized via `_lock` (**N6-A** — concurrent `--rerun-tasks`
-corruption fixed). `ledger` v2 has its own test suite: `bash core/tests/ledger-test.sh` (65 cases). The full `apply → compile → green-proof → converge` loop ran live on **s4-flaky-1394**
+corruption fixed). `ledger` v2 has its own test suite: `bash core/tests/ledger-test.sh` (74 cases). The full `apply → compile → green-proof → converge` loop ran live on **s4-flaky-1394**
 (e.g. `testAllCriteriaPopup` fixed + green on tb161; `testWebSuggestionMapClassifiedsResults` VRT→count refactor green).
 
 The self-protection gate guards this dir (edits need `HEKTOR_FLAKYKIT_UNLOCK=1`). Its logic is

@@ -147,7 +147,7 @@ case "$CMD" in
         ((.tests? // []) | any(.[];
             (((.fqcn? // "" | test("'"$FQCN_RE"'")) | not) or (.fqcn? // "" | test("\n"))) or
             (has("status") and ((.status) as $ts | (["red","green","skipped"] | index($ts) | not))))) or
-        (any(.tests[]?; has("vrt") and (.vrt|test("^https://vrt-[^\\s]+$")|not)))
+        (any(.tests[]?; has("vrt") and (.vrt|test("^https://vrt-[^\\s]+$")|not))) or (any(.tests[]?; has("vrt") and (.vrt|test("\n"))))
       ) | .id // "?"] | join(",")' "$FILE" 2>/dev/null)" || die "validate: unreadable/malformed ledger"
     [ -z "$BAD" ] || die "schema violations in clusters: $BAD"
     if [ "$MODE" = "--final" ]; then
