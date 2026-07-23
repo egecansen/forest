@@ -2,13 +2,23 @@
 # core/rerun.sh — re-run a FQCN list on a testbox via Selenoid; the verification oracle.
 #
 # Enforces: I1 (validate) · I2 (gradle -Dtests) · I9 (broken-box heuristic + box-health cross-check;
-#           distinguishes "ran and failed" from "didn't run") · V2 (N-run confidence)
+#           distinguishes "ran and failed" from "didn't run") · V2 (N-run confidence) ·
+#           I11/kernel §5.3 (confirm at pass^N, not pass^1 — PER-TEST completeness, not just
+#           pass-level: a test whose JVM crashed/hung/timed out in every pass but one must not
+#           read confidence:1.0 off that single lucky pass)
 # Contract: $1=fqcn-csv $2=tb →
 #   {tb,runs,runs_requested,early_exit,runs_with_tests,incomplete_runs,box_health,broken_box_suspected,
-#    run_anomalous,logdir, tests:{<test>:{pass,fail,skip,runs,confidence,cause}}}
-#   (`runs` = passes actually executed; `runs_requested` = N; `early_exit` = stopped before N.)
+#    run_anomalous,logdir,insufficient_runs:[<fqcn>...],
+#    tests:{<test>:{pass,fail,skip,runs,confidence,cause,insufficient?}}}
+#   (`runs` = passes actually executed; `runs_requested` = N; `early_exit` = stopped before N.
+#    Per test: `insufficient:true` (and confidence forced to null instead of a false 1.0) whenever
+#    that test's own `runs` < `runs_requested` — it did not report in every requested pass, so its
+#    green-proof is not yet earned. `insufficient_runs` lists those fqcns at the top level.)
 # Modes: RERUN_DRY=1 (print cmd) · RERUN_FROM_LOG=file (parse+causes from an existing log; no run)
 #        RERUN_EARLY_EXIT=0 forces the full N passes (default 1: decisive-stop + drop-proven-flaky)
+#        RERUN_LIB_ONLY=1 (TEST SEAM): source just the functions above (parse_outcomes/aggregate/
+#        build_result) without running the CLI body — used by core/tests/rerun-test.sh so the
+#        aggregation logic is unit-testable without invoking gradle/Selenoid.
 set -uo pipefail
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"; CFG="$HERE/config.json"
 command -v jq >/dev/null || { echo "rerun: jq required" >&2; exit 69; }
@@ -17,14 +27,22 @@ command -v jq >/dev/null || { echo "rerun: jq required" >&2; exit 69; }
 strip(){ sed -E 's/\x1b\[[0-9;]*m//g'; }
 parse_outcomes(){ strip | grep -oE '[A-Za-z0-9_$]+ > [A-Za-z0-9_]+\(\) (PASSED|FAILED|SKIPPED)' \
   | sed -E 's/^([A-Za-z0-9_$]+) > ([A-Za-z0-9_]+)\(\) (PASSED|FAILED|SKIPPED)$/\1.\2\t\3/'; }
+# $1=runs_requested (N). A test whose OWN runs < N did not report in every requested pass — its
+# green-proof is incomplete (I11/§5.3: confirm at pass^N, not pass^1) — so it is flagged
+# `insufficient:true` and, if that would otherwise have read as a false confidence:1.0
+# (pass>0, fail==0 off an undersampled run), confidence is forced to null instead.
 aggregate(){ jq -R -n --argjson n "$1" '
   [ inputs|split("\t")|select(length==2)|{t:.[0],o:.[1]} ] | group_by(.t)
   | map({key:.[0].t, value:(
       (map(select(.o=="PASSED"))|length) as $p | (map(select(.o=="FAILED"))|length) as $f | (map(select(.o=="SKIPPED"))|length) as $s
-      | {pass:$p,fail:$f,skip:$s,runs:($p+$f+$s),confidence:(if ($p+$f)>0 then ($p/($p+$f)) else null end)})})
+      | ($p+$f+$s) as $runs | ($runs < $n) as $insuff
+      | (if ($p+$f)>0 then ($p/($p+$f)) else null end) as $rawconf
+      | {pass:$p,fail:$f,skip:$s,runs:$runs,
+         confidence:(if $insuff and $rawconf==1 then null else $rawconf end)}
+        + (if $insuff then {insufficient:true} else {} end))})
   | from_entries'; }
 # parse + aggregate + attach a failure CAUSE per failed test (so all-fail is diagnosable)
-build_result(){ # $1=stripped-combined-log  $2=N
+build_result(){ # $1=stripped-combined-log  $2=runs_requested (N — see aggregate() above)
   local lf="$1" n="$2" tests causes='{}' t m c
   tests="$(parse_outcomes < "$lf" | aggregate "$n")"
   for t in $(echo "$tests" | jq -r 'to_entries[]|select(.value.fail>0)|.key'); do
@@ -35,6 +53,11 @@ build_result(){ # $1=stripped-combined-log  $2=N
   done
   echo "$tests" | jq --argjson c "$causes" 'to_entries|map(.value+={cause:($c[.key]//null)})|from_entries'
 }
+
+# TEST SEAM: RERUN_LIB_ONLY=1 sources just the functions above (parse_outcomes/aggregate/build_result)
+# without executing the CLI body below — lets core/tests/rerun-test.sh unit-test the aggregation
+# (a pure function of parsed outcomes + runs_requested) with synthetic pass logs, no gradle/Selenoid.
+if [ "${RERUN_LIB_ONLY:-0}" = "1" ]; then return 0 2>/dev/null || exit 0; fi
 
 if [ -n "${RERUN_FROM_LOG:-}" ]; then _t="$(mktemp)"; strip < "$RERUN_FROM_LOG" > "$_t"; build_result "$_t" 1; rm -f "$_t"; exit 0; fi
 
@@ -88,7 +111,7 @@ for i in $(seq 1 "$N"); do
 
   { [ "$EARLY" = "1" ] && [ "$i" -lt "$N" ]; } || continue
   cat "${passlogs[@]}" | strip > "$LOGDIR/combined.txt"
-  agg="$(build_result "$LOGDIR/combined.txt" "$passes_done")"
+  agg="$(build_result "$LOGDIR/combined.txt" "$N")"   # runs_requested — the decisive-stop/narrowing checks below only read .pass/.fail, so this is safe pre-early-exit
   # DECISIVE-STOP: healthy box + uniform reproduce (every executed test fail-only) + cluster >=5 → real; more passes won't move it.
   if [ "$(echo "$agg" | jq --argjson h "${healthy:-false}" '$h and (length>=5) and (all(.[]; .pass==0 and .fail>0))')" = "true" ]; then
     echo "rerun: early-exit after pass $passes_done — healthy box + all $(echo "$agg"|jq 'length') tests reproduce (fail-only); skipping remaining." >&2; break
@@ -107,15 +130,16 @@ for i in $(seq 1 "$N"); do
   cur="$next"
 done
 cat "$LOGDIR"/r*.log | strip > "$LOGDIR/combined.txt"
-tests="$(build_result "$LOGDIR/combined.txt" "$passes_done")"
+tests="$(build_result "$LOGDIR/combined.txt" "$N")"   # runs_requested — I11: per-test completeness vs the full N, not just passes-done
 
 EFF_N="$passes_done"                                          # passes actually run (≤ N when early-exit fired)
 incomplete=$(( EFF_N - runs_with_tests ))
 allfail="$(echo "$tests" | jq '(([.[].pass]|add)//0)==0 and (length>=5)')"
 broken_box="$(jq -n --argjson af "$allfail" --argjson h "${healthy:-false}" '$af and ($h|not)')"   # box itself looks broken
 anomalous="$(jq -n --argjson inc "$incomplete" '$inc>0')"  # untrustworthy run = a pass ran but executed NOTHING (early-exit is NOT anomalous: EFF_N counts only passes done)
+insufficient_runs="$(echo "$tests" | jq -c '[to_entries[]|select(.value.insufficient==true)|.key]')"
 
 echo "$tests" | jq --arg tb "$TB" --argjson n "$EFF_N" --argjson nreq "$N" --argjson rwt "$runs_with_tests" --argjson inc "$incomplete" \
-  --argjson bh "$box_health" --argjson bb "$broken_box" --argjson an "$anomalous" --arg ld "$LOGDIR" \
+  --argjson bh "$box_health" --argjson bb "$broken_box" --argjson an "$anomalous" --arg ld "$LOGDIR" --argjson ir "$insufficient_runs" \
   '{tb:$tb, runs:$n, runs_requested:$nreq, early_exit:($n<$nreq), runs_with_tests:$rwt, incomplete_runs:$inc, box_health:$bh,
-    broken_box_suspected:$bb, run_anomalous:$an, logdir:$ld, tests:.}'
+    broken_box_suspected:$bb, run_anomalous:$an, logdir:$ld, insufficient_runs:$ir, tests:.}'
