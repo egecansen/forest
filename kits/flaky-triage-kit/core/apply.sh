@@ -8,10 +8,25 @@
 #           repo (an absolute or ../-escaping root in config.json must never confine anything — that
 #           would turn apply into arbitrary-file overwrite); the clean-tree check treats a git ERROR
 #           (e.g. an out-of-repo pathspec) as UNSAFE, never as clean-by-default.
+#           Round2 Fix A: REPO resolution itself is now fail-closed. `set -uo pipefail` (no `-e`)
+#           means a failing `git -C "$HERE" rev-parse --show-toplevel` was never checked — REPO
+#           silently became "", and BOTH Round1 gates above then rebase onto the CALLER's cwd
+#           (os.path.realpath("") == cwd; `git -C "" status` == cwd), i.e. full arbitrary-file
+#           overwrite. REPO is now required to be a non-empty, absolute, existing directory —
+#           anything else exits 78 before either gate runs.
 set -uo pipefail
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"; CFG="$HERE/config.json"
 for t in jq git python3; do command -v "$t" >/dev/null || { echo "apply: $t required" >&2; exit 69; }; done
-REPO="$(git -C "$HERE" rev-parse --show-toplevel)"   # repo from the script's own dir, not the caller's cwd
+REPO="$(git -C "$HERE" rev-parse --show-toplevel 2>/dev/null)"; REPO_RC=$?   # repo from the script's own dir, not the caller's cwd
+# Fail CLOSED here, before ANY confinement/clean-tree logic runs — see Round2 Fix A note above.
+case "$REPO" in
+  /*) [ -d "$REPO" ] || REPO="" ;;   # must resolve to an existing, absolute directory
+  *)  REPO="" ;;                     # empty, or (shouldn't happen, but defense-in-depth) non-absolute
+esac
+if [ "$REPO_RC" -ne 0 ] || [ -z "$REPO" ]; then
+  echo "apply: cannot resolve the enclosing git repo for $HERE (git rev-parse rc=$REPO_RC) — refusing rather than silently falling back to the caller's cwd" >&2
+  exit 78
+fi
 
 REQ="$(cat)"
 FILE="$(jq -r '.file // empty' <<<"$REQ")"; OLD="$(jq -r '.old // empty' <<<"$REQ")"; NEW="$(jq -r '.new // ""' <<<"$REQ")"

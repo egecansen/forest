@@ -11,9 +11,13 @@
 #    run_anomalous,logdir,insufficient_runs:[<fqcn>...],
 #    tests:{<test>:{pass,fail,skip,runs,confidence,cause,insufficient?}}}
 #   (`runs` = passes actually executed; `runs_requested` = N; `early_exit` = stopped before N.
-#    Per test: `insufficient:true` (and confidence forced to null instead of a false 1.0) whenever
-#    that test's own `runs` < `runs_requested` — it did not report in every requested pass, so its
-#    green-proof is not yet earned. `insufficient_runs` lists those fqcns at the top level.)
+#    Per test: `insufficient:true` (and confidence forced to null instead of a false 1.0) ONLY when
+#    that test has NO observed failures (fail==0 — it would otherwise read as green) AND its own
+#    `runs` < `runs_requested` — it did not report in every requested pass, so its green-proof is
+#    not yet earned. A test with >=1 observed failure is a DECIDED, non-green verdict (no
+#    false-green risk) and is never flagged insufficient, however undersampled — Round2 Fix B:
+#    `insufficient` <=> `fail==0 && runs>0 && runs<runs_requested`. `insufficient_runs` lists those
+#    fqcns at the top level.)
 # Modes: RERUN_DRY=1 (print cmd) · RERUN_FROM_LOG=file (parse+causes from an existing log; no run)
 #        RERUN_EARLY_EXIT=0 forces the full N passes (default 1: decisive-stop + drop-proven-flaky)
 #        RERUN_LIB_ONLY=1 (TEST SEAM): source just the functions above (parse_outcomes/aggregate/
@@ -27,18 +31,22 @@ command -v jq >/dev/null || { echo "rerun: jq required" >&2; exit 69; }
 strip(){ sed -E 's/\x1b\[[0-9;]*m//g'; }
 parse_outcomes(){ strip | grep -oE '[A-Za-z0-9_$]+ > [A-Za-z0-9_]+\(\) (PASSED|FAILED|SKIPPED)' \
   | sed -E 's/^([A-Za-z0-9_$]+) > ([A-Za-z0-9_]+)\(\) (PASSED|FAILED|SKIPPED)$/\1.\2\t\3/'; }
-# $1=runs_requested (N). A test whose OWN runs < N did not report in every requested pass — its
-# green-proof is incomplete (I11/§5.3: confirm at pass^N, not pass^1) — so it is flagged
-# `insufficient:true` and, if that would otherwise have read as a false confidence:1.0
-# (pass>0, fail==0 off an undersampled run), confidence is forced to null instead.
+# $1=runs_requested (N). Round2 Fix B: `insufficient` means ONLY "looked green but not proven over
+# N" — i.e. it fires ONLY when a test has NO observed failures (fail==0, so it would otherwise read
+# as green) AND its own runs < N (it did not report in every requested pass — I11/§5.3: confirm at
+# pass^N, not pass^1). A test with >=1 observed failure already has a DECIDED, non-green verdict —
+# no false-green risk — and must never be flagged insufficient, however undersampled (e.g.
+# RERUN_EARLY_EXIT decisively stopped it early). `insufficient <=> fail==0 && runs>0 && runs<n`.
+# When insufficient, confidence is forced to null instead of a false 1.0 (fail==0 always yields
+# rawconf of 1 or null, so nulling is always correct here, never a nulled honest partial value).
 aggregate(){ jq -R -n --argjson n "$1" '
   [ inputs|split("\t")|select(length==2)|{t:.[0],o:.[1]} ] | group_by(.t)
   | map({key:.[0].t, value:(
       (map(select(.o=="PASSED"))|length) as $p | (map(select(.o=="FAILED"))|length) as $f | (map(select(.o=="SKIPPED"))|length) as $s
-      | ($p+$f+$s) as $runs | ($runs < $n) as $insuff
+      | ($p+$f+$s) as $runs | ($f==0 and $runs>0 and $runs < $n) as $insuff
       | (if ($p+$f)>0 then ($p/($p+$f)) else null end) as $rawconf
       | {pass:$p,fail:$f,skip:$s,runs:$runs,
-         confidence:(if $insuff and $rawconf==1 then null else $rawconf end)}
+         confidence:(if $insuff then null else $rawconf end)}
         + (if $insuff then {insufficient:true} else {} end))})
   | from_entries'; }
 # parse + aggregate + attach a failure CAUSE per failed test (so all-fail is diagnosable)

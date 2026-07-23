@@ -70,5 +70,28 @@ OUT_C="$(printf '%s' "$REQ_C" | "$REPO_C/core/apply.sh" 2>&1)"; RC_C=$?
 [ "$RC_C" -eq 75 ] && ok || bad "clean-tree gate independently refuses an out-of-repo target on git error (got $RC_C: $OUT_C)"
 [ "$(cat "$OUTSIDE_C/secret2.txt")" = "TOP SECRET C" ] && ok || bad "scenario (c) target file left UNCHANGED (defense-in-depth held)"
 
+# --- scenario (d) (Fix A): apply.sh's OWN dir has NO enclosing git repo at all — `git -C "$HERE"
+#     rev-parse --show-toplevel` errors. Without an explicit exit-code check, REPO becomes "" and
+#     BOTH downstream gates silently rebase onto the CALLER's cwd instead
+#     (os.path.realpath("") == cwd; `git -C "" status` == cwd) — reproduced as a full arbitrary-file
+#     overwrite: apply.sh must instead FAIL CLOSED (exit 78) before any confinement/clean-tree logic
+#     runs, leaving the decoy cwd repo's target file byte-for-byte unchanged.
+NONREPO_D="$WORK/nonrepo-d"; mkdir -p "$NONREPO_D/core"
+cp "$APPLY" "$NONREPO_D/core/apply.sh"; chmod +x "$NONREPO_D/core/apply.sh"
+# deliberately NO `git init` anywhere above $NONREPO_D/core — $HERE has no enclosing .git at all
+# (WORK lives under mktemp -d, outside any repo, so this holds).
+jq -n '{source_roots:["src"]}' > "$NONREPO_D/core/config.json"
+
+DECOY_D="$WORK/decoy-d"; mkdir -p "$DECOY_D/src"
+git_init "$DECOY_D"
+printf 'DECOY ORIGINAL\n' > "$DECOY_D/src/Target.txt"
+git -C "$DECOY_D" add -A; git -C "$DECOY_D" commit -qm init >/dev/null
+
+REQ_D="$(jq -n --arg f "$DECOY_D/src/Target.txt" --arg o "DECOY ORIGINAL" --arg n "PWNED-VIA-CWD" '{file:$f,old:$o,new:$n}')"
+OUT_D="$(cd "$DECOY_D" && printf '%s' "$REQ_D" | "$NONREPO_D/core/apply.sh" 2>&1)"; RC_D=$?
+
+[ "$RC_D" -eq 78 ] && ok || bad "apply.sh with no enclosing repo fails closed with exit 78 (got $RC_D: $OUT_D)"
+[ "$(cat "$DECOY_D/src/Target.txt")" = "DECOY ORIGINAL" ] && ok || bad "decoy cwd repo's target file left UNCHANGED (no silent cwd fallback)"
+
 echo "apply-test: $pass passed, $fail failed"
 [ "$fail" -eq 0 ]
