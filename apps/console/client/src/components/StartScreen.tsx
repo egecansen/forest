@@ -28,6 +28,15 @@ export function isValidTestbox(testbox: string): boolean {
   return TESTBOX_RE.test(testbox.trim());
 }
 
+/** The testbox *field* itself only ever holds the digits (see StartScreen's
+ *  `testbox` state) — a `tb` prefix is rendered next to it, fixed and
+ *  non-editable, and re-attached before validating/submitting. Strips a
+ *  leading `tb`/`TB` from a value that arrives already prefixed
+ *  (`prefillTestbox` from the builds board, the `/api/config` default). */
+export function stripTbPrefix(value: string): string {
+  return value.replace(/^tb/i, '');
+}
+
 /** Mirrors server/src/validate.ts's report-URL checks: must parse as a URL
  *  and carry a `fullTestBuildName` query param. (The server additionally
  *  checks the host allowlist + `buildStartTime`, which need server-side kit
@@ -100,7 +109,9 @@ function computeShowDemoToggle(prefillReportUrl: string | undefined): boolean {
 export function StartScreen({ onStart, prefillReportUrl, prefillTestbox, onBrowseBuilds, onConflict, banner, afterForm }: Props) {
   const [projectPath, setProjectPath] = useState('');
   const [targetUrl, setTargetUrl] = useState(prefillReportUrl || 'https://');
-  const [testbox, setTestbox] = useState(prefillTestbox || '');
+  // Digits only — the fixed `tb` prefix is rendered next to the field (see
+  // the testbox-field markup below) and re-composed on submit.
+  const [testbox, setTestbox] = useState(stripTbPrefix(prefillTestbox || ''));
   const [permissionPolicy, setPermissionPolicy] = useState<RunConfig['permissionPolicy']>('confirm-applies');
   const [demo, setDemo] = useState(false);
   const [submitting, setSubmitting] = useState(false);
@@ -121,7 +132,7 @@ export function StartScreen({ onStart, prefillReportUrl, prefillTestbox, onBrows
         const cfg = (await res.json()) as ConsoleConfigResponse;
         if (cancelled || !cfg.configured) return;
         if (cfg.repoPath) setProjectPath((p) => (p ? p : cfg.repoPath!));
-        if (cfg.testbox) setTestbox((t) => (t ? t : cfg.testbox!));
+        if (cfg.testbox) setTestbox((t) => (t ? t : stripTbPrefix(cfg.testbox!)));
       } catch {
         // offline / not yet configured — leave the fields blank, user fills them in
       }
@@ -132,13 +143,20 @@ export function StartScreen({ onStart, prefillReportUrl, prefillTestbox, onBrows
   }, []);
 
   const projectPathValid = projectPath.trim().length > 0;
+  // The field itself only holds digits — re-attach the fixed `tb` prefix
+  // before validating/submitting, reusing isValidTestbox (mirrors the
+  // server's TB_RE) rather than duplicating its regex. Since `testbox` can
+  // only ever be empty or 1-4 digits (onChange strips/truncates as you
+  // type), this composed check is exactly equivalent to `^[0-9]{1,4}$` on
+  // the raw digits.
+  const composedTestbox = `tb${testbox}`;
   // The demo report URL/testbox are synthetic (a scripted run, no real
   // Jenkins/ES lookup happens) — don't block a demo submission on the same
   // shape checks a real triage session's URL/testbox must satisfy. The
   // server (validate.ts's normalizeRunBody) also skips these shape checks
   // for `demo: true` bodies, so a malformed demo submission isn't blocked
   // here only to 400 server-side.
-  const testboxValid = demo || isValidTestbox(testbox);
+  const testboxValid = demo || isValidTestbox(composedTestbox);
   const urlValid = demo || isValidReportUrl(targetUrl);
   const canSubmit = projectPathValid && testboxValid && urlValid && !submitting;
 
@@ -148,11 +166,11 @@ export function StartScreen({ onStart, prefillReportUrl, prefillTestbox, onBrows
     if (!canSubmit) return;
     setSubmitting(true);
     try {
-      await onStart(projectPath.trim(), targetUrl.trim(), testbox.trim(), permissionPolicy, 'new', demo);
+      await onStart(projectPath.trim(), targetUrl.trim(), composedTestbox, permissionPolicy, 'new', demo);
     } catch (e) {
       if (e instanceof RunConflictError && onConflict) {
         onConflict(e.conflictRunId, () =>
-          onStart(projectPath.trim(), targetUrl.trim(), testbox.trim(), permissionPolicy, 'new', demo, true)
+          onStart(projectPath.trim(), targetUrl.trim(), composedTestbox, permissionPolicy, 'new', demo, true)
         );
       } else {
         setErr((e as Error).message);
@@ -206,15 +224,26 @@ export function StartScreen({ onStart, prefillReportUrl, prefillTestbox, onBrows
 
           <div className="field">
             <label htmlFor="testbox">testbox</label>
-            <input
-              id="testbox"
-              placeholder="tb161"
-              value={testbox}
-              onChange={(e) => setTestbox(e.target.value)}
-              spellCheck={false}
-              autoComplete="off"
-            />
-            {!testboxValid && <p className="field-note">must look like tb161 (tb + 1-4 digits)</p>}
+            <div className="testbox-field">
+              <span className="testbox-prefix" aria-hidden="true">tb</span>
+              <input
+                id="testbox"
+                placeholder="161"
+                value={testbox}
+                onChange={(e) => setTestbox(e.target.value.replace(/\D/g, '').slice(0, 4))}
+                inputMode="numeric"
+                maxLength={4}
+                spellCheck={false}
+                autoComplete="off"
+              />
+            </div>
+            {/* Digits-only means "invalid" only happens on a blank field —
+                skip the alarming hint on a pristine/empty load; it can only
+                ever show once the field has content but is still invalid,
+                which the stripping above makes unreachable in practice. */}
+            {!testboxValid && testbox.length > 0 && (
+              <p className="field-note">must be 1-4 digits, e.g. 161</p>
+            )}
           </div>
 
           <div className="field">

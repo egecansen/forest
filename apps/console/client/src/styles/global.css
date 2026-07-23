@@ -4729,6 +4729,51 @@ textarea {
   transform: translateY(0);
 }
 
+/* ─── Testbox field: fixed "tb" prefix glued to a digits-only input ─────
+   Reuses the same surface/border/radius/focus-ring look as `.field input`
+   (see above) but hosts it on the wrapper so the prefix + input paint as
+   one field; the input itself is reset to borderless/transparent. Built
+   entirely from existing semantic tokens, so both themes (`:root` dark
+   default / `:root[data-theme='light']`) fall out for free. */
+.testbox-field {
+  display: flex;
+  align-items: center;
+  background: var(--surface-2);
+  border: 1px solid var(--border-strong);
+  border-radius: 10px;
+  transition: border-color 0.15s, box-shadow 0.15s;
+}
+
+.testbox-field:focus-within {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px rgba(255, 212, 0, 0.15);
+}
+
+.testbox-prefix {
+  padding: 13px 0 13px 14px;
+  font-family: var(--mono);
+  font-size: 14px;
+  color: var(--muted-2);
+  user-select: none;
+}
+
+.testbox-field input {
+  flex: 1;
+  min-width: 0;
+  background: transparent;
+  border: none;
+  color: var(--text);
+  padding: 13px 14px 13px 4px;
+  font-family: var(--mono);
+  font-size: 14px;
+  outline: none;
+}
+
+.testbox-field input:focus {
+  border: none;
+  box-shadow: none;
+}
+
 /* ─── Folder picker — server-backed filesystem browser ─────────────────── */
 .folder-picker-overlay {
   position: fixed;

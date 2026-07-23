@@ -22,11 +22,11 @@ afterEach(() => {
 const GOOD_URL = 'https://report.example/web-test-s4-flaky/2127?buildStartTime=1&fullTestBuildName=abc';
 
 describe('StartScreen', () => {
-  it('prefills project path + testbox from GET /api/config', async () => {
-    stubConfigFetch();
+  it('prefills project path + testbox (digits only, tb stripped) from GET /api/config', async () => {
+    stubConfigFetch(); // config default testbox is 'tb161'
     render(<StartScreen onStart={vi.fn()} onBrowseBuilds={vi.fn()} />);
     await waitFor(() => expect(screen.getByLabelText(/project path/i)).toHaveValue('/repo/web-test'));
-    expect(screen.getByLabelText(/testbox/i)).toHaveValue('tb161');
+    expect(screen.getByLabelText(/testbox/i)).toHaveValue('161');
   });
 
   it('prefills the report URL from prefillReportUrl over any config default', async () => {
@@ -35,24 +35,35 @@ describe('StartScreen', () => {
     expect(screen.getByLabelText(/report url/i)).toHaveValue(GOOD_URL);
   });
 
-  it('prefills the testbox from prefillTestbox, taking precedence over the config default', async () => {
+  it('prefills the testbox from prefillTestbox (digits only, tb stripped), taking precedence over the config default, and shows the tb prefix', async () => {
     stubConfigFetch(); // config default testbox is 'tb161'
     render(<StartScreen onStart={vi.fn()} onBrowseBuilds={vi.fn()} prefillTestbox="tb307" />);
-    expect(screen.getByLabelText(/testbox/i)).toHaveValue('tb307');
+    expect(screen.getByLabelText(/testbox/i)).toHaveValue('307');
+    expect(screen.getByText('tb')).toBeInTheDocument();
     // Let the config fetch resolve — its untouched-guard must not clobber the prefill.
     await waitFor(() => expect(screen.getByLabelText(/project path/i)).toHaveValue('/repo/web-test'));
-    expect(screen.getByLabelText(/testbox/i)).toHaveValue('tb307');
+    expect(screen.getByLabelText(/testbox/i)).toHaveValue('307');
   });
 
-  it('disables submit and shows a hint for a malformed testbox', async () => {
+  it('strips non-digit characters as they are typed into the testbox field', async () => {
+    stubConfigFetch({ configured: false });
+    render(<StartScreen onStart={vi.fn()} onBrowseBuilds={vi.fn()} prefillReportUrl={GOOD_URL} />);
+    const user = userEvent.setup();
+    const testboxInput = screen.getByLabelText(/testbox/i);
+    await user.type(testboxInput, 'abc5x');
+    expect(testboxInput).toHaveValue('5');
+  });
+
+  it('keeps submit disabled for a letters-only testbox, without showing an alarming hint on a blank field', async () => {
     stubConfigFetch({ configured: false });
     render(<StartScreen onStart={vi.fn()} onBrowseBuilds={vi.fn()} prefillReportUrl={GOOD_URL} />);
     const user = userEvent.setup();
     await user.type(screen.getByLabelText(/^project path$/i), '/tmp/x');
     const testboxInput = screen.getByLabelText(/testbox/i);
-    await user.type(testboxInput, 'tb99999');
+    await user.type(testboxInput, 'abcde');
+    expect(testboxInput).toHaveValue('');
     expect(screen.getByRole('button', { name: /start triage/i })).toBeDisabled();
-    expect(screen.getByText(/tb161/i)).toBeInTheDocument(); // field-note hint mentions the expected shape
+    expect(screen.queryByText(/1-4 digits/i)).not.toBeInTheDocument();
   });
 
   it('disables submit and shows a hint for a report URL missing fullTestBuildName', async () => {
@@ -60,20 +71,20 @@ describe('StartScreen', () => {
     render(<StartScreen onStart={vi.fn()} onBrowseBuilds={vi.fn()} />);
     const user = userEvent.setup();
     await user.type(screen.getByLabelText(/^project path$/i), '/tmp/x');
-    await user.type(screen.getByLabelText(/testbox/i), 'tb161');
+    await user.type(screen.getByLabelText(/testbox/i), '161');
     await user.clear(screen.getByLabelText(/report url/i));
     await user.type(screen.getByLabelText(/report url/i), 'https://report.example/x?buildStartTime=1');
     expect(screen.getByRole('button', { name: /start triage/i })).toBeDisabled();
     expect(screen.getByText(/fulltestbuildname/i)).toBeInTheDocument();
   });
 
-  it('enables submit once every field is valid, and posts the full body on submit', async () => {
+  it('enables submit once every field is valid, and composes tb + the typed digits on submit', async () => {
     stubConfigFetch({ configured: false });
     const onStart = vi.fn().mockResolvedValue(undefined);
     render(<StartScreen onStart={onStart} onBrowseBuilds={vi.fn()} />);
     const user = userEvent.setup();
     await user.type(screen.getByLabelText(/^project path$/i), '/tmp/web-test');
-    await user.type(screen.getByLabelText(/testbox/i), 'tb161');
+    await user.type(screen.getByLabelText(/testbox/i), '55');
     await user.clear(screen.getByLabelText(/report url/i));
     await user.type(screen.getByLabelText(/report url/i), GOOD_URL);
 
@@ -81,7 +92,7 @@ describe('StartScreen', () => {
     expect(submit).toBeEnabled();
     await user.click(submit);
 
-    expect(onStart).toHaveBeenCalledWith('/tmp/web-test', GOOD_URL, 'tb161', 'confirm-applies', 'new', false);
+    expect(onStart).toHaveBeenCalledWith('/tmp/web-test', GOOD_URL, 'tb55', 'confirm-applies', 'new', false);
   });
 
   it('maps the policy dropdown labels to the right permissionPolicy values', async () => {
@@ -90,7 +101,7 @@ describe('StartScreen', () => {
     render(<StartScreen onStart={onStart} onBrowseBuilds={vi.fn()} />);
     const user = userEvent.setup();
     await user.type(screen.getByLabelText(/^project path$/i), '/tmp/web-test');
-    await user.type(screen.getByLabelText(/testbox/i), 'tb161');
+    await user.type(screen.getByLabelText(/testbox/i), '161');
     await user.clear(screen.getByLabelText(/report url/i));
     await user.type(screen.getByLabelText(/report url/i), GOOD_URL);
 
@@ -143,8 +154,10 @@ describe('StartScreen', () => {
       const user = userEvent.setup();
 
       await user.type(screen.getByLabelText(/^project path$/i), '/tmp/demo-project');
-      // Deliberately malformed testbox — a real triage session would block on this.
-      await user.type(screen.getByLabelText(/testbox/i), 'not-a-testbox');
+      // Deliberately left blank — a real (non-demo) triage session requires
+      // 1-4 digits and would block on this; the digits-only field can no
+      // longer hold a non-numeric "malformed" value directly, so blank is
+      // the reachable invalid state that demo mode must relax.
       const submit = screen.getByRole('button', { name: /start triage/i });
       expect(submit).toBeDisabled();
 
@@ -155,7 +168,7 @@ describe('StartScreen', () => {
       expect(onStart).toHaveBeenCalledWith(
         '/tmp/demo-project',
         DEMO_URL,
-        'not-a-testbox',
+        'tb',
         'confirm-applies',
         'new',
         true
@@ -173,7 +186,7 @@ describe('StartScreen', () => {
       render(<StartScreen onStart={onStart} onBrowseBuilds={vi.fn()} onConflict={onConflict} prefillReportUrl={GOOD_URL} />);
       const user = userEvent.setup();
       await user.type(screen.getByLabelText(/^project path$/i), '/tmp/web-test');
-      await user.type(screen.getByLabelText(/testbox/i), 'tb161');
+      await user.type(screen.getByLabelText(/testbox/i), '161');
 
       await user.click(screen.getByRole('button', { name: /start triage/i }));
 
@@ -194,7 +207,7 @@ describe('StartScreen', () => {
       render(<StartScreen onStart={onStart} onBrowseBuilds={vi.fn()} prefillReportUrl={GOOD_URL} />);
       const user = userEvent.setup();
       await user.type(screen.getByLabelText(/^project path$/i), '/tmp/web-test');
-      await user.type(screen.getByLabelText(/testbox/i), 'tb161');
+      await user.type(screen.getByLabelText(/testbox/i), '161');
       await user.click(screen.getByRole('button', { name: /start triage/i }));
       expect(await screen.findByText(/already running/i)).toBeInTheDocument();
     });

@@ -30,7 +30,9 @@ test('board → deep link → demo triage run → clusters → pick → completi
   await expect(page.getByLabel(/report url/i)).toHaveValue(/web-test-s4-flaky\/2127/);
 
   await page.getByLabel(/project path/i).fill('/tmp/demo-project');
-  await page.getByLabel(/testbox/i).fill('tb161');
+  // The testbox field now holds only the digits (a fixed, non-editable "tb"
+  // prefix renders next to it) — the console composes "tb161" on submit.
+  await page.getByLabel(/testbox/i).fill('161');
 
   // The demo checkbox only renders because the report URL carries
   // fullTestBuildName=demo — asserting it's actually there (not just
