@@ -25,9 +25,14 @@ export interface ConsoleConfig {
 }
 
 /** Matches a Selenoid grid URL (host contains "selenoid") or a generic
- *  Selenium-grid session-viewer URL (`.../#/sessions/<id>`). */
+ *  Selenium-grid session-viewer URL (`.../#/sessions/<id>`). The `\S` runs
+ *  are bounded (`{0,300}`/`{1,300}`, not unbounded `\S*`/`\S+`) so that even
+ *  a "matching-prefix" pathological input — one that DOES contain a literal
+ *  the driver's cheap pre-check can't skip (see extractSelenoidUrl in
+ *  driver.ts) — can't make this alternation backtrack unboundedly; 300 chars
+ *  is far more than any real Selenoid/session URL needs. */
 export const DEFAULT_SELENOID_URL_PATTERN =
-  '(https?://\\S*selenoid\\S*|https?://\\S+/#/sessions/\\S+)';
+  '(https?://\\S{0,300}selenoid\\S{0,300}|https?://\\S{1,300}/#/sessions/\\S{1,300})';
 
 /**
  * Builds the RegExp driver.ts uses to detect a Selenoid live-session URL in

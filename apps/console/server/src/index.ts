@@ -175,7 +175,7 @@ async function main() {
       // An identity, not a secret — the client uses it purely to power the
       // builds board's "only mine" filter (see BuildsBoard.tsx).
       jenkinsUser,
-      // A URL, not a secret — powers the run console's "selenoid ↗" link
+      // A URL, not a secret — powers the run console's "watch live ↗" link
       // (see RunConsole.tsx). Omitted (undefined) when unconfigured.
       selenoidUrl: consoleConfig.selenoidUrl,
     });

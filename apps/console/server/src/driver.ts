@@ -8,7 +8,7 @@ import { makeCanUseTool } from './driver-can-use-tool.js';
 import { hektorMcpServer } from './driver-mcp.js';
 import { pendingAnswers } from './pending-answers.js';
 import { startLedgerWatcher } from './ledger-watcher.js';
-import { buildSelenoidUrlRegex } from './console-config.js';
+import { buildSelenoidUrlRegex, DEFAULT_SELENOID_URL_PATTERN } from './console-config.js';
 
 export type QueryFn = (args: { prompt: string; options: Record<string, unknown> }) =>
   AsyncIterable<Record<string, unknown>> & { interrupt?: () => Promise<void> };
@@ -185,10 +185,34 @@ export function extractSelenoidUrl(m: Record<string, unknown>, pattern: RegExp):
     }
     if (!scanned) return null;
 
-    const match = scanned.slice(0, SELENOID_SCAN_CAP).match(pattern);
+    const capped = scanned.slice(0, SELENOID_SCAN_CAP);
+
+    // Cheap pre-check before ever running the regex: on long whitespace-free
+    // non-matching text (minified JSON/HTML — exactly the shape of a rerun's
+    // dom-capture output), the DEFAULT pattern's \S*/\S+ alternation can
+    // backtrack polynomially trying to find a match that isn't there (measured
+    // 1-7s on 200KB input). If NEITHER literal substring any default-pattern
+    // match must contain is even present, there's nothing to find — skip the
+    // regex entirely and make the common no-match case O(n), no backtracking.
+    // Only applies when `pattern` IS (still) the built-in default: an
+    // operator's custom `selenoidUrlPattern` may key off completely different
+    // substrings, so it always gets the full regex scan.
+    if (pattern.source === DEFAULT_SELENOID_URL_PATTERN) {
+      const lower = capped.toLowerCase();
+      if (!lower.includes('selenoid') && !lower.includes('/#/sessions/')) return null;
+    }
+
+    const match = capped.match(pattern);
     const candidate = match?.[0];
     if (!candidate) return null;
-    return isPlausibleUrl(candidate) ? candidate : null;
+    // A greedy \S run can pull a trailing closing/punctuation delimiter into
+    // the match when the URL is embedded in JSON/parens/prose — e.g.
+    // {"u":"https://…/abc"} matches through the closing `"}`. Strip a
+    // trailing run of those before the plausibility check. A trailing slash
+    // is deliberately NOT in this set: a legitimately trailing-slash URL
+    // (…/abc/) is left alone.
+    const stripped = candidate.replace(/[)\]}"'.,;:]+$/, '');
+    return isPlausibleUrl(stripped) ? stripped : null;
   } catch {
     return null;
   }
@@ -226,6 +250,13 @@ export function startDriver(
   // logging the SAME live url every tick doesn't call run.setSelenoidUrl (and
   // thus re-log "watch live: …") on every single tool result. A genuinely
   // DIFFERENT url (a fresh rerun's new session) still gets surfaced.
+  // Note: this compares only against the IMMEDIATELY PREVIOUS surfaced url,
+  // not full history — so a sequence A→B→A intentionally re-surfaces A a
+  // second time. That's the correct call: from here, A reappearing after B
+  // looks exactly like any other "different from last" transition (a fresh
+  // rerun session), and there's no reliable way to tell "A is back" apart
+  // from "a new session that happens to reuse A's url" without deeper
+  // knowledge this driver doesn't have.
   let lastSelenoidUrl: string | null = null;
   // Injectable seam (tests only — production always gets the real watcher):
   // every pre-existing driver test scripts a non-demo run, so without this

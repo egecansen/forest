@@ -293,7 +293,7 @@ export function RunConsole({ config, onStop, onPause, onResume, onNew, backLabel
                 target="_blank"
                 rel="noreferrer"
               >
-                selenoid ↗
+                watch live ↗
               </a>
             )}
             {onOpenHistory && (

@@ -1,6 +1,7 @@
 import { describe, expect, it, vi, afterEach } from 'vitest';
-import { startDriver, inferPhase, makeDemoQueryFn, type QueryFn } from '../driver.js';
+import { startDriver, inferPhase, makeDemoQueryFn, extractSelenoidUrl, type QueryFn } from '../driver.js';
 import { runStore } from '../run-store.js';
+import { buildSelenoidUrlRegex } from '../console-config.js';
 
 const cfg = { projectPath: '/tmp/x', targetUrl: 'https://r.example/j/1?buildStartTime=1&fullTestBuildName=x',
   testbox: 'tb161', mode: 'triage' as const, permissionPolicy: 'confirm-applies' as const };
@@ -665,5 +666,117 @@ describe('Selenoid live-session URL detection (tool RESULTS, not tool calls)', (
     await done;
 
     expect(spy).toHaveBeenCalledWith('https://my-grid.internal/session/abc123');
+  });
+});
+
+describe('extractSelenoidUrl (direct) — regex perf guard against realistic pathological input', () => {
+  const defaultRegex = buildSelenoidUrlRegex();
+  const directMsg = (content: unknown) =>
+    ({ message: { content: [{ type: 'tool_result', tool_use_id: 't1', content }] } }) as Record<string, unknown>;
+
+  it(
+    'a 200KB whitespace-free filler with NO selenoid token returns null fast (cheap indexOf guard skips the regex entirely)',
+    () => {
+      // Same shape as a rerun's minified-JSON/HTML dom-capture output: long,
+      // whitespace-free, repeated "http://" — no "selenoid", no "/#/sessions/".
+      const filler = 'http://x'.repeat(25_000); // 200,000 chars
+      const t0 = performance.now();
+      const result = extractSelenoidUrl(directMsg(filler), defaultRegex);
+      const elapsedMs = performance.now() - t0;
+      expect(result).toBeNull();
+      expect(elapsedMs).toBeLessThan(200);
+    },
+    10_000
+  );
+
+  it('a string that DOES contain "selenoid" still matches (the guard causes no false negative)', () => {
+    const content = 'noise '.repeat(500) + 'live at https://selenoid.example/ui/#/sessions/abc123 now';
+    const result = extractSelenoidUrl(directMsg(content), defaultRegex);
+    expect(result).toBe('https://selenoid.example/ui/#/sessions/abc123');
+  });
+
+  it(
+    'never throws, and stays fast, on a pathological input where "selenoid" IS present (so the guard cannot skip it) but is unreachable from any http:// run — the DEFAULT pattern itself must be bounded',
+    () => {
+      // ~200KB of whitespace-free "http://" filler, then a whitespace boundary,
+      // then the literal "selenoid" — present in the text (guard won't skip),
+      // but never reachable by \S* from any of the many "http://" occurrences
+      // because a real whitespace character sits in between. Pre-fix, the
+      // unbounded \S*/\S+ alternation backtracks from EVERY "http://"
+      // occurrence all the way to that boundary before giving up — polynomial
+      // blowup even though the guard let it through.
+      const filler = ('http://' + 'a'.repeat(50)).repeat(3500);
+      const content = `${filler} selenoid`;
+      const t0 = performance.now();
+      let result: string | null = null;
+      expect(() => { result = extractSelenoidUrl(directMsg(content), defaultRegex); }).not.toThrow();
+      const elapsedMs = performance.now() - t0;
+      expect(result).toBeNull();
+      expect(elapsedMs).toBeLessThan(200);
+    },
+    10_000
+  );
+});
+
+describe('extractSelenoidUrl (direct) — trailing-delimiter stripping', () => {
+  const defaultRegex = buildSelenoidUrlRegex();
+  const directMsg = (content: unknown) =>
+    ({ message: { content: [{ type: 'tool_result', tool_use_id: 't1', content }] } }) as Record<string, unknown>;
+
+  it('a URL embedded in JSON ({"liveUrl":"…"}) is returned bare, without the trailing "}', () => {
+    const content = '{"liveUrl":"https://selenoid.example/ui/#/sessions/abc123"}';
+    expect(extractSelenoidUrl(directMsg(content), defaultRegex)).toBe(
+      'https://selenoid.example/ui/#/sessions/abc123'
+    );
+  });
+
+  it('a URL embedded in parens ("(see …)") is returned bare, without the trailing )', () => {
+    const content = '(see https://selenoid.example/ui/#/sessions/abc123)';
+    expect(extractSelenoidUrl(directMsg(content), defaultRegex)).toBe(
+      'https://selenoid.example/ui/#/sessions/abc123'
+    );
+  });
+
+  it('a URL followed by a comma in prose ("url: …, next") is returned bare, without the trailing ,', () => {
+    const content = 'url: https://selenoid.example/ui/#/sessions/abc123, next';
+    expect(extractSelenoidUrl(directMsg(content), defaultRegex)).toBe(
+      'https://selenoid.example/ui/#/sessions/abc123'
+    );
+  });
+
+  it('a legitimately trailing-slash URL is preserved — slash is not in the strip set', () => {
+    const content = 'live at https://selenoid.example/ui/#/sessions/abc123/ now';
+    expect(extractSelenoidUrl(directMsg(content), defaultRegex)).toBe(
+      'https://selenoid.example/ui/#/sessions/abc123/'
+    );
+  });
+});
+
+describe('Selenoid A→B→A dedup (driver-level intent)', () => {
+  // See the `lastSelenoidUrl` comment in driver.ts: dedup compares only
+  // against the IMMEDIATELY PREVIOUS surfaced url, not full history — so a
+  // rerun sequence A→B→A intentionally re-surfaces A a second time (it looks
+  // like a genuinely new session, same as any other "different from last"
+  // transition). This test locks in that choice.
+  const userToolResult = (content: unknown) =>
+    msg({ type: 'user', message: { content: [{ type: 'tool_result', tool_use_id: 't1', content }] } });
+
+  it('A→B→A yields 3 setSelenoidUrl calls (2 of them for A)', async () => {
+    const run = runStore.create(cfg);
+    const spy = vi.spyOn(run, 'setSelenoidUrl');
+    const done = new Promise<void>((r) => run.on('event', (e) => { if (e.type === 'status' && e.status === 'completed') r(); }));
+    startDriver(run, scripted([
+      msg({ type: 'system', subtype: 'init', session_id: 'sess-selenoid-aba' }),
+      userToolResult('live at https://selenoid.example/ui/#/sessions/abc123 now'), // A
+      userToolResult('rerun spun a new one: https://selenoid.example/ui/#/sessions/def456 now'), // B
+      userToolResult('back to the original: https://selenoid.example/ui/#/sessions/abc123 again'), // A again
+      msg({ type: 'result', subtype: 'success', total_cost_usd: 0.01, usage: { output_tokens: 10 }, result: 'done' }),
+    ]), { ledgerWatcherImpl: noopLedgerWatcher });
+    await done;
+
+    expect(spy).toHaveBeenCalledTimes(3);
+    expect(spy).toHaveBeenNthCalledWith(1, 'https://selenoid.example/ui/#/sessions/abc123');
+    expect(spy).toHaveBeenNthCalledWith(2, 'https://selenoid.example/ui/#/sessions/def456');
+    expect(spy).toHaveBeenNthCalledWith(3, 'https://selenoid.example/ui/#/sessions/abc123');
   });
 });

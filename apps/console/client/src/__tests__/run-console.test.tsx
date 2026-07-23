@@ -79,7 +79,7 @@ describe('RunConsole selenoid link', () => {
     stubConfigFetch({ configured: true, selenoidUrl: 'https://selenoid.example/ui/#/sessions' });
     const snap = snapshot({ status: 'running' });
     render(<RunConsole config={CONFIG} onNew={() => {}} readOnly={false} staticSnapshot={snap} />);
-    const link = await screen.findByRole('link', { name: /selenoid/i });
+    const link = await screen.findByRole('link', { name: /watch live/i });
     expect(link).toHaveAttribute('href', 'https://selenoid.example/ui/#/sessions');
     expect(link).toHaveAttribute('target', '_blank');
     expect(link).toHaveAttribute('rel', expect.stringContaining('noreferrer'));
@@ -89,7 +89,7 @@ describe('RunConsole selenoid link', () => {
     stubConfigFetch({ configured: true, selenoidUrl: 'https://selenoid.example/ui/#/sessions' });
     const snap = snapshot({ status: 'running', selenoidUrl: 'https://selenoid.example/ui/#/sessions/live-abc123' });
     render(<RunConsole config={CONFIG} onNew={() => {}} readOnly={false} staticSnapshot={snap} />);
-    const link = await screen.findByRole('link', { name: /selenoid/i });
+    const link = await screen.findByRole('link', { name: /watch live/i });
     expect(link).toHaveAttribute('href', 'https://selenoid.example/ui/#/sessions/live-abc123');
   });
 
@@ -97,7 +97,7 @@ describe('RunConsole selenoid link', () => {
     stubConfigFetch({ configured: true });
     const snap = snapshot({ status: 'running', selenoidUrl: 'https://selenoid.example/ui/#/sessions/live-abc123' });
     render(<RunConsole config={CONFIG} onNew={() => {}} readOnly={false} staticSnapshot={snap} />);
-    const link = await screen.findByRole('link', { name: /selenoid/i });
+    const link = await screen.findByRole('link', { name: /watch live/i });
     expect(link).toHaveAttribute('href', 'https://selenoid.example/ui/#/sessions/live-abc123');
   });
 
@@ -105,7 +105,7 @@ describe('RunConsole selenoid link', () => {
     stubConfigFetch({ configured: true, selenoidUrl: 'https://selenoid.example/ui/#/sessions' });
     const snap = snapshot({ status: 'awaiting-input' });
     render(<RunConsole config={CONFIG} onNew={() => {}} readOnly={false} staticSnapshot={snap} />);
-    expect(await screen.findByRole('link', { name: /selenoid/i })).toBeInTheDocument();
+    expect(await screen.findByRole('link', { name: /watch live/i })).toBeInTheDocument();
   });
 
   it('hides the link once the run is no longer running/awaiting-input', async () => {
@@ -114,7 +114,7 @@ describe('RunConsole selenoid link', () => {
     render(<RunConsole config={CONFIG} onNew={() => {}} readOnly={false} staticSnapshot={snap} />);
     // Give the config fetch a tick to resolve before asserting absence.
     await waitFor(() => expect(vi.mocked(fetch)).toHaveBeenCalled());
-    expect(screen.queryByRole('link', { name: /selenoid/i })).not.toBeInTheDocument();
+    expect(screen.queryByRole('link', { name: /watch live/i })).not.toBeInTheDocument();
   });
 
   it('hides the link entirely when NEITHER a detected nor a config selenoidUrl is present', async () => {
@@ -122,7 +122,7 @@ describe('RunConsole selenoid link', () => {
     const snap = snapshot({ status: 'running' });
     render(<RunConsole config={CONFIG} onNew={() => {}} readOnly={false} staticSnapshot={snap} />);
     await waitFor(() => expect(vi.mocked(fetch)).toHaveBeenCalled());
-    expect(screen.queryByRole('link', { name: /selenoid/i })).not.toBeInTheDocument();
+    expect(screen.queryByRole('link', { name: /watch live/i })).not.toBeInTheDocument();
   });
 
   it('hides the link in readOnly mode (history snapshots) even with a detected url and status running', async () => {
@@ -132,7 +132,7 @@ describe('RunConsole selenoid link', () => {
     // Wait for config fetch, then verify the selenoid link is not rendered because
     // readOnly mode (history snapshots) should never show live links.
     await waitFor(() => expect(vi.mocked(fetch)).toHaveBeenCalled());
-    expect(screen.queryByRole('link', { name: /selenoid/i })).not.toBeInTheDocument();
+    expect(screen.queryByRole('link', { name: /watch live/i })).not.toBeInTheDocument();
   });
 });
 
