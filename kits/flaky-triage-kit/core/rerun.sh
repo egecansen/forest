@@ -27,6 +27,7 @@ set -uo pipefail
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"; CFG="$HERE/config.json"
 command -v jq >/dev/null || { echo "rerun: jq required" >&2; exit 69; }
 . "$HERE/_lock.sh"   # A (N6): serialize gradle on this working copy — concurrent --rerun-tasks corrupt build/
+. "$HERE/_strict.sh"   # Round3: shared whole-string shape matcher (closes the grep-newline anchor bypass)
 
 strip(){ sed -E 's/\x1b\[[0-9;]*m//g'; }
 parse_outcomes(){ strip | grep -oE '[A-Za-z0-9_$]+ > [A-Za-z0-9_]+\(\) (PASSED|FAILED|SKIPPED)' \
@@ -72,7 +73,9 @@ if [ -n "${RERUN_FROM_LOG:-}" ]; then _t="$(mktemp)"; strip < "$RERUN_FROM_LOG" 
 TESTS="${1:-}"; TB="${2:-}"
 [ -n "$TESTS" ] && [ -n "$TB" ] || { echo "usage: rerun.sh <fqcn-csv> <tb>" >&2; exit 64; }
 printf '%s' "$TB"|grep -qE '^[0-9]+$' || { echo "I1: tb must be numeric: $TB" >&2; exit 77; }
-printf '%s' "$TESTS"|grep -qE '^[A-Za-z0-9_.,]+$' || { echo "I1: bad FQCN list rejected" >&2; exit 77; }
+# Round3: strict_match is WHOLE-STRING (unlike line-oriented `grep -qE '^...$'`) — rejects an
+# embedded-newline FQCN-CSV that would otherwise smuggle a metacharacter-laden line past this check.
+strict_match "$TESTS" '[A-Za-z0-9_.,]+' || { echo "I1: bad FQCN list rejected" >&2; exit 77; }
 
 REPO="$(git -C "$HERE" rev-parse --show-toplevel)"
 WD="$(jq -r '.run.workdir' "$CFG")"

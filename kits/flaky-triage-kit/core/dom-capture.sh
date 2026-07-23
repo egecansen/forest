@@ -14,13 +14,16 @@
 set -uo pipefail
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"; CFG="$HERE/config.json"
 . "$HERE/_lock.sh"   # A (N6): serialize gradle on this working copy
+. "$HERE/_strict.sh"   # Round3: shared whole-string shape matcher (closes the grep-newline anchor bypass)
 for t in jq git; do command -v "$t" >/dev/null || { echo "dom-capture: $t required" >&2; exit 69; }; done
 
 URL="${1:-}"; TB="${2:-}"
 [ -n "$URL" ] && [ -n "$TB" ] || { echo "usage: dom-capture.sh <url> <tb>" >&2; exit 64; }
 printf '%s' "$TB"  | grep -qE '^[0-9]+$' || { echo "I1: tb must be numeric: $TB" >&2; exit 77; }
-# I1: url must be a clean http(s) URL — no spaces / shell / gradle-arg metacharacters (this drives a real browser)
-printf '%s' "$URL" | grep -qE '^https?://[A-Za-z0-9._~:/?#@%&=+-]+$' \
+# I1: url must be a clean http(s) URL — no spaces / shell / gradle-arg metacharacters (this drives a
+# real browser). strict_match (Round3) is WHOLE-STRING — an embedded-newline url that a line-oriented
+# `grep -qE '^...$'` would have let through on its first line is correctly rejected here.
+strict_match "$URL" 'https?://[A-Za-z0-9._~:/?#@%&=+-]+' \
   || { echo "I1: suspicious url rejected (must be a clean http(s) URL): $URL" >&2; exit 77; }
 
 REPO="$(git -C "$HERE" rev-parse --show-toplevel)"

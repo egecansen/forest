@@ -6,11 +6,22 @@
 set -uo pipefail
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 CFG="$HERE/config.json"
+. "$HERE/_strict.sh"   # Round3: shared whole-string shape matcher (closes the grep-newline anchor bypass)
 for t in jq curl; do command -v "$t" >/dev/null || { echo "ingest: $t required" >&2; exit 69; }; done
 
-# P1: strip ASCII-smuggling / invisible / bidi codepoints from the UNTRUSTED report text before it
-# reaches the model (all external text is DATA, never instructions). Fail-open if python3/helper absent.
-sanitize() { if command -v python3 >/dev/null 2>&1 && [ -f "$HERE/sanitize-text.py" ]; then python3 "$HERE/sanitize-text.py"; else cat; fi; }
+# P1: strip ASCII-smuggling / invisible / bidi codepoints AND ANSI/control-char smuggling from the
+# UNTRUSTED report text before it reaches the model (all external text is DATA, never instructions).
+# Fail-open if python3/helper absent — ingest must not hard-fail over a broken install — but Round3:
+# warn loudly on stderr when that happens, so a broken/missing sanitizer is OBSERVABLE instead of
+# silently dropping ALL smuggling defense on unsanitized stackTrace/testName/jiraTicket text.
+sanitize() {
+  if command -v python3 >/dev/null 2>&1 && [ -f "$HERE/sanitize-text.py" ]; then
+    python3 "$HERE/sanitize-text.py"
+  else
+    echo "ingest: WARNING — python3/sanitize-text.py unavailable; smuggling defense (P1/I1) is DISABLED for this run (fail-open, output NOT sanitized)" >&2
+    cat
+  fi
+}
 
 URL="${1:-}"
 [ -n "$URL" ] || { echo "usage: ingest.sh <s-report-url>" >&2; exit 64; }
@@ -31,8 +42,10 @@ startMs="$(printf '%s' "$qs" | tr '&' '\n' | sed -n 's/^buildStartTime=//p' | he
 [ -z "$startMs" ] || printf '%s' "$startMs" | grep -qE '^[0-9]+$' \
   || { echo "I1: non-numeric buildStartTime rejected: $startMs" >&2; exit 77; }
 [ -n "$build" ] || { echo "ingest: no fullTestBuildName in URL" >&2; exit 64; }
-# I1: build-name shape sanity (no shell/ES metacharacters)
-printf '%s' "$build" | grep -qE '^[0-9A-Za-z._:+-]+$' \
+# I1: build-name shape sanity (no shell/ES metacharacters). strict_match (Round3) is WHOLE-STRING —
+# unlike `grep -qE '^...$'` (line-oriented: matches if ANY line of a multi-line value matches), an
+# embedded-newline build name (e.g. "ok123\n$(payload)") is correctly rejected here.
+strict_match "$build" '[0-9A-Za-z._:+-]+' \
   || { echo "I1: suspicious build name rejected: $build" >&2; exit 77; }
 
 ES="$(jq -r '.es.host + .es.endpoint' "$CFG")"

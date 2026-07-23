@@ -12,12 +12,15 @@
 set -uo pipefail
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"; CFG="$HERE/config.json"
 . "$HERE/_lock.sh"   # A (N6): serialize gradle on this working copy
+. "$HERE/_strict.sh"   # Round3: shared whole-string shape matcher (closes the grep-newline anchor bypass)
 for t in jq git; do command -v "$t" >/dev/null || { echo "dom-on-failure: $t required" >&2; exit 69; }; done
 
 FQCN="${1:-}"; TB="${2:-}"
 [ -n "$FQCN" ] && [ -n "$TB" ] || { echo "usage: dom-on-failure.sh <test-fqcn[.method]> <tb>" >&2; exit 64; }
 printf '%s' "$TB"   | grep -qE '^[0-9]+$'        || { echo "I1: tb must be numeric: $TB" >&2; exit 77; }
-printf '%s' "$FQCN" | grep -qE '^[A-Za-z0-9_.]+$' || { echo "I1: bad fqcn rejected: $FQCN" >&2; exit 77; }
+# Round3: strict_match is WHOLE-STRING — an embedded-newline fqcn that a line-oriented `grep -qE
+# '^...$'` would have let through on its first line is correctly rejected here.
+strict_match "$FQCN" '[A-Za-z0-9_.]+' || { echo "I1: bad fqcn rejected: $FQCN" >&2; exit 77; }
 
 REPO="$(git -C "$HERE" rev-parse --show-toplevel)"
 WD="$(jq -r '.run.workdir' "$CFG")"
