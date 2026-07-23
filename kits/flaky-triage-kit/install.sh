@@ -84,7 +84,17 @@ autoconfig() {
 [ "$AUTOCFG" = 1 ] && autoconfig
 
 vendor() { # $1=src  $2=dest (only if absent — never clobber an existing install)
-  [ -f "$2" ] || { mkdir -p "$(dirname "$2")"; cp "$1" "$2"; chmod +x "$2" 2>/dev/null || true; echo "install: vendored $(basename "$2")"; }
+  # Skipping is intentional (re-running install.sh must never stomp a project's local edits to a
+  # vendored lib), but a SILENT skip also means a stale or tampered destination file is invisible
+  # — nothing here ever tells you the on-disk copy no longer matches the kit's. Emit a stderr
+  # WARNING so that's at least observable; a future version could go further and checksum $1 vs
+  # $2 (e.g. embed each vendored lib's SHA-256 and compare) to actually detect drift, not just
+  # flag "we didn't touch it."
+  if [ -f "$2" ]; then
+    echo "install: WARN $(basename "$2") already exists at $2 — leaving it AS-IS (not overwriting); if it's stale or was hand-edited/tampered with, remove it and re-run install.sh to re-vendor from $1" >&2
+  else
+    mkdir -p "$(dirname "$2")"; cp "$1" "$2"; chmod +x "$2" 2>/dev/null || true; echo "install: vendored $(basename "$2")"
+  fi
 }
 
 # --- Claude Code: register the gate in settings.json (PreToolUse Write|Edit + Bash) ---
