@@ -32,7 +32,7 @@ const V2 = {
       title: 'VRT drift',
       bucket: 'vrt',
       status: 'proposed',
-      tests: [{ fqcn: 'com.x.VrtTest' }],
+      tests: [{ fqcn: 'com.x.VrtTest', vrt: 'https://vrt-x.example/compare/9' }],
     },
   ],
   events: [
@@ -137,9 +137,12 @@ describe('startLedgerWatcher — v2 (run.version: 2)', () => {
       bucket: 'vrt',
       state: 'proposed',
       tests: ['com.x.VrtTest'],
+      vrt: [{ fqcn: 'com.x.VrtTest', url: 'https://vrt-x.example/compare/9' }],
     });
     // c2's lone test never carries a `status` — no divergence to report.
     expect(c2.divergent).toBeUndefined();
+    // c1's tests never carry a `vrt` field — no VRT entries to report.
+    expect(c1.vrt).toBeUndefined();
   });
 
   it('(b) a subsequent tick with byte-identical content makes zero further cluster calls', async () => {
@@ -332,5 +335,62 @@ describe('startLedgerWatcher — v2 (run.version: 2)', () => {
     expect(setClustersSpy).not.toHaveBeenCalled();
     // Order is left untouched — no patch was applied.
     expect(run.snapshot.clusters[0].tests).toEqual(['com.x.BarTest', 'com.x.FooTest#a']);
+  });
+
+  it('(i) a reordered-but-set-equal vrt array does not trigger a spurious updateCluster', async () => {
+    // Seeded snapshot cluster whose `vrt` order differs from the ledger's —
+    // same fqcn/url set, different array order — everything else identical
+    // to what the ledger tick will map to.
+    const seeded: Cluster = {
+      id: 'c2-vrt',
+      title: 'VRT drift',
+      bucket: 'vrt',
+      tests: ['com.x.VrtTest', 'com.x.VrtTest2'],
+      state: 'proposed',
+      vrt: [
+        { fqcn: 'com.x.VrtTest2', url: 'https://vrt-x.example/compare/2' },
+        { fqcn: 'com.x.VrtTest', url: 'https://vrt-x.example/compare/9' },
+      ],
+    };
+    const run = runStore.create(cfg);
+    run.setClusters([seeded]);
+
+    const setClustersSpy = vi.spyOn(run, 'setClusters');
+    const updateSpy = vi.spyOn(run, 'updateCluster');
+
+    // Ledger carries the same cluster, `vrt` entries in the opposite order,
+    // no other field changed.
+    const ledgerTick = {
+      run: { version: 2 },
+      clusters: [
+        {
+          id: 'c2-vrt',
+          title: 'VRT drift',
+          bucket: 'vrt',
+          status: 'proposed',
+          tests: [
+            { fqcn: 'com.x.VrtTest', vrt: 'https://vrt-x.example/compare/9' },
+            { fqcn: 'com.x.VrtTest2', vrt: 'https://vrt-x.example/compare/2' },
+          ],
+        },
+      ],
+      events: [],
+    };
+    await fs.writeFile(path.join(dir, 'ledger.json'), JSON.stringify(ledgerTick), 'utf8');
+
+    const stop = startLedgerWatcher(run, dir, { intervalMs: 20 });
+    stops.push(stop);
+
+    // No real change should be detected, so we can't waitFor a call; wait a
+    // fixed settle window instead.
+    await new Promise((r) => setTimeout(r, 120));
+
+    expect(updateSpy).not.toHaveBeenCalled();
+    expect(setClustersSpy).not.toHaveBeenCalled();
+    // Order is left untouched — no patch was applied.
+    expect(run.snapshot.clusters[0].vrt).toEqual([
+      { fqcn: 'com.x.VrtTest2', url: 'https://vrt-x.example/compare/2' },
+      { fqcn: 'com.x.VrtTest', url: 'https://vrt-x.example/compare/9' },
+    ]);
   });
 });

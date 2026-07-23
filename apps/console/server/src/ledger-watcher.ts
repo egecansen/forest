@@ -121,6 +121,12 @@ import { PHASE_ORDER } from './types.js';
  *   already-converged cluster's patch/create never carries a spurious empty
  *   array). `tests` (the console field) is always the full fqcn list,
  *   regardless of which entries diverge.
+ * - `vrt` mirrors `divergent`'s construction exactly, but is built from
+ *   every `tests[]` entry that carries a `vrt` field (a VRT tool's
+ *   baseline-vs-regression compare URL): `{fqcn, url: t.vrt}`, dropped as
+ *   `undefined` (not `[]`) when no test has one. Present on any bucket in
+ *   principle, but only ever populated in practice on `vrt`-bucket
+ *   clusters — the Clusters tab's VRT-review section renders it there.
  * - `events[]` with `what: 'phase-enter'` drive `run.setPhase` forward-only
  *   (`applyLedgerPhaseEvents` / `advancePhaseForward`): the LAST such event
  *   in the (append-only) array wins, its `phase` maps 1:1 onto the
@@ -424,6 +430,7 @@ function buildDesiredClusterV2(raw: Record<string, unknown>): Cluster | null {
   const testsRaw = Array.isArray(raw.tests) ? raw.tests : [];
   const tests: string[] = [];
   const divergent: { fqcn: string; status: 'red' | 'green' | 'skipped' }[] = [];
+  const vrt: { fqcn: string; url: string }[] = [];
   for (const t of testsRaw) {
     if (!t || typeof t !== 'object') continue;
     const fqcn = (t as Record<string, unknown>).fqcn;
@@ -432,6 +439,10 @@ function buildDesiredClusterV2(raw: Record<string, unknown>): Cluster | null {
     const testStatus = (t as Record<string, unknown>).status;
     if (typeof testStatus === 'string' && DIVERGENT_TEST_STATUSES.has(testStatus)) {
       divergent.push({ fqcn, status: testStatus as 'red' | 'green' | 'skipped' });
+    }
+    const testVrt = (t as Record<string, unknown>).vrt;
+    if (typeof testVrt === 'string') {
+      vrt.push({ fqcn, url: testVrt });
     }
   }
 
@@ -449,6 +460,9 @@ function buildDesiredClusterV2(raw: Record<string, unknown>): Cluster | null {
     // Only carry `divergent` when at least one test actually diverges — an
     // already-converged cluster's create/patch never gets a spurious `[]`.
     ...(divergent.length > 0 ? { divergent } : {}),
+    // Only carry `vrt` when at least one test actually has a review URL —
+    // same "undefined, not []" discipline as `divergent` above.
+    ...(vrt.length > 0 ? { vrt } : {}),
   };
 }
 
@@ -548,6 +562,13 @@ function diffClusterV2(existing: Cluster, desired: Cluster): Partial<Cluster> {
     JSON.stringify(sortedByFqcn(desiredDivergent, (d) => d.fqcn))
   ) {
     patch.divergent = desired.divergent;
+  }
+  const existingVrt = existing.vrt ?? [];
+  const desiredVrt = desired.vrt ?? [];
+  if (
+    JSON.stringify(sortedByFqcn(existingVrt, (v) => v.fqcn)) !== JSON.stringify(sortedByFqcn(desiredVrt, (v) => v.fqcn))
+  ) {
+    patch.vrt = desired.vrt;
   }
   return patch;
 }

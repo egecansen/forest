@@ -3070,6 +3070,64 @@ textarea {
 .cluster-divergent-item.is-red   .cluster-divergent-chip { color: var(--err); }
 .cluster-divergent-item.is-skipped .cluster-divergent-chip { color: var(--muted-3); }
 
+/* VRT review (v2 ledger): a card per per-test baseline-vs-regression compare
+   link, shown on a `vrt`-bucket cluster's expanded row, directly under the
+   test list / divergent list. Link-cards only for now — embedding the
+   baseline/actual/diff thumbnails themselves is a deferred follow-up (the
+   VRT tool's image-URL pattern isn't known yet). Built entirely from the
+   existing semantic tokens, so both themes (`:root` dark default /
+   `:root[data-theme='light']`) fall out for free. */
+.vrt-review {
+  margin: 8px 0 0;
+  padding: 8px 0 0;
+  border-top: 1px dashed var(--border);
+}
+
+.vrt-review-eyebrow {
+  color: var(--accent-ink);
+  text-transform: uppercase;
+  font-family: var(--mono);
+  font-size: 11px;
+  letter-spacing: 0.16em;
+  margin: 0 0 8px;
+}
+
+.vrt-review-cards {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.vrt-card {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 8px 10px;
+  border: 1px solid var(--border);
+  background: var(--surface-2);
+}
+
+.vrt-card-fqcn {
+  font-size: 11.5px;
+  color: var(--muted);
+  overflow-wrap: anywhere;
+  user-select: text;
+}
+
+.vrt-card-link {
+  flex: none;
+  font-size: 11.5px;
+  font-weight: 600;
+  color: var(--accent-ink);
+  text-decoration: none;
+  white-space: nowrap;
+}
+
+.vrt-card-link:hover {
+  text-decoration: underline;
+}
+
 /* Row tints mirror the builds board (`.board-table tr.is-*`): a tinted head
    background + an inset left rail in the row's tone, so a cluster's
    disposition reads at a glance down the list. */

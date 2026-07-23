@@ -73,6 +73,26 @@ export function ClustersTab({ clusters }: { clusters: Cluster[] }) {
                     ))}
                   </ul>
                 )}
+                {c.bucket === 'vrt' && c.vrt && c.vrt.length > 0 && (
+                  <div className="vrt-review">
+                    <div className="vrt-review-eyebrow">VRT REVIEW</div>
+                    <div className="vrt-review-cards">
+                      {c.vrt.map((v) => (
+                        <div key={v.fqcn} className="vrt-card">
+                          <span className="vrt-card-fqcn">{v.fqcn}</span>
+                          <a
+                            className="vrt-card-link"
+                            href={v.url}
+                            target="_blank"
+                            rel="noreferrer"
+                          >
+                            open baseline-vs-regression ↗
+                          </a>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )}
               </div>
             )}
           </div>

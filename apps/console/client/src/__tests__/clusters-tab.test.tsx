@@ -116,4 +116,51 @@ describe('ClustersTab', () => {
       expect(document.querySelector('.cluster-divergent-list')).not.toBeInTheDocument();
     });
   });
+
+  describe('VRT review (v2 ledger — per-test baseline-vs-regression compare links)', () => {
+    const WITH_VRT: Cluster[] = [
+      {
+        id: 'c2-vrt', title: 'VRT drift', bucket: 'vrt',
+        tests: ['com.x.VrtTest', 'com.x.VrtTest2'], state: 'proposed',
+        vrt: [
+          { fqcn: 'com.x.VrtTest', url: 'https://vrt-x.example/compare/9' },
+          { fqcn: 'com.x.VrtTest2', url: 'https://vrt-x.example/compare/10' },
+        ],
+      },
+    ];
+
+    it('renders a VRT REVIEW section with one card per entry, expanded', async () => {
+      render(<ClustersTab clusters={WITH_VRT} />);
+      await userEvent.click(screen.getByRole('button', { name: /c2-vrt/i }));
+
+      expect(screen.getByText('VRT REVIEW')).toBeInTheDocument();
+
+      const links = screen.getAllByRole('link', { name: /open baseline-vs-regression/i });
+      expect(links).toHaveLength(2);
+
+      const card1 = links[0].closest('.vrt-card')!;
+      expect(card1.textContent).toContain('com.x.VrtTest');
+
+      const hrefs = links.map((l) => l.getAttribute('href'));
+      expect(hrefs).toContain('https://vrt-x.example/compare/9');
+      expect(hrefs).toContain('https://vrt-x.example/compare/10');
+
+      for (const link of links) {
+        expect(link).toHaveAttribute('target', '_blank');
+        expect(link).toHaveAttribute('rel', 'noreferrer');
+      }
+    });
+
+    it('the VRT review section is hidden while the row is collapsed', () => {
+      render(<ClustersTab clusters={WITH_VRT} />);
+      expect(screen.queryByText('VRT REVIEW')).not.toBeInTheDocument();
+    });
+
+    it('a non-vrt-bucket cluster with no vrt entries renders no VRT review section', async () => {
+      render(<ClustersTab clusters={CLUSTERS} />); // neither fixture cluster carries `vrt`
+      await userEvent.click(screen.getByRole('button', { name: /onetrust/i }));
+      expect(screen.queryByText('VRT REVIEW')).not.toBeInTheDocument();
+      expect(document.querySelector('.vrt-review')).not.toBeInTheDocument();
+    });
+  });
 });

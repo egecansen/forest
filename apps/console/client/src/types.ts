@@ -136,6 +136,12 @@ export interface Cluster {
    *  proved green while its sibling hasn't rerun yet). Rendered as a small
    *  status-tinted chip per entry in the Clusters tab's expanded row. */
   divergent?: { fqcn: string; status: 'red' | 'green' | 'skipped' }[];
+  /** Per-test VRT (visual regression) review links — sourced from a v2
+   *  ledger's `cluster.tests[].vrt` (a baseline-vs-regression compare URL),
+   *  present only on `vrt`-bucket clusters whose tests actually carry one.
+   *  Rendered as a link-card per entry in the Clusters tab's expanded row's
+   *  "VRT REVIEW" section. */
+  vrt?: { fqcn: string; url: string }[];
 }
 
 export interface RunConfig {
