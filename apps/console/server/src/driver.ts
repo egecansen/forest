@@ -1,7 +1,7 @@
 import { query } from '@anthropic-ai/claude-agent-sdk';
 import type { Options } from '@anthropic-ai/claude-agent-sdk';
 import type { Run } from './run-store.js';
-import type { Cluster, PhaseId, QuestionSpec } from './types.js';
+import type { Cluster, ClusterState, PhaseId, QuestionSpec } from './types.js';
 import { PHASE_ORDER } from './types.js';
 import { buildPrompt } from './driver-prompt.js';
 import { makeCanUseTool } from './driver-can-use-tool.js';
@@ -125,6 +125,21 @@ const GATED_ON_PICK = new Set<PhaseId>(['fix', 'verify', 'report']);
 function pickIsDone(run: Run): boolean {
   return run.snapshot.phases.find((p) => p.id === 'pick')?.status === 'done';
 }
+
+// Cluster states that represent a genuine VERDICT — the cluster's fate is
+// decided and no further work will land on it. `error` counts alongside
+// green/app-bug/skipped: it's a definitive (if unhappy) outcome reachable via
+// the cluster_status MCP tool (driver-mcp.ts), and the Report tab's own
+// scoreboard groups it with the other three as a final bucket (ReportTab.tsx).
+// Everything else (`proposed`, `picked`, `fixing`, `verifying`) is still
+// in-flight — a session can end while a cluster sits in any of these without
+// that cluster ever having reached a conclusion.
+const TERMINAL_CLUSTER_STATES = new Set<ClusterState>(['green', 'app-bug', 'skipped', 'error']);
+
+// Narrower subset used only to preserve the ORIGINAL guard's exact warn
+// wording (`N cluster(s) unverified`) when at least one cluster made it past
+// `proposed` before the session ended.
+const IN_PROGRESS_CLUSTER_STATES = new Set<ClusterState>(['picked', 'fixing', 'verifying']);
 
 // Cap on how much tool-result text a single 'user' message contributes to the
 // Selenoid scan — a rerun's stdout capture can be huge, and this is scan
@@ -352,21 +367,32 @@ export function startDriver(
           run.setTelemetry({ thinking: false });
           if (r.subtype === 'success') {
             // Completion honesty: a session can end its stream with a
-            // `result` success while a green-proof verification run was only
-            // backgrounded, not awaited — the SDK session closing doesn't
-            // mean the picked clusters actually converged. Any cluster still
-            // in-flight (picked/fixing/verifying) means this "success" is
-            // really an unfinished session, not a completed triage — park it
-            // as 'paused' (resumable via the existing /resume route, which
-            // re-enters the same sessionId) instead of marking it done.
-            const unverified = run.snapshot.clusters.filter(
-              (c) => c.state === 'picked' || c.state === 'fixing' || c.state === 'verifying'
-            );
-            if (unverified.length > 0) {
+            // `result` success while the triage never actually converged —
+            // the SDK session closing doesn't mean any cluster reached a
+            // verdict. This covers BOTH shapes observed live: a green-proof
+            // verification run only backgrounded (not awaited) while a
+            // cluster sat picked/fixing/verifying, AND a session that ended
+            // before ever picking — every cluster still `proposed`. Either
+            // way, if clusters exist but NONE reached a terminal state
+            // (green/app-bug/skipped/error — see TERMINAL_CLUSTER_STATES),
+            // this "success" is really an unfinished session, not a
+            // completed triage — park it as 'paused' (resumable via the
+            // existing /resume route, which re-enters the same sessionId)
+            // instead of marking it done. A run with NO clusters at all (a
+            // legit "nothing to triage" / broken-box quick exit) and a run
+            // where at least one cluster DID reach a verdict (real
+            // convergence, even if others are still mid-flight) both still
+            // complete exactly as before.
+            const clusters = run.snapshot.clusters;
+            const prematureEnd = clusters.length > 0 && !clusters.some((c) => TERMINAL_CLUSTER_STATES.has(c.state));
+            if (prematureEnd) {
               if (r.result) run.setReportText(r.result);
+              const inProgress = clusters.filter((c) => IN_PROGRESS_CLUSTER_STATES.has(c.state));
               run.log({
                 kind: 'warn',
-                text: `session ended with ${unverified.length} cluster(s) unverified — parked as paused; resume to collect verdicts`,
+                text: inProgress.length > 0
+                  ? `session ended with ${inProgress.length} cluster(s) unverified — parked as paused; resume to collect verdicts`
+                  : 'session ended before any cluster reached a verdict — parked as paused; resume to continue',
               });
               run.setStatus('paused');
             } else {

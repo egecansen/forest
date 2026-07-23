@@ -187,6 +187,40 @@ describe('RunConsole files tab badge', () => {
   });
 });
 
+describe('RunConsole paused run controls', () => {
+  // Live gap: a run parked as `paused` (e.g. the driver's premature-end
+  // guard — see driver.ts's result-success handler) must never leave the
+  // operator stuck. The header always needs a way OUT of paused, not just a
+  // way to continue it.
+  it('a paused run renders BOTH resume and stop — never resume-only with no way out', async () => {
+    const onResume = vi.fn();
+    const onStop = vi.fn();
+    const snap = snapshot({ status: 'paused' });
+    render(
+      <RunConsole
+        config={CONFIG}
+        onNew={() => {}}
+        readOnly={false}
+        staticSnapshot={snap}
+        onResume={onResume}
+        onStop={onStop}
+      />
+    );
+
+    const resumeBtn = screen.getByRole('button', { name: /^resume$/i });
+    const stopBtn = screen.getByRole('button', { name: /^stop$/i });
+    expect(resumeBtn).toBeInTheDocument();
+    expect(stopBtn).toBeInTheDocument();
+
+    await userEvent.click(resumeBtn);
+    expect(onResume).toHaveBeenCalledTimes(1);
+
+    vi.spyOn(window, 'confirm').mockReturnValue(true);
+    await userEvent.click(stopBtn);
+    expect(onStop).toHaveBeenCalledTimes(1);
+  });
+});
+
 describe('RunConsole onStatusChange', () => {
   it('reports the (static/live) snapshot status upward, so a host can track it without its own WS', () => {
     const onStatusChange = vi.fn();

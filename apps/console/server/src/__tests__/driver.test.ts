@@ -293,6 +293,56 @@ describe('completion honesty — unverified clusters park the run as paused', ()
     expect(run.snapshot.reportText).toBe('full scoreboard');
     expect(run.snapshot.log.some((l) => l.kind === 'warn' && l.text.includes('unverified'))).toBe(false);
   });
+
+  // Live-observed gap: a session can end result-success while every cluster
+  // is still `proposed` (pre-pick) — the agent backgrounded a confirmation
+  // rerun and never got to a pick, let alone a verdict. The OLD guard only
+  // looked for {picked,fixing,verifying} and missed this all-`proposed` case
+  // entirely, so it fell through to `finish(true)` and showed as a false
+  // "completed/DONE" with no way to stop or resume. The generalized guard
+  // parks ANY run whose clusters exist but NONE reached a terminal state.
+  it('a run with clusters all still `proposed` (pre-pick) when the result succeeds parks as paused — not a false completion', async () => {
+    const run = runStore.create(cfg);
+    const done = new Promise<void>((r) =>
+      run.on('event', (e) => { if (e.type === 'status' && (e.status === 'paused' || e.status === 'completed')) r(); })
+    );
+    startDriver(run, scriptedWithHooks([
+      msg({ type: 'system', subtype: 'init', session_id: 'sess-premature' }),
+      () => run.setClusters([
+        { id: 'c1', title: 'flaky selector', bucket: 'selector', tests: ['t1'], state: 'proposed' },
+        { id: 'c2', title: 'vrt drift', bucket: 'vrt', tests: ['t2'], state: 'proposed' },
+      ]),
+      msg({ type: 'result', subtype: 'success', total_cost_usd: 0.05, usage: { output_tokens: 5 }, result: 'backgrounded rerun, no pick yet' }),
+    ]), { ledgerWatcherImpl: noopLedgerWatcher });
+    await done;
+
+    expect(run.snapshot.status).toBe('paused');
+    expect(run.snapshot.status).not.toBe('completed');
+    expect(run.snapshot.log.some((l) => l.kind === 'warn')).toBe(true);
+    expect(run.snapshot.phases.find((p) => p.id === 'report')?.status).not.toBe('done');
+    expect(run.snapshot.reportText).toBe('backgrounded rerun, no pick yet');
+  });
+
+  // `error` is a valid ClusterState (types.ts) reachable via the cluster_status
+  // MCP tool (driver-mcp.ts) — a definitive (if unhappy) verdict on a cluster,
+  // grouped with green/app-bug/skipped in the Report tab's own scoreboard
+  // (ReportTab.tsx's SCOREBOARD_STATES). It must count as terminal alongside
+  // green/app-bug/skipped: a lone errored cluster is real convergence, not an
+  // in-flight run to park.
+  it('a cluster in `error` state counts as terminal — the run still completes', async () => {
+    const run = runStore.create(cfg);
+    const done = new Promise<void>((r) => run.on('event', (e) => { if (e.type === 'status' && e.status === 'completed') r(); }));
+    startDriver(run, scriptedWithHooks([
+      msg({ type: 'system', subtype: 'init', session_id: 'sess-errored' }),
+      () => run.setClusters([{ id: 'c1', title: 'tooling failure', bucket: 'infra', tests: ['t1'], state: 'error' }]),
+      msg({ type: 'result', subtype: 'success', total_cost_usd: 0.05, usage: { output_tokens: 5 }, result: 'one cluster errored out' }),
+    ]), { ledgerWatcherImpl: noopLedgerWatcher });
+    await done;
+
+    expect(run.snapshot.status).toBe('completed');
+    expect(run.snapshot.phases.find((p) => p.id === 'report')?.status).toBe('done');
+    expect(run.snapshot.reportText).toBe('one cluster errored out');
+  });
 });
 
 describe('post-pick phase gating', () => {
