@@ -22,11 +22,15 @@
 #                                                        renamed away along with it, see Task 5/6)
 #   - .claude/skills/hektor-flaky-triage/SKILL.md       (the skill prompt + safety rules)
 #
-# Mirrors .claude/hooks/enforcement-self-protection-gate.sh. This is FRICTION,
-# not a wall — this harness doesn't honor PreToolUse `deny`, and the unlock is
-# settable — the point is to convert casual / injected self-modification into a
-# deliberate, audited act. It now also matches Bash commands that mutate the
-# surface (redirect / sed -i / cp / mv / rm / chmod / git checkout|apply|restore|
+# Mirrors .claude/hooks/enforcement-self-protection-gate.sh. This is FRICTION, not a wall:
+# PreToolUse `deny` **is** enforced by the current CLI (verified 2026-06-30, observed live — see
+# kernel §14 META and the Failure -> action table below, which treats DENY as the actual runtime
+# outcome) — the earlier claim here that "this harness doesn't honor PreToolUse deny" is stale and
+# retracted. What still keeps this friction rather than a wall: the unlock is settable by the very
+# agent this gate constrains, and the match itself is a heuristic pattern a shell-capable agent can
+# evade by construction (see Round 2/3 below) — the point is to convert casual / injected
+# self-modification into a deliberate, audited act, not to be unbypassable. It now also matches
+# Bash commands that mutate the surface (redirect / sed -i / cp / mv / rm / chmod / git checkout|apply|restore|
 # stash|reset|clean / rsync / patch), closing the Write|Edit-only gap heuristically.
 # The REAL wall, when reached, is `core/lock-kit.sh lock`'s **hardened** tier: core/** (and the kit
 # root) chown'd to root, so reopening needs a password, not merely this gate's chmod-based friction.
