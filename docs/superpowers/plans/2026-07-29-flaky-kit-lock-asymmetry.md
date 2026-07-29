@@ -571,20 +571,31 @@ env_reset refuses) and hands ownership back to the invoking user."
 Append to `core/tests/integrity-test.sh` before its final `echo`:
 
 ```bash
-# --- integrity_guard: behaviour per state ---
-GTMP="$(mktemp -d)"; mkdir -p "$GTMP/core"
-guard_out() { printf '%s' "$1" > "$GTMP/core/.lock-state"; INTEGRITY_FAKE_UID="$2" integrity_guard "$GTMP" 2>&1; }
-guard_rc()  { printf '%s' "$1" > "$GTMP/core/.lock-state"; INTEGRITY_FAKE_UID="$2" integrity_guard "$GTMP" >/dev/null 2>&1; echo $?; }
+# --- integrity_report: the message + decision for each tier -----------------------
+# Driven DIRECTLY with tier strings. The earlier draft went through integrity_guard and injected a
+# fake uid via INTEGRITY_FAKE_UID; that override then existed in production code, where setting one
+# environment variable silenced the guard entirely. The seam belongs at the function boundary, not
+# in the environment — so the reporting half is tested here and the uid half is already covered by
+# the integrity_tier cases above.
+rep_out() { integrity_report "$1" 2>&1; }
+rep_rc()  { integrity_report "$1" >/dev/null 2>&1; echo $?; }
 
-[ -z "$(guard_out '{"tier":"hardened"}' 0)" ] && ok || bad "hardened must be silent"
-[ "$(guard_rc '{"tier":"hardened"}' 0)" = 0 ] && ok || bad "hardened must return 0"
-case "$(guard_out '{"tier":"unlocked"}' 501)" in *"maintenance"*) ok ;; *) bad "unlocked must remind the user to re-lock" ;; esac
-[ "$(guard_rc '{"tier":"unlocked"}' 501)" = 0 ] && ok || bad "unlocked must not block the run"
-case "$(guard_out '{"tier":"degraded"}' 501)" in *DEGRADED*) ok ;; *) bad "degraded must emit a one-line notice" ;; esac
-[ "$(guard_rc '{"tier":"degraded"}' 501)" = 0 ] && ok || bad "degraded must not block the run"
-case "$(guard_out '{"tier":"hardened"}' 501)" in *MISMATCH*) ok ;; *) bad "mismatch must be loud" ;; esac
-[ "$(guard_rc '{"tier":"hardened"}' 501)" = 76 ] && ok || bad "mismatch must return 76 so callers refuse"
-rm -rf "$GTMP"
+[ -z "$(rep_out hardened)" ] && ok || bad "hardened must be silent"
+[ "$(rep_rc hardened)" = 0 ] && ok || bad "hardened must return 0"
+case "$(rep_out stale)" in *"treating as hardened"*) ok ;; *) bad "stale must say it is treating the tree as hardened and ask for a refresh" ;; esac
+[ "$(rep_rc stale)" = 0 ] && ok || bad "stale must not block the run"
+case "$(rep_out unlocked)" in *"maintenance"*) ok ;; *) bad "unlocked must remind the user to re-lock" ;; esac
+[ "$(rep_rc unlocked)" = 0 ] && ok || bad "unlocked must not block the run"
+case "$(rep_out degraded)" in *DEGRADED*) ok ;; *) bad "degraded must emit a one-line notice" ;; esac
+[ "$(rep_rc degraded)" = 0 ] && ok || bad "degraded must not block the run"
+case "$(rep_out mismatch)" in *MISMATCH*) ok ;; *) bad "mismatch must be loud" ;; esac
+[ "$(rep_rc mismatch)" = 76 ] && ok || bad "mismatch must return 76 so callers refuse"
+# Nothing may reach stdout: four entrypoints emit a machine-read contract there.
+for t in hardened stale unlocked degraded mismatch; do
+  [ -z "$(integrity_report "$t" 2>/dev/null)" ] || bad "integrity_report must never write to stdout (tier: $t)"
+done; ok
+# The production path must carry no environment override.
+grep -q 'INTEGRITY_FAKE_UID' "$HERE/../_integrity.sh" && bad "no environment override may remain in _integrity.sh — it silences the guard for anyone who can set a variable" || ok
 ```
 
 - [ ] **Step 2: Run it and watch it fail**
@@ -595,14 +606,19 @@ Expected: FAIL — `integrity_guard: command not found`
 - [ ] **Step 3: Add `integrity_guard` to `core/_integrity.sh`**
 
 ```bash
-# integrity_guard <kit_root> -> 0 to proceed, 76 to refuse. Prints to stderr, never stdout, so it
-# can never contaminate a script whose stdout is a JSON contract (rerun, gate, ledger, summary).
-# INTEGRITY_FAKE_UID exists ONLY for the test suite — the real uid cannot be forced to root without
-# a password, and a decision function that cannot be exercised is a decision function nobody trusts.
-integrity_guard() {
-  local kit="$1" uid tier
-  uid="${INTEGRITY_FAKE_UID:-$(integrity_owner_uid "$kit/core")}"
-  tier="$(integrity_tier "$uid" "$(integrity_state "$kit")")"
+# integrity_report <tier> -> 0 to proceed, 76 to refuse. Prints to stderr, never stdout, so it can
+# never contaminate a script whose stdout is a JSON contract (rerun, gate, ledger, summary).
+#
+# Split out from integrity_guard so the messaging/decision half is a PURE function of the tier
+# string and can be driven directly by the test suite. An earlier draft kept them fused and let the
+# tests inject a fake uid through an INTEGRITY_FAKE_UID environment override — which handed anyone
+# able to set an env var a silent bypass of this very check: `INTEGRITY_FAKE_UID=0` turned a
+# `mismatch` tree into `hardened` and the guard returned 0 without printing a word. A one-variable
+# skeleton key to a control whose entire premise is that bypassing costs a password is not a test
+# seam, it is a hole. The seam now runs through the function boundary instead of through the
+# environment, so nothing in production reads an override at all.
+integrity_report() {
+  local tier="${1:-}"
   case "$tier" in
     hardened) return 0 ;;
     stale)
@@ -622,12 +638,24 @@ integrity_guard() {
   esac
   return 0
 }
+
+# integrity_guard <kit_root> -> 0 to proceed, 76 to refuse.
+# The trivial composition: real uid + recorded state -> tier -> report. It reads NO environment
+# override — the tier always comes from the filesystem. Each half is tested on its own
+# (integrity_tier with synthetic uids, integrity_report with synthetic tiers), which is the same
+# split already used elsewhere in this file, so nothing here needs a back door to be exercised.
+integrity_guard() {
+  local kit="${1:-}"
+  integrity_report "$(integrity_tier "$(integrity_owner_uid "$kit/core")" "$(integrity_state "$kit")")"
+}
 ```
+
+The test block in Step 1 drives `integrity_report` directly with tier strings — `integrity_report hardened`, `integrity_report mismatch`, and so on — instead of setting a fake uid around `integrity_guard`. Cover `stale` too; the earlier draft omitted it.
 
 - [ ] **Step 4: Run the test**
 
 Run: `bash core/tests/integrity-test.sh`
-Expected: PASS, 30 passed 0 failed
+Expected: PASS, 34 passed 0 failed
 
 - [ ] **Step 5: Call it from every entrypoint**
 
