@@ -247,13 +247,19 @@ integrity_owner_uid() {
 integrity_state() {
   local f="${1:-}/core/.lock-state"
   [ -n "${1:-}" ] && [ -r "$f" ] || return 0
-  # `[^"]*` before the key, not `.*`: a greedy `.*` walks past the FIRST "tier" to the last one on
+  # `[^}]*` before the key, not `.*`: a greedy `.*` walks past the FIRST "tier" to the last one on
   # the line, so a state file carrying two tier keys resolves to last-wins on one line and
   # first-wins when the same content is split across lines (head -1). Anchoring the prefix so it
-  # cannot cross a quote makes the first occurrence win in both layouts. The legitimate writer
-  # (Task 3) emits exactly one flat {"tier":...,"at":...}; this is about not being ambiguous when
-  # handed something else.
-  sed -n 's/^[^"]*"tier"[[:space:]]*:[[:space:]]*"\([a-z]*\)".*/\1/p' "$f" 2>/dev/null | head -1
+  # cannot cross an object boundary makes the first occurrence win in both layouts. The legitimate
+  # writer (Task 3) emits exactly one flat {"tier":...,"at":...}; this is about not being ambiguous
+  # when handed something else.
+  #
+  # `[^}]`, NOT `[^"]` — an earlier draft of this plan specified the quote class and was wrong: the
+  # prefix then cannot cross the quote in a leading key like {"history":…, so the match fails
+  # outright and the function returns empty on exactly the ambiguous input it exists to
+  # disambiguate. Verified on {"history":[{"tier":"unlocked"},{"tier":"hardened"}]}: the quote class
+  # yields '' and the brace class yields 'unlocked'.
+  sed -n 's/^[^}]*"tier"[[:space:]]*:[[:space:]]*"\([a-z]*\)".*/\1/p' "$f" 2>/dev/null | head -1
   return 0
 }
 
