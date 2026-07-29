@@ -1057,8 +1057,24 @@ The spec exists because `lock-kit.sh` claimed a wall it did not have. Leaving th
 - Modify: `kits/flaky-triage-kit/kernel.md` (P4 row, §12 register)
 - Create: `docs/superpowers/plans/2026-07-29-flaky-kit-lock-manual-acceptance.md`
 
-**Two live overclaims that a header-only edit misses.** Both were found by reading claims that were
-not in any diff, which is this task's characteristic failure mode:
+- Modify: **`kits/flaky-triage-kit/adapters/claude/flaky-kit-self-protection-gate.sh`** and
+  **`core/shell-guard.py`** — four surviving "REAL wall" sentences, see below
+
+**A whole-tree sweep, not a header edit.** Every claim about the lock has to be re-read, wherever it
+lives. Grep the kit for `REAL wall`, `human consent`, `consent-gated`, `audit`, `read-only bit` and
+judge each hit against the code as it now stands. Three separate rounds of this task each found
+another survivor, every one of them in a sentence that appeared in no diff — that is this task's
+characteristic failure mode, and a fourth round is avoided by sweeping rather than spot-fixing.
+
+Specifically, four sentences still describe `lock-kit.sh` as "the REAL wall"
+(`adapters/claude/…:31` and `:60`, `adapters/cursor/…:35`, `core/shell-guard.py:75`). Note the
+subtlety: at the **hardened** tier that is now *true* — Task 3 made it one. What is wrong is saying
+it unconditionally, and `adapters/claude/…:31` compounds it by naming the mechanism as "an OS
+read-only bit", which is exactly the weak thing this project replaced: a `chmod` the owner can
+reverse. Name the tier and name the mechanism, or the sentence keeps promising the old wall.
+
+**Two more live overclaims that a header-only edit misses.** Both were found by reading claims that
+were not in any diff:
 
 1. **The retraction must reach both harnesses.** `adapters/cursor/…:133` describes the env var as
    "the same human-consent flag as the Claude gate + lock-kit.sh". Correcting only the Claude side
