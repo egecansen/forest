@@ -33,6 +33,18 @@ HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"     # .../hektor-flaky-tria
 KIT="$(cd "$HERE/.." && pwd)"                            # .../hektor-flaky-triage
 CMD="${1:-}"
 
+. "$HERE/_integrity.sh"
+STATE="$KIT/core/.lock-state"
+ME="$(id -un 2>/dev/null)"
+
+# Can we escalate? HEKTOR_FK_NO_SUDO=1 forces the degraded path (used by the test suite, and by
+# anyone who wants the old behaviour). `sudo -n true` succeeds only with a cached/passwordless
+# credential, so a plain `command -v sudo` is not enough of a probe on its own — but a password
+# PROMPT is exactly what we want when the user is present, so we probe for the binary and let the
+# real call prompt.
+have_sudo() { [ "${HEKTOR_FK_NO_SUDO:-0}" = "1" ] && return 1; command -v sudo >/dev/null 2>&1; }
+write_state() { printf '{"tier":"%s","at":"%s"}\n' "$1" "$(date -u +%FT%TZ 2>/dev/null || echo '?')" > "$STATE" 2>/dev/null; }
+
 # The safety surface: all of core/ (logic + config + capture sources), the protection hook(s), the skill prompt.
 surface_files() {
   find "$KIT/core"  -type f -print 2>/dev/null
@@ -51,18 +63,61 @@ surface_dirs() {
   printf '%s\n' "$KIT"
 }
 
+# Everything that must be root-owned in the hardened tier. `chown -R` handles core/ recursively;
+# SKILL.md and the relocated gate are single files. The gate lives OUTSIDE $KIT by design (Task 5)
+# so a rename of the kit dir cannot take it along — which is exactly why it is listed separately.
+harden_targets() {
+  printf '%s\n' "$KIT/core"
+  [ -f "$KIT/SKILL.md" ] && printf '%s\n' "$KIT/SKILL.md"
+  local g; g="$(git -C "$KIT" rev-parse --show-toplevel 2>/dev/null)/.claude/hooks/flaky-kit-self-protection-gate.sh"
+  [ -f "$g" ] && printf '%s\n' "$g"
+  return 0
+}
+# In the hardened tier the surface belongs to root, so THIS user's chmod would fail — run it with
+# the same privilege that did the chown, or the counters below report 0 and the summary line lies.
+priv_chmod() { if [ "$TIER" = hardened ]; then sudo chmod "$@"; else chmod "$@"; fi; }
+
 case "$CMD" in
   lock)
-    n=0; while IFS= read -r f; do chmod a-w "$f" && n=$((n+1)); done < <(surface_files)
-    d=0; while IFS= read -r p; do chmod a-w "$p" && d=$((d+1)); done < <(surface_dirs)
-    echo "lock-kit: LOCKED $n files + $d dirs (read-only). Edit/Write/Bash writes, deletes, renames, and new-file creation on the surface now fail at the OS layer." >&2
-    echo "lock-kit: to edit, run:  HEKTOR_FLAKYKIT_UNLOCK=1 $0 unlock" >&2 ;;
+    # 1. Escalate FIRST so we know which tier we actually achieved.
+    TIER=degraded
+    if have_sudo; then
+      targets="$(harden_targets)"
+      # One sudo call for the whole surface: credentials are cached after it, so the chmods below
+      # do not re-prompt, and the user types their password exactly once.
+      printf '%s\n' "$targets" | tr '\n' '\0' | xargs -0 sudo chown -R root 2>/dev/null && TIER=hardened
+    fi
+    # 2. Record the tier while the directory is still writable by SOMEONE.
+    if [ "$TIER" = hardened ]; then
+      printf '{"tier":"hardened","at":"%s"}\n' "$(date -u +%FT%TZ 2>/dev/null || echo '?')" \
+        | sudo tee "$STATE" >/dev/null
+    else
+      write_state degraded
+    fi
+    # 3. Only now remove the write bits — files first, then dirs.
+    n=0; while IFS= read -r f; do priv_chmod a-w "$f" 2>/dev/null && n=$((n+1)); done < <(surface_files)
+    d=0; while IFS= read -r p; do priv_chmod a-w "$p" 2>/dev/null && d=$((d+1)); done < <(surface_dirs)
+    if [ "$TIER" = hardened ]; then
+      echo "lock-kit: HARDENED $n files + $d dirs — the safety surface is owned by root. Reopening needs a password; no in-process write path can reverse it." >&2
+      echo "lock-kit: to edit, run:  HEKTOR_FLAKYKIT_UNLOCK=1 $0 unlock" >&2
+    else
+      echo "lock-kit: DEGRADED — locked $n files + $d dirs read-only, but the surface is still owned by $ME." >&2
+      echo "lock-kit: that means the SAME user (and therefore an agent running as them) can chmod it back." >&2
+      echo "lock-kit: for the real wall, re-run on a machine where sudo is available." >&2
+    fi ;;
   unlock)
     [ "${HEKTOR_FLAKYKIT_UNLOCK:-0}" = "1" ] \
-      || { echo "lock-kit: refusing unlock — set HEKTOR_FLAKYKIT_UNLOCK=1 (human consent)" >&2; exit 77; }
+      || { echo "lock-kit: refusing unlock — set HEKTOR_FLAKYKIT_UNLOCK=1 (records intent in the audit log; the PASSWORD below is the actual consent)" >&2; exit 77; }
+    [ -n "$ME" ] && [ "$ME" != root ] \
+      || { echo "lock-kit: refusing unlock — no invoking user to return ownership to (running as a direct root shell?). Re-run as the user who owns the project." >&2; exit 78; }
+    if [ "$(integrity_owner_uid "$KIT/core")" = "0" ]; then
+      printf '%s\n' "$(harden_targets)" | tr '\n' '\0' | xargs -0 sudo chown -R "$ME" \
+        || { echo "lock-kit: unlock aborted — chown back to $ME failed; the kit stays hardened" >&2; exit 77; }
+    fi
     d=0; while IFS= read -r p; do chmod u+w "$p" && d=$((d+1)); done < <(surface_dirs)
     n=0; while IFS= read -r f; do chmod u+w "$f" && n=$((n+1)); done < <(surface_files)
-    echo "lock-kit: UNLOCKED $n files + $d dirs for the owner." >&2 ;;
+    write_state unlocked
+    echo "lock-kit: UNLOCKED $n files + $d dirs for $ME. Re-lock when done:  $0 lock" >&2 ;;
   status)
     while IFS= read -r f; do
       if [ -w "$f" ]; then echo "  rw  ${f#"$KIT"/}"; else echo "  r-  ${f#"$KIT"/}"; fi
@@ -70,6 +125,7 @@ case "$CMD" in
     while IFS= read -r p; do
       label="${p#"$KIT"/}"; [ "$p" = "$KIT" ] && label="."
       if [ -w "$p" ]; then echo "  rw  $label/"; else echo "  r-  $label/"; fi
-    done < <(surface_dirs) ;;
+    done < <(surface_dirs)
+    echo "  tier: $(integrity_tier "$(integrity_owner_uid "$KIT/core")" "$(integrity_state "$KIT")")" ;;
   *) echo "usage: lock-kit.sh lock|unlock|status" >&2; exit 64 ;;
 esac
