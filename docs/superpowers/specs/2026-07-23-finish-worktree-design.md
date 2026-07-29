@@ -50,14 +50,26 @@ Given worktree `W`, main checkout `M`, and (eventually) target branch `B`:
      become no-ops and execution proceeds to 6.
    - Always merge, never rebase — one conflict resolution pass, native IDE
      support, no multi-step rebase state in the user's working tree.
-6. **Remove (only if the "remove worktree" checkbox is on).** Guarded by
-   `git merge-base --is-ancestor <W-HEAD> B`; the worktree is deleted with
-   `git worktree remove` only when every commit it holds is reachable from
-   `B`. If the guard fails (e.g. merge still conflicted), keep the worktree
-   and say why. This makes losing agent work structurally impossible.
-7. **Pop the stash** in `M` (`git stash pop`). The carried changes appear as
+6. **Pop the stash** in `M` (`git stash pop`). The carried changes appear as
    uncommitted modifications in the IDE for manual review and commit. If the
-   pop itself conflicts, git keeps the stash entry — report and stop.
+   pop itself conflicts, git keeps the stash entry — report and continue to
+   step 7 with removal skipped (below); the pop does **not** stop here.
+   **This step now runs before removal, not after** (changed 2026-07-29): the
+   step that returns the user's work must never be downstream of a cleanup
+   step that can fail — a worktree left half-removable by a stray read-only
+   directory once threw out of `worktree remove` and the pop after it never
+   ran, stranding the user's carried changes in the stash with no explanation.
+7. **Remove (only if the "remove worktree" checkbox is on).** Guarded by
+   `git merge-base --is-ancestor <W-HEAD> B`; if the guard fails (e.g. merge
+   still conflicted) or the stash pop from step 6 conflicted, keep the
+   worktree and say why — the worktree is the user's fallback copy while
+   anything is unresolved, so cleanup must not run yet. Otherwise the
+   worktree is deleted with `git worktree remove`, non-fatally: on failure
+   (permissions, a lock, a busy directory — reasons unrelated to safety),
+   report the error and keep the worktree rather than aborting; the landing
+   and the pop have already succeeded by then and must not be thrown away
+   over a cleanup failure. This makes losing agent work structurally
+   impossible.
 
 ### Chosen policies (decided 2026-07-23)
 
@@ -166,7 +178,22 @@ implementations link to it and any semantic change lands here first.
    worktree is finished its own row disappears, so Eject has nowhere else to
    live.
 2. **Safety ref.** Immediately before `git worktree remove`, write
-   `refs/forest/landed/<worktree-name>` pointing at `<W-HEAD>`. Prune refs
+   `refs/forest/landed/<worktree-name>` pointing at `<W-HEAD>` — this happens
+   even when the removal that follows fails, since the ref must exist before
+   the worktree can disappear. In forest, `recordLanding` (the ledger entry
+   Eject consumes) only writes *after* `git worktree remove` actually
+   succeeds: writing it while the directory still exists would leave Eject
+   unable to do its job (`git worktree add` onto an existing path fails). A
+   landing whose removal failed is therefore not yet ejectable. Note that
+   `git worktree remove` deletes its own admin registration
+   (`.git/worktrees/<id>`) even when the on-disk delete it attempts fails
+   partway through, so the leftover directory is left behind as a broken,
+   no-longer-a-worktree husk that a second `git worktree remove` cannot pick
+   back up (`fatal: '<path>' is not a working tree`); recovery is a manual
+   `chmod`/permission fix followed by `git worktree prune` and a plain
+   filesystem delete of the leftover directory — not simply pressing Finish
+   again. The safety ref and the (now already-popped) stash are what make
+   this recoverable rather than a second automatic attempt. Prune refs
    older than 14 days: forest prunes on server start (ledger-driven, using
    each entry's recorded `ts`); the plugin prunes inline after each
    successful removal (no StartupActivity), using the ref target's
