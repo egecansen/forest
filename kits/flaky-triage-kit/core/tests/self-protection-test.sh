@@ -143,6 +143,15 @@ assert_cursor_edit_deny  "$PROJ/.cursor/hooks/lib/cursor-compat.sh"             
 assert_cursor_edit_allow "$PROJ/.claude/settings.json"                          "unrelated claude settings"
 assert_cursor_edit_allow "$PROJ/.cursor/rules/hektor-flaky-triage.mdc"           "unrelated cursor rule"
 
+echo "== Fix 2 (Task 5 correction): Bash-vector mutation of the relocated gate's OWN file must DENY —" >&2
+echo "   this exercises core/shell-guard.py's SURF regex (the real Bash-branch decision-maker; the" >&2
+echo "   bash SURF_RE/MUT_RE above is only its degraded fallback), mirroring the existing core/ cases." >&2
+GATE_MUT_CMD="sed -i '' .claude/hooks/flaky-kit-self-protection-gate.sh"
+claude_denied "$(bash_json "$PROJ" "$GATE_MUT_CMD")" \
+  && ok || bad "claude DENY Bash mutation of the relocated gate itself (shell-guard.py SURF): $GATE_MUT_CMD"
+cursor_denied "$(cursor_bash_json "$PROJ" "$GATE_MUT_CMD")" \
+  && ok || bad "cursor DENY Bash mutation of the relocated gate itself (shell-guard.py SURF): $GATE_MUT_CMD"
+
 echo "== Fix 2: SURF_RE stays byte-identical between the two gate scripts (parity) ==" >&2
 CLAUDE_SURF="$(grep -m1 '^SURF_RE=' "$CLAUDE_GATE")"
 CURSOR_SURF="$(grep -m1 '^SURF_RE=' "$CURSOR_GATE")"

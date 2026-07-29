@@ -59,8 +59,10 @@ echo '{"file":"…","old":"…","new":"…"}' | "$KIT/apply.sh"   # working-tree
 ```
 
 ## Self-protection
-The kit guards its own `core/` · `hooks/` · `SKILL.md` from silent self-modification (a gate that denies
-agent writes there unless `HEKTOR_FLAKYKIT_UNLOCK=1`). The **OS-level wall that holds in every harness**:
+The kit guards its own `core/` · `SKILL.md` — plus its own protection gate at
+`.claude/hooks/flaky-kit-self-protection-gate.sh` (deliberately installed OUTSIDE this tree so
+renaming the tree can't take the detector with it) — from silent self-modification (a gate that
+denies agent writes there unless `HEKTOR_FLAKYKIT_UNLOCK=1`). The **OS-level wall that holds in every harness**:
 ```bash
 core/lock-kit.sh lock        # chmod the surface read-only
 HEKTOR_FLAKYKIT_UNLOCK=1 core/lock-kit.sh unlock
@@ -70,7 +72,7 @@ HEKTOR_FLAKYKIT_UNLOCK=1 core/lock-kit.sh unlock
 **Claude Code** — add to `.claude/settings.json` under `hooks.PreToolUse`, on both a `"Write|Edit"` and a
 `"Bash"` matcher:
 ```json
-{ "type": "command", "command": "\"$CLAUDE_PROJECT_DIR/.claude/skills/hektor-flaky-triage/hooks/flaky-kit-self-protection-gate.sh\"", "timeout": 10 }
+{ "type": "command", "command": "\"$CLAUDE_PROJECT_DIR/.claude/hooks/flaky-kit-self-protection-gate.sh\"", "timeout": 10 }
 ```
 **Cursor** — add to `.cursor/hooks.json`: the gate `.cursor/hooks/flaky-kit-self-protection-gate.sh` under
 `beforeShellExecution` (no matcher) **and** under `preToolUse` with `"matcher": "Write|Edit"`. Ensure

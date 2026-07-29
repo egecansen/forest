@@ -114,4 +114,4 @@ bury the table under tooling narration · end the session while ledger.sh valida
 ## References
 
 Spec: `docs/hektor/flaky-triage-kit/kernel.md` · core contracts: `core/README.md` · config:
-`core/config.json` · self-protection: `hooks/flaky-kit-self-protection-gate.sh`.
+`core/config.json` · self-protection: `.claude/hooks/flaky-kit-self-protection-gate.sh` (outside this tree, by design).

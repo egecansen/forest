@@ -89,7 +89,8 @@ import sys, re, os
 # env set.
 _SURF_ROOT = os.environ.get('HEKTOR_FK_SURFACE', '').strip().rstrip('/')
 SURF = re.compile(re.escape(_SURF_ROOT)) if _SURF_ROOT \
-    else re.compile(r'\.claude/skills/hektor-flaky-triage/(core/|hooks/\S*\.sh|SKILL\.md)'
+    else re.compile(r'\.claude/skills/hektor-flaky-triage/(core/|SKILL\.md)'
+                     r'|\.claude/hooks/flaky-kit-self-protection-gate\.sh'
                      r'|\.cursor/hooks/(flaky-kit-self-protection-gate\.sh|lib/)'
                      r'|\.claude/hooks/lib/')
 # target-as-arg mutations: surface anywhere in the fragment is a write (conservative — `cp core/x /tmp`
