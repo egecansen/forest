@@ -7,7 +7,10 @@
 #
 # Cursor port of .claude/hooks/flaky-kit-self-protection-gate.sh — SAME
 # detection logic (including the shared core/shell-guard.py quote/subshell-aware Bash check), Cursor I/O
-# via cursor-compat.sh. Protects core/ + hooks/ + SKILL.md from silent self-modification.
+# via cursor-compat.sh. Protects the kit tree (core/ + SKILL.md, and the tree itself as an operand),
+# both harnesses' gate scripts and vendored libs, the out-of-tree `.flaky-kit-expect` tier record, and
+# the two hook directories as operands. There is no in-tree `hooks/` directory — the gate was moved out
+# of the kit tree so a rename of that tree cannot take its own detector along.
 #
 # NOTE: Cursor exposes no reliable before-file-edit block, so the Write|Edit branch is best-effort. The
 # OS-level wall that holds in EVERY harness (and against interpreter/compiled writers) is
@@ -34,10 +37,12 @@
 # defense-in-depth against natural/accidental and simple adversarial surface writes. It CANNOT be
 # made complete against a shell-capable agent — `base64 ... | bash`, `eval`, process substitution,
 # exotic quoting, and compiled writers all bypass it by construction, no matter how much more
-# pattern-matching is added. The REAL wall, at the **hardened** tier, is `core/lock-kit.sh lock`
-# chown'ing core/** (and the kit root) to root — not merely a read-only bit, which a same-user chmod
-# reverses; below hardened it degrades to exactly that chmod-only bit. This gate is friction on top
-# of whichever tier is actually reached, never a substitute for either.
+# pattern-matching is added. Nor did it take construction to evade until 2026-07-30: every surface
+# alternative ended in `/`, so no DIRECTORY operand matched and `mv <kit> /tmp/x` was a silent ALLOW.
+# The wall, at the **hardened** tier, is `core/lock-kit.sh lock` chown'ing the safety surface (core/**,
+# SKILL.md, both gate scripts and their vendored libs) and the kit ROOT to root — not merely a read-only
+# bit, which a same-user chmod reverses; below hardened it degrades to exactly that chmod-only bit. This
+# gate is friction on top of whichever tier is actually reached, never a substitute for either.
 set -uo pipefail
 
 _DIR="$(dirname "${BASH_SOURCE[0]}")"
@@ -52,7 +57,13 @@ cc_read_input
 # Patterns mirror the Claude gate's bash-ERE prefilter (kept in sync with core/shell-guard.py's python flavor).
 # Round2 re-review: also covers both harnesses' gate scripts + vendored libs (`.cursor/hooks/*` and
 # `.claude/hooks/lib/*` previously sat outside this pattern entirely — see the Claude gate's comment).
-SURF_RE='\.claude/skills/hektor-flaky-triage/core/|\.claude/hooks/flaky-kit-self-protection-gate\.sh|\.cursor/hooks/(flaky-kit-self-protection-gate\.sh|lib/)|\.claude/hooks/lib/|\.claude/skills/hektor-flaky-triage/SKILL\.md'
+# Later review: DIRECTORY OPERANDS could not match at all, because every alternative ended in `/` —
+# so `mv <kit> /tmp/x`, `rm -rf <kit>`, `mv <kit>/core /tmp/x` and `rm -rf .cursor/hooks` were all
+# ALLOWED and unaudited, and `.claude/hooks/.flaky-kit-expect` (the record the shadow check above
+# depends on) was not on the surface at all while the gate script beside it was. Both closed; see the
+# Claude gate's comment for the full reasoning, including why an ordinary file inside `.claude/hooks/`
+# is still deliberately NOT surface.
+SURF_RE='\.claude/skills/hektor-flaky-triage(/|$|[[:space:]";)&|])|\.claude/hooks/(flaky-kit-self-protection-gate\.sh|\.flaky-kit-expect|lib/)|\.cursor/hooks/(flaky-kit-self-protection-gate\.sh|lib/)|\.(claude|cursor)/hooks($|[[:space:]";)&|])'
 # Fallback ONLY when python3/shell-guard.py is unavailable (degraded precision, documented).
 MUT_RE='(>>?|[[:space:]]tee[[:space:]]|sed[[:space:]]+-i|(^|[;&|[:space:]])(cp|mv|rm|chmod|chown|truncate|dd|install|ln|rsync|patch)([[:space:]]|$)|(^|[;&|[:space:]])git[[:space:]]+(checkout|apply|restore|stash|reset|clean)([[:space:]]|$))'
 
@@ -77,13 +88,18 @@ except Exception:
 }
 
 match_surface() {
+  # Kept in step with SURF_RE above, including the directory-operand arms it explains.
   case "$1" in
     */.claude/skills/hektor-flaky-triage/core/*)          SURFACE="kit core (invariant logic + config)"; return 0 ;;
     */.claude/skills/hektor-flaky-triage/SKILL.md)        SURFACE="kit skill prompt"; return 0 ;;
+    */.claude/skills/hektor-flaky-triage|*/.claude/skills/hektor-flaky-triage/*) \
+                                                          SURFACE="kit tree"; return 0 ;;
     */.claude/hooks/flaky-kit-self-protection-gate.sh)    SURFACE="kit protection hook (Claude)"; return 0 ;;
     */.cursor/hooks/flaky-kit-self-protection-gate.sh)    SURFACE="kit protection hook (Cursor)"; return 0 ;;
     */.cursor/hooks/lib/*)                                SURFACE="kit protection hook lib (Cursor)"; return 0 ;;
     */.claude/hooks/lib/*)                                SURFACE="kit protection hook lib (Claude)"; return 0 ;;
+    */.claude/hooks/.flaky-kit-expect)                    SURFACE="kit lock-tier record (out-of-tree)"; return 0 ;;
+    */.claude/hooks|*/.cursor/hooks)                      SURFACE="harness hooks directory (holds the gate, its lib, and the lock-tier record)"; return 0 ;;
     *) return 1 ;;
   esac
 }
@@ -101,16 +117,41 @@ CWD="$(cc_json '.cwd // .workspace_roots[0] // .workspaceRoots[0] // .workspace_
 # itself stays identical to the Claude gate's (.claude/hooks/.flaky-kit-expect) — lock writes
 # exactly one record regardless of which harness reads it.
 #
+# It tests the kit's PROTECTION, not its PRESENCE. The first version fired only when core/ was
+# ABSENT, so a rename-and-REPLACE — the case this warning's own text describes — was silent. Ownership
+# is the unforgeable signal: a replaced tree cannot be root-owned without the password the hardened
+# tier is built on. A legitimate maintenance window does not trip it, because `unlock` refreshes the
+# record to `unlocked` (see core/lock-kit.sh's write_expect()).
+#
 # Honest limit: .claude/hooks/.flaky-kit-expect lives in a directory that must stay user-writable
 # (this pack's own installer writes hooks there without sudo), so the SAME actor who can rename the
 # kit tree aside can also delete this file — the record is not tamper-proof. What it still buys: a
 # silent single `mv` becomes a two-step act, and a forgotten/incomplete cleanup (the common
-# accidental case) still gets caught. Detection, not prevention.
+# accidental case) still gets caught. Detection, not prevention. The record and the directory holding
+# it are now part of the matched surface, so erasing them is at least denied and audited here.
 _ROOT="$(cc_repo_root)"
 _EXPECT="$_ROOT/.claude/hooks/.flaky-kit-expect"
-if [ -r "$_EXPECT" ] && [ "$(cat "$_EXPECT" 2>/dev/null)" = "hardened" ] \
-   && [ ! -d "$_ROOT/.claude/skills/hektor-flaky-triage/core" ]; then
-  echo "flaky-kit gate: SHADOW WARNING — this project recorded a hardened flaky-triage kit, but the kit tree is no longer present at its expected path. It may have been renamed aside and replaced. Verify before trusting anything the kit reports." >&2
+_CORE="$_ROOT/.claude/skills/hektor-flaky-triage/core"
+
+# The BSD/GNU stat branch is INLINED rather than sourced from the kit's own core/_integrity.sh,
+# deliberately: this check judges a tree that may have been swapped out, and a helper read FROM that
+# tree could be a replacement that reports whatever the replacer wants. A detector must not take its
+# evidence from the thing it is auditing. Returns 0 always so a missing stat cannot wedge the gate.
+_owner_uid() {
+  [ -n "${1:-}" ] && [ -e "$1" ] || return 0
+  case "$(uname -s 2>/dev/null)" in
+    Darwin|*BSD) stat -f %u "$1" 2>/dev/null ;;
+    *)           stat -c %u "$1" 2>/dev/null ;;
+  esac
+  return 0
+}
+
+if [ -r "$_EXPECT" ] && [ "$(cat "$_EXPECT" 2>/dev/null)" = "hardened" ]; then
+  if [ ! -d "$_CORE" ]; then
+    echo "flaky-kit gate: SHADOW WARNING — this project recorded a hardened flaky-triage kit, but the kit tree is no longer present at its expected path. It may have been renamed aside and replaced. Verify before trusting anything the kit reports." >&2
+  elif [ "$(_owner_uid "$_CORE")" != "0" ]; then
+    echo "flaky-kit gate: SHADOW WARNING — this project recorded a hardened flaky-triage kit, but the tree at its expected path is NOT root-owned. It may have been renamed aside and replaced with a tree this account controls, or the hardened tier was lost (a chown, a reinstall, an unlock that never re-locked). Run 'core/lock-kit.sh status' and verify before trusting anything the kit reports." >&2
+  fi
 fi
 
 if [ -n "$CMD" ]; then

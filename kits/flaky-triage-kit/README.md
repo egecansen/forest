@@ -61,17 +61,28 @@ echo '{"file":"…","old":"…","new":"…"}' | "$KIT/apply.sh"   # working-tree
 
 ## Self-protection
 The kit guards its own `core/` · `SKILL.md` — plus its own protection gate at
-`.claude/hooks/flaky-kit-self-protection-gate.sh` (deliberately installed OUTSIDE this tree so
-renaming the tree can't take the detector with it) — from silent self-modification (a gate that
-denies agent writes there unless `HEKTOR_FLAKYKIT_UNLOCK=1`). Underneath that gate, `lock-kit.sh`
-reaches for an OS-level tier: **hardened** — `core/**` and the kit root chown'd to root, so
-reopening needs a password — is the wall that holds in every harness, because it's enforced by the
-OS, not by any hook. Without `sudo` it **degrades** to a chmod-only read-only bit the same user (and
-therefore an agent running as them) can reverse — friction, not a wall. `lock-kit.sh status` names
-which tier is actually in effect.
+`.claude/hooks/flaky-kit-self-protection-gate.sh`, that gate's vendored `lib/`, the Cursor gate and
+libs under `.cursor/hooks/`, the out-of-tree `.flaky-kit-expect` tier record, and both hook
+directories as `mv`/`rm` operands. The gate is installed OUTSIDE this tree deliberately, so renaming
+the tree can't take the detector with it. It denies agent writes to any of that unless
+`HEKTOR_FLAKYKIT_UNLOCK=1` — real denials, honored by the CLI, but a heuristic string match all the
+same: friction and an audit trail, not a wall.
+
+The wall, where there is one, is underneath: `lock-kit.sh` reaches for an OS-level tier. **hardened** —
+`core/**`, `SKILL.md`, the gate scripts, the vendored libs and the kit root itself chown'd to root, so
+reopening needs a password — holds in every harness, because the kernel enforces it rather than a hook.
+Without `sudo` it **degrades** to a chmod-only read-only bit the same user (and therefore an agent
+running as them) can reverse — friction, not a wall. `lock-kit.sh status` names the tier actually in
+effect and prints the OWNER of every surface path, which is the only way to spot a `chown` that applied
+to some paths and not others. **Read `core/lock-kit.sh`'s header before calling a kit protected:** it
+lists, in full, what the hardened tier does not cover — shadowing (detected, not prevented), out-of-tree
+files that can be replaced via their user-owned parents, the sudo credential window, and partial
+hardening.
 ```bash
 core/lock-kit.sh lock        # hardens (chown to root) when sudo is available; degrades to a
-                              # chmod-only read-only bit otherwise
+                              # chmod-only read-only bit otherwise. Ends with `sudo -k`, so the
+                              # credential it just cached does not leave a no-prompt reopen window.
+core/lock-kit.sh status      # per-path mode + OWNER + the effective tier
 HEKTOR_FLAKYKIT_UNLOCK=1 core/lock-kit.sh unlock
 ```
 

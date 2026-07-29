@@ -23,7 +23,10 @@
 - **`stat` is not portable:** BSD/macOS is `stat -f %u`, GNU/Linux is `stat -c %u`. Branch on `uname -s` exactly as `adapters/_lib/audit.sh` does for `chflags`/`chattr`.
 - **Never fail a caller because integrity reporting failed.** `_integrity.sh` mirrors `hektor_audit`'s discipline: informative return codes, but a broken check must not wedge the kit.
 - **Commit messages carry no AI trailers** (repo convention — no `Co-Authored-By`, no session line).
-- **All existing tests must stay green:** `for t in core/tests/*.sh; do bash "$t"; done` — currently 275 passing.
+- **All existing tests must stay green:** `for t in core/tests/*.sh; do bash "$t"; done` — 275 passing
+  when this plan was written. That number is the plan-time baseline and every "Expected: N passed" below
+  is likewise a snapshot of the step that added it; **derive the current total from the files, never
+  from this document** (post-review-fix-wave, 2026-07-30: 448 across 11 files).
 
 ---
 

@@ -61,7 +61,7 @@ marker** recorded in the audit trail. The false claims at `lock-kit.sh:10` and `
 | `core/lock-kit.sh` | extended | `lock` attempts hardened (root) then degrades; `unlock` requires sudo; `status` reports per-path tier |
 | `core/.lock-state` | **new** | Records the tier the kit was locked at. Root-owned when hardened, so it cannot be forged inside a legitimate tree |
 | `core/_integrity.sh` | **new** | Sourced helper (`_lock.sh` / `_strict.sh` pattern). Compares real ownership against `.lock-state` |
-| self-protection gate | **relocated** | Installs to `.claude/hooks/` instead of `.claude/skills/hektor-flaky-triage/hooks/`, so shadowing the kit dir does not take the detector with it. Records the expected tier in `.claude/hooks/.flaky-kit-expect` — outside the shadowable tree, written when `lock` succeeds |
+| self-protection gate | **relocated** | Installs to `.claude/hooks/` instead of `.claude/skills/hektor-flaky-triage/hooks/`, so shadowing the kit dir does not take the detector with it. Records the expected tier in `.claude/hooks/.flaky-kit-expect` — outside the shadowable tree, written by `lock` and **refreshed by `unlock`** (2026-07-30: without the refresh, the tier check in §4's amendment would report every maintenance window as a shadow). `install.sh` also removes the pre-relocation in-tree copy and its stale `settings.json` registration, or an upgraded project ends up with two gates |
 | `config.json` | small addition | The two missing env overrides |
 | `install.sh` | small addition | Detects a hardened install (so an upgrade prints "unlock first" rather than a wall of `cp` `EACCES` errors); prints the hardening command |
 
@@ -85,6 +85,20 @@ gate sits outside it and keeps its own record: the in-tree check catches **accid
 that dropped ownership, a kit installed but never hardened), the out-of-tree gate catches the
 **deliberate** case. Two different jobs; the spec keeps them separate rather than claiming one
 mechanism does both.
+
+> **Amendment, 2026-07-30 — this section asserted a detection the implementation did not deliver.**
+> The out-of-tree check as first built fired only when the kit's `core/` was **absent**, so it caught a
+> rename that left a hole behind and was completely silent on a rename-**and**-replace — the case its
+> own warning text described, and the deliberate case this section credits it with. Under the branch's
+> governing rule (a claim the mechanism does not deliver is a defect equal to a broken mechanism) that
+> made this paragraph, `core/lock-kit.sh`'s residual list, `kernel.md`'s P4 row and both gates' comments
+> untrue at once. Fixed by testing the kit's **protection** rather than its **presence**: the condition
+> is now "recorded `hardened` **and** (`core/` missing **or** `core/` not owned by uid 0)", because a
+> replacement tree cannot be root-owned without the password the hardened tier is built on. Its
+> prerequisite: `unlock` now writes `unlocked` to the record, for the same reason `lock` writes
+> `hardened` — otherwise every legitimate maintenance window would read as a shadow. The cost of that,
+> stated rather than left to be discovered: while the record says `unlocked` the check is silent, which
+> is correct, because during a maintenance window there is no protection left to have lost.
 
 ## 5. Flows
 
@@ -121,8 +135,15 @@ script is nonetheless run as a direct root shell with no invoking user to return
 
 ## 7. Testing
 
-The privileged path cannot be automated — `chown root` needs a password and a test suite cannot type
-one. The kit already solves this shape with `rerun.sh`'s `RERUN_LIB_ONLY=1` seam, and this follows it:
+Only ONE step of the privileged path cannot be automated: making a path genuinely owned by uid 0,
+because `chown root` needs a password. **Amendment, 2026-07-30:** the original wording here —
+"the privileged path cannot be automated" — was too broad and was used to justify leaving the branch
+that decides *what* becomes root-owned untested, which is how its first version shipped a two-command
+bypass. A PATH-shimmed `sudo` (logs argv, no-ops `chown`) plus a PATH-shimmed `stat` (reports the
+ownership a successful chown would have left) drive the whole hardened branch as an unprivileged user:
+the target set, the call order and split, the counters, the banner's derived claims, the out-of-tree
+record, the chown-back and `sudo -k` are all covered by `core/tests/lock-tier-test.sh`. The kit already
+solves this shape with `rerun.sh`'s `RERUN_LIB_ONLY=1` seam, and this follows it:
 
 - **`core/tests/integrity-test.sh` (new)** — the tier decision is factored into a pure function and
   driven with synthetic ownership/state inputs, covering all four states. No sudo.

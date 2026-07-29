@@ -71,30 +71,56 @@
 #   surface writes. It is NOT, and cannot be made, complete against a shell-capable agent that really
 #   wants to bypass it — `base64 ... | bash`, `eval "$x"`, process substitution, exotic quoting, a
 #   compiled writer, or any construct that doesn't reduce to a literal, parseable Bash command string
-#   all bypass by construction, no matter how much more string-analysis is layered on. Past this
-#   round, further hardening does NOT mean chasing more shell constructs here — the REAL wall, at
-#   the **hardened** tier, is `core/lock-kit.sh lock` chown'ing core/** (and the kit root) to root,
-#   unaffected by any of the above; below hardened it degrades to a directory-level chmod-only bit,
-#   which is friction, not a wall (a same-user chmod reverses it). Do not read completeness into
-#   anything below.
+#   all bypass by construction, no matter how much more string-analysis is layered on. Nor did it take
+#   construction: until 2026-07-30 every alternative in SURF ended in `/`, so the pattern matched no
+#   DIRECTORY operand at all and `mv <kit> /tmp/x` / `rm -rf .claude/hooks` were plain ALLOWs. That is
+#   fixed below, and recorded here because it is the standing argument against reading this module as a
+#   boundary: patterns have gaps, and this one had a three-command gap for the whole life of the file.
+#   Past this round, further hardening does NOT mean chasing more shell constructs here — the wall, at
+#   the **hardened** tier, is `core/lock-kit.sh lock` chown'ing the safety surface (core/**, SKILL.md,
+#   both gate scripts and their vendored libs) and the kit ROOT to root, unaffected by any of the above;
+#   below hardened it degrades to a directory-level chmod-only bit, which is friction, not a wall (a
+#   same-user chmod reverses it). Do not read completeness into anything below.
 import sys, re, os
 
 # Protected surface = the kit's own files, PLUS the self-protection gate scripts (both harnesses)
 # and their vendored libs — the audit found `.cursor/hooks/*` and `.claude/hooks/lib/*` sat outside
 # the surface entirely, so a session in one harness could freely disable the OTHER harness's gate
-# (or its own gate's audit lib). Kept precise: only the gate filenames + their lib/ dirs, not the
-# whole `.cursor/`/`.claude/hooks/` trees (which hold plenty of unrelated, legitimately-editable
-# files). PATH-INDEPENDENT: set HEKTOR_FK_SURFACE to the kit's install root and a kit installed
-# ANYWHERE protects itself (the standalone gates do this) — that override intentionally does NOT
-# also add the gate-script patterns below (a caller setting it owns its own root's scope). Unset →
-# the in-repo default below, so the live .claude/.cursor gates keep their exact behavior with no
-# env set.
+# (or its own gate's audit lib).
+#
+# DIRECTORY OPERANDS. Every alternative used to end in `/`, which means the directory itself never
+# matched: `<kit>/core/config.json` was DENY, but `mv <kit> /tmp/x`, `rm -rf <kit>`,
+# `mv <kit>/core /tmp/x` and `rm -rf .claude/hooks` were all ALLOW — an unflagged, unaudited
+# three-command bypass at every tier below hardened, i.e. on every existing install and every machine
+# without sudo. `_END` is a zero-width shell-token boundary, so `\.claude/hooks` matches the directory
+# as an operand without swallowing `.claude/hooks/observe.sh`; the kit-tree alternative matches the
+# tree AND everything under it. `.claude/hooks/.flaky-kit-expect` is named explicitly because the
+# gates' shadow check reads it — editing the gate was DENY+audited while erasing the record the gate
+# depends on was ALLOW+silent. Reads still pass: the Bash branch also requires a mutation verb, a
+# redirect target, or an inline interpreter, so `cat <kit>/core/x` is untouched.
+#
+# Still precise where precision is right: an ordinary file inside `.claude/hooks/` (this pack's other
+# hooks) is deliberately NOT surface — only the gate, its lib/, the record, and the directory as an
+# operand. Blanket-matching that tree would contradict core/tests/self-protection-test.sh's assertion
+# that an unrelated pack hook stays editable.
+_END = r'(?=[\s"\'`;)&|]|$)'          # zero-width end-of-shell-token boundary
+_DEFAULT_SURF = (r'\.claude/skills/hektor-flaky-triage(?:/|' + _END + r')'
+                 r'|\.claude/hooks/(?:flaky-kit-self-protection-gate\.sh|\.flaky-kit-expect|lib/)'
+                 r'|\.cursor/hooks/(?:flaky-kit-self-protection-gate\.sh|lib/)'
+                 r'|\.(?:claude|cursor)/hooks(?:' + _END + r')')
+# PATH-INDEPENDENT: set HEKTOR_FK_SURFACE to the kit's install root and a kit installed ANYWHERE
+# protects itself (the standalone gates do this).
+#
+# The override is ADDITIVE, and that is a fix, not a preference. It used to REPLACE the pattern
+# wholesale, so one environment variable disabled the primary Bash decision path outright: with
+# `HEKTOR_FK_SURFACE=/definitely/nowhere` a verified DENY became an ALLOW. That is the same shape as
+# the INTEGRITY_FAKE_UID back door this kit already removed rather than fenced — a one-variable
+# skeleton key to a control whose entire premise is that bypassing it costs a password. The stated
+# purpose (a kit installed anywhere protects itself) is legitimate, so the seam stays; it just cannot
+# subtract any more. A caller adding a root now widens the surface, never narrows it.
 _SURF_ROOT = os.environ.get('HEKTOR_FK_SURFACE', '').strip().rstrip('/')
-SURF = re.compile(re.escape(_SURF_ROOT)) if _SURF_ROOT \
-    else re.compile(r'\.claude/skills/hektor-flaky-triage/(core/|SKILL\.md)'
-                     r'|\.claude/hooks/flaky-kit-self-protection-gate\.sh'
-                     r'|\.cursor/hooks/(flaky-kit-self-protection-gate\.sh|lib/)'
-                     r'|\.claude/hooks/lib/')
+SURF = re.compile('|'.join(p for p in (re.escape(_SURF_ROOT) if _SURF_ROOT else '',
+                                       _DEFAULT_SURF) if p))
 # target-as-arg mutations: surface anywhere in the fragment is a write (conservative — `cp core/x /tmp`
 # reads the surface, but copying kit files out is itself worth surfacing). REDIR is target-position-aware.
 # Round2: added rsync/patch (file-clobbering copiers) and the git subcommands that can silently
@@ -202,13 +228,20 @@ def _balanced_body(s, i):
     return ''.join(body), i
 
 
-def immediate_bodies(s):
+def immediate_bodies(s, subst_only=False):
     """Immediate (depth-1 only) bodies of $(...), `...`, and (...) in s. Deliberately NON-recursive:
     `scan()` below recurses into whatever this returns itself, threading the RUNNING cwd at each
     level (a plain flatten-everything extractor, like Round2's, can't do that — by the time you've
     flattened a nested body out of its parent, you've lost which cwd it should have started from).
     Single-quotes suppress expansion entirely (skipped outright); double-quotes still allow $(...)/
-    backtick expansion (bash semantics) but make a bare '(' just literal text, not a subshell."""
+    backtick expansion (bash semantics) but make a bare '(' just literal text, not a subshell.
+
+    `subst_only=True` returns ONLY command-substitution bodies ($(...) and `...`), skipping plain
+    (subshell) bodies. The distinction is semantic, not cosmetic: a command substitution supplies an
+    ARGUMENT to the surrounding command, so a surface path inside one is an operand of the outer verb
+    (`rm $(echo core/config.json)`); a plain subshell's contents are COMMANDS with their own working
+    directory, which scan() re-scans on their own terms. is_surface_write() uses the restricted form so
+    it can keep catching the first without mis-reading the second."""
     out, inS, inD, i, n = [], False, False, 0, len(s)
     while i < n:
         ch = s[i]; prev = s[i - 1] if i > 0 else ''
@@ -239,11 +272,60 @@ def immediate_bodies(s):
             i += 1; continue
         if ch == '(':
             b, i = _balanced_body(s, i + 1)
-            if b.strip():
+            if b.strip() and not subst_only:
                 out.append(b)
             i += 1; continue
         i += 1
     return out
+
+
+def outside_bodies(s):
+    """`s` with every immediate $(...) / `...` / (...) BODY removed, delimiters kept as empty markers.
+
+    Used only by the token-canonicalization pass in is_surface_write(). A token lifted out of a
+    subshell or command-substitution body cannot be resolved against the OUTER cwd, because the body
+    may have `cd`-ed somewhere else first — and `scan()` already re-scans every body with the cwd that
+    really applies to it. Resolving those tokens twice, once against the wrong base, is what made
+    `(cd /tmp && sed -i '' x)` read as a surface write the moment the kit DIRECTORY joined the surface:
+    the whole span is one verbatim segment, so `x` resolved under the outer cwd (inside the kit)
+    although the write lands in /tmp. Stripping the bodies here leaves each token to be judged exactly
+    once, at the base that governs it.
+
+    Accepted cost, stated rather than discovered later: a surface path that only ever appears INSIDE a
+    body while the mutating verb sits OUTSIDE it — `rm $(echo core/config.json)` — is no longer caught
+    by this pass, because the body scan sees the path but no verb and the outer scan sees the verb but
+    no path. That is the class the module docstring already disclaims (`eval`, `base64 | bash`,
+    process substitution); the realistic forms, where the verb and its operand live in the same body
+    or the same outer segment, are all still caught. The direct SURF.search() on the full fragment,
+    which runs first and is unaffected by this function, still catches any LITERAL surface path inside
+    a body. Mirrors immediate_bodies()' walker exactly so the two cannot disagree about what a body is.
+    """
+    out, inS, inD, i, n = [], False, False, 0, len(s)
+    while i < n:
+        ch = s[i]; prev = s[i - 1] if i > 0 else ''
+        if ch == '\\' and not inS:
+            out.append(s[i:i + 2]); i += 2; continue
+        if ch == "'" and not inD and prev != '\\':
+            inS = not inS; out.append(ch); i += 1; continue
+        if ch == '"' and not inS and prev != '\\':
+            inD = not inD; out.append(ch); i += 1; continue
+        if inS:
+            out.append(ch); i += 1; continue
+        if ch == '`':
+            i += 1
+            while i < n and s[i] != '`':
+                i += 2 if (s[i] == '\\' and i + 1 < n) else 1
+            i += 1; out.append('``'); continue
+        if ch == '$' and i + 1 < n and s[i + 1] == '(':
+            _b, i = _balanced_body(s, i + 2)
+            i += 1; out.append('$()'); continue
+        if inD:                                                # bare '(' inside "..." is literal text
+            out.append(ch); i += 1; continue
+        if ch == '(':
+            _b, i = _balanced_body(s, i + 1)
+            i += 1; out.append('()'); continue
+        out.append(ch); i += 1
+    return ''.join(out)
 
 
 def dequote(seg):
@@ -296,6 +378,38 @@ def resolve_path(tok, base):
 
 
 CD_RE = re.compile(r'^cd\s+(\S+)\s*$')
+# A token carrying shell punctuation is not a path OPERAND, so canonicalizing it against the tracked
+# cwd is meaningless — and once the surface includes the kit DIRECTORY itself (not just files under
+# it) it is actively harmful: with the cwd inside the kit tree, which is the normal place to run kit
+# commands from, joining a non-path token like `&&` or `${HOME}` onto that cwd yields a path under the
+# kit, and every such command would read as a surface write. Globs (`*`, `?`) are deliberately NOT
+# excluded — `core/*.sh` is a real operand. `$`-bearing tokens are: an unexpanded variable cannot be
+# resolved here anyway, and a path whose LITERAL text mentions the surface is still caught by the
+# direct SURF.search() that runs before this pass.
+NON_OPERAND = re.compile(r'[()&|;$<>{}`]')
+# Leading `VAR=value` assignments and the COMMAND WORD itself are not path operands either. `rm`,
+# `sed`, `python3` resolved against a cwd inside the kit tree land under the kit, so with the kit
+# DIRECTORY on the surface every mutating command run from the kit dir would report a surface hit
+# regardless of what it actually touched (`rm /tmp/unrelated` was a DENY). The first token of a simple
+# command is never the file a redirect or verb writes — split_segments() has already cut the string at
+# every top-level separator, so each fragment is one simple command. Residual, accepted because this
+# gate errs toward flagging: a wrapper prefix (`sudo rm …`, `xargs rm …`) leaves the real verb in
+# operand position, so from inside the kit tree those can still over-flag.
+ASSIGN_RE = re.compile(r'^[A-Za-z_][A-Za-z0-9_]*=')
+
+
+def operand_candidates(text):
+    """The tokens of ONE simple command's text that can plausibly be PATH OPERANDS: leading `VAR=`
+    assignments and the command word dropped, flags dropped, shell-punctuation junk dropped."""
+    seen_cmd = False
+    for tok in dequote(text).split():
+        if not seen_cmd:
+            if not ASSIGN_RE.match(tok):
+                seen_cmd = True
+            continue
+        if tok.startswith('-') or NON_OPERAND.search(tok):
+            continue
+        yield tok
 
 
 def is_surface_write(frag, base=None):
@@ -303,13 +417,22 @@ def is_surface_write(frag, base=None):
     surf_hit = bool(SURF.search(frag) or SURF.search(dq))
     if not surf_hit:
         # Round2 canonicalization pass: a `./`, `../`, symlink-aliased, or bare cwd-relative token
-        # can land on the surface with no literal substring match at all — resolve each non-flag
-        # whitespace token against `base` (the tracked cwd) and re-check.
-        for tok in dq.split():
-            if tok.startswith('-'):
-                continue
-            if SURF.search(resolve_path(tok, base)):
-                surf_hit = True
+        # can land on the surface with no literal substring match at all — resolve each operand token
+        # against `base` (the tracked cwd) and re-check.
+        #
+        # Two token sources, and the split matters. `outside_bodies(frag)` is the fragment with plain
+        # (subshell) and command-substitution bodies removed: a plain subshell's contents are COMMANDS
+        # with their own cwd, which scan() re-scans on their own terms, so resolving their tokens
+        # against the OUTER base is simply wrong — that is what made `(cd /tmp && sed -i '' x)` deny
+        # once the kit DIRECTORY joined the surface. A COMMAND SUBSTITUTION is the opposite: its result
+        # becomes an argument to the surrounding command, so its tokens ARE outer operands
+        # (`rm $(echo core/config.json)`), and they are checked here rather than lost.
+        for src in [outside_bodies(frag)] + immediate_bodies(frag, subst_only=True):
+            for tok in operand_candidates(src):
+                if SURF.search(resolve_path(tok, base)):
+                    surf_hit = True
+                    break
+            if surf_hit:
                 break
     if not surf_hit:
         return False

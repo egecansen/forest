@@ -30,7 +30,9 @@ and calls these; it MUST NOT mutate state except through them (kernel P2).
 I1 ingest · I2 rerun · I3 apply · I4 (skill, evidence-gated) · I5 ledger ·
 I6 cluster · I7 summary · I8 (skill — never commit/ticket/disable) · I9 rerun + gate ·
 I10 apply · I11 rerun (per-test completeness) + gate (the accept/reject decision).
-P3/P5/P6 config · P7 ledger · P4 `../hooks/flaky-kit-self-protection-gate.sh`.
+P3/P5/P6 config · P7 ledger · P4 `<project>/.claude/hooks/flaky-kit-self-protection-gate.sh`
+(**outside** the kit tree, so renaming the tree cannot take its own detector along) + `lock-kit` /
+`_integrity`.
 
 ## Status
 
@@ -38,20 +40,36 @@ Implemented + exercised: `ingest` (+ **N6** phantom guard & `vrt_url`) · `clust
 `rerun` · `compile` (**N6-B**) · `apply` (guards proven: confinement→77, non-unique→65) · `ledger` ·
 `summary` · `dom-capture` (**proven tb128**: 385 KB DOM, 14 `_cllpsID` ids via `getPageSource()`) ·
 `dom-on-failure` (**proven tb161**). Gradle serialized via `_lock` (**N6-A** — concurrent `--rerun-tasks`
-corruption fixed). `ledger` v2 has its own test suite: `bash core/tests/ledger-test.sh` (74 cases). The full `apply → compile → green-proof → converge` loop ran live on **s4-flaky-1394**
+corruption fixed). `ledger` v2 has its own test suite: `bash core/tests/ledger-test.sh` (102 cases —
+verify against the file, not this number). The full `apply → compile → green-proof → converge` loop ran live on **s4-flaky-1394**
 (e.g. `testAllCriteriaPopup` fixed + green on tb161; `testWebSuggestionMapClassifiedsResults` VRT→count refactor green).
 
 The self-protection gate guards this dir (edits need `HEKTOR_FLAKYKIT_UNLOCK=1`). Its logic is
 **verified** (2026-06-25: deny on `core/**` + `SKILL.md`, allow + audit on the unlock, passthrough
-otherwise) and the gate now also matches **Bash** writes (redirect/`sed -i`/`cp`/`mv`/`rm`/`chmod`).
-**2026-06-30 correction:** PreToolUse `deny` **is** enforced by the current CLI (observed live — a
-sibling gate blocked a `settings.json` edit), so the gate is a real wall when locked, not just an
-audit signal (kernel §14 META). For an OS-level wall independent of the CLI, `core/lock-kit.sh
-lock` reaches for the **hardened** tier: `core/**`, `hooks/**`, and the kit root itself chowned to
-root, so reopening needs a password, not just `HEKTOR_FLAKYKIT_UNLOCK=1` (that flag is an intent
-marker, not consent — the password is; it's logged to the audit log only when a PreToolUse gate
-intercepts an agent's call with it set, never by `lock-kit.sh` running directly). Without `sudo` it
-**degrades** to the old
+otherwise) and the gate also matches **Bash** writes (redirect/`sed -i`/`cp`/`mv`/`rm`/`chmod`) —
+including, since 2026-07-30, the kit tree and both harnesses' hook directories as `mv`/`rm`
+**operands**, and the out-of-tree `.flaky-kit-expect` record. It did not match any of those before:
+every surface pattern ended in `/`, so `mv <kit> /tmp/x` and `rm -rf .claude/hooks` were allowed and
+unaudited on every install.
+
+**2026-06-30 correction, itself corrected 2026-07-30:** PreToolUse `deny` **is** enforced by the
+current CLI (observed live — a sibling gate blocked a `settings.json` edit), so the gate's denials are
+real. That does **not** make the gate a wall, and this file said it did. The gate decides by matching a
+heuristic pattern against a command string: `base64 … | bash`, `eval`, process substitution and any
+compiled writer bypass it by construction, and the operand gap above sat in it, live, until it was
+found. The gate's own header says FRICTION and explains why; this line now agrees with it instead of
+contradicting it.
+
+The wall, where there is one, is OS-level and independent of any CLI: `core/lock-kit.sh lock` reaches
+for the **hardened** tier and chowns the safety surface to root — `core/**`, `SKILL.md`, both
+harnesses' gate scripts and their vendored libs, and the kit root itself (plus an in-tree `hooks/**` if
+this install predates the gate's relocation — a current install has no such directory, so do not read
+that as a description of one). Reopening then needs a password, not just `HEKTOR_FLAKYKIT_UNLOCK=1`
+(that flag is an intent marker, not consent — the password is; it's logged to the audit log only when a
+PreToolUse gate intercepts an agent's call with it set, never by `lock-kit.sh` running directly). Both
+`lock` and `unlock` end with `sudo -k`, because sudo's cached credential otherwise leaves a ~5-minute
+no-prompt reopen window that `lock` itself created. Without `sudo` the tier **degrades** to the old
 chmod-a-w-only behaviour, which the same user can reverse. `core/_integrity.sh` asserts the tier
 that's actually there at every entrypoint (2026-07-29), so a silent slip from hardened to degraded
-can't pass as still-protected.
+can't pass as still-protected. What the hardened tier does **not** cover is listed in full in
+`core/lock-kit.sh`'s header — read that list before calling this kit protected.

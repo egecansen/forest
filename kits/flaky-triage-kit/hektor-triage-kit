@@ -6,8 +6,11 @@
 #       auto-detect JDK 17 + source_roots so there is no manual config step. Idempotent.
 #   hektor-triage-kit lock | unlock | status
 #       OS-level protection tier for an installed kit (proxies core/lock-kit.sh in the target repo):
-#       hardened (root-owned, password-gated reopen — the real wall) when sudo is available, else a
-#       chmod-only degraded tier the same user can reverse. `status` names which tier actually holds.
+#       hardened (root-owned, password-gated reopen — the wall the PreToolUse gate is not) when sudo is
+#       available, else a chmod-only degraded tier the same user can reverse. `status` names the tier
+#       that actually holds AND the owner of every surface path — the only way to see a chown that
+#       applied to some paths and not others. What hardened does NOT cover is listed in full in
+#       core/lock-kit.sh's header; read it before calling a kit protected.
 #   hektor-triage-kit link [<bindir>]
 #       Symlink this command onto PATH (default ~/.local/bin) so `hektor-triage-kit` works from anywhere.
 #   hektor-triage-kit help

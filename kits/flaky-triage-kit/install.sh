@@ -47,19 +47,51 @@ mkdir -p "$SKILL_DIR/core"
 
 # Refuse to overwrite a hardened install. cp -R would hit EACCES on every root-owned file and bury
 # the real message under a wall of errors — and that EACCES is the protection working, not a bug.
-if [ -f "$SKILL_DIR/core/.lock-state" ] \
-   && grep -q '"tier"[[:space:]]*:[[:space:]]*"hardened"' "$SKILL_DIR/core/.lock-state" 2>/dev/null; then
-  echo "install: this project already has a HARDENED flaky-triage kit at $SKILL_DIR." >&2
-  echo "install: refusing to overwrite it. To upgrade, unlock first:" >&2
-  echo "install:   HEKTOR_FLAKYKIT_UNLOCK=1 $SKILL_DIR/core/lock-kit.sh unlock" >&2
-  echo "install: then re-run this installer, and re-lock afterwards with 'core/lock-kit.sh lock'." >&2
-  exit 75
+#
+# The signal is OWNERSHIP, not the recorded tier. Reading .lock-state was the same inversion Task 3
+# corrected inside lock-kit.sh, and it cut both ways here: a tree whose chown succeeded but whose state
+# write failed got no wall at all, while an agent could block every future upgrade permanently by
+# forging one line of JSON — a denial of service on the maintenance path, mounted from inside exactly
+# the scope this kit exists to constrain. Ownership cannot be forged without the password.
+#
+# A record that CLAIMS hardened over a tree that is not root-owned is a `mismatch`: it is reported
+# loudly and the install PROCEEDS, because reinstalling is the repair for that state rather than
+# something that state should be able to veto.
+if [ -r "$HERE/core/_integrity.sh" ]; then
+  . "$HERE/core/_integrity.sh"          # the INSTALLER's own bundled copy, never the target tree's
+  if [ "$(integrity_owner_uid "$SKILL_DIR/core")" = "0" ]; then
+    echo "install: this project already has a HARDENED flaky-triage kit at $SKILL_DIR ($KIT/core is owned by root)." >&2
+    echo "install: refusing to overwrite it. To upgrade, unlock first:" >&2
+    echo "install:   HEKTOR_FLAKYKIT_UNLOCK=1 $SKILL_DIR/core/lock-kit.sh unlock" >&2
+    echo "install: then re-run this installer, and re-lock afterwards with 'core/lock-kit.sh lock'." >&2
+    exit 75
+  fi
+  if [ -f "$SKILL_DIR/core/.lock-state" ] \
+     && grep -q '"tier"[[:space:]]*:[[:space:]]*"hardened"' "$SKILL_DIR/core/.lock-state" 2>/dev/null; then
+    echo "install: WARNING the kit already here RECORDS the hardened tier, but $KIT/core is NOT owned by root — that is a MISMATCH, not a hardened kit." >&2
+    echo "install: proceeding with the install, because reinstalling is the repair for a mismatched tree. Re-lock afterwards with 'core/lock-kit.sh lock'." >&2
+  fi
 fi
 
 cp -R "$HERE/core/." "$SKILL_DIR/core/"
 cp "$HERE/adapters/claude/SKILL.md" "$SKILL_DIR/SKILL.md"
 chmod +x "$SKILL_DIR"/core/*.sh "$SKILL_DIR"/core/*.py 2>/dev/null || true
 echo "install: engine + SKILL.md -> $KIT/"
+
+# UPGRADE PATH. Before the relocation, the gate installed INSIDE the kit tree at
+# $SKILL_DIR/hooks/flaky-kit-self-protection-gate.sh. Nothing removed it, so upgrading an existing
+# install left the project with TWO gates: the new one plus a stale in-tree copy that predates the
+# shadow check and the relocated surface patterns — and that still travels with the tree when the tree
+# is renamed aside, which is precisely the case the relocation exists to survive. Remove the file and
+# its directory here; the stale settings.json registration is dropped by the jq filter in the Claude
+# block below.
+if [ -e "$SKILL_DIR/hooks" ]; then
+  if rm -rf "$SKILL_DIR/hooks" 2>/dev/null; then
+    echo "install: removed the stale in-tree gate directory $KIT/hooks/ (the gate now lives at .claude/hooks/)"
+  else
+    echo "install: WARN could not remove the stale in-tree gate at $SKILL_DIR/hooks — remove it by hand, or this project keeps a second, outdated gate that a rename of the kit tree would carry along" >&2
+  fi
+fi
 
 # --- auto-configure the installed config so there's no manual step (never clobbers valid values) ---
 autoconfig() {
@@ -118,6 +150,18 @@ if [ "$do_claude" = 1 ]; then
   vendor "$HERE/adapters/_lib/audit.sh" "$PROJ/.claude/hooks/lib/audit.sh"
   S="$PROJ/.claude/settings.json"; [ -f "$S" ] || echo '{}' > "$S"
   C='"$CLAUDE_PROJECT_DIR/.claude/hooks/flaky-kit-self-protection-gate.sh"'
+  # Drop any registration of the PRE-RELOCATION in-tree gate path FIRST. The jq below only ever
+  # appends, so without this an upgraded project ends up with two registered gates — the new one plus
+  # a stale command pointing into the kit tree (whose file the block above has just deleted, so the
+  # registration would also start failing to execute).
+  OLD_GATE_CMD="skills/hektor-flaky-triage/hooks/flaky-kit-self-protection-gate.sh"
+  t="$(mktemp)"; jq --arg old "$OLD_GATE_CMD" '
+    if (.hooks.PreToolUse? // null) != null then
+      .hooks.PreToolUse |= map(
+        if (.hooks? // null) != null
+        then .hooks |= map(select(((.command // "") | contains($old)) | not))
+        else . end)
+    else . end' "$S" > "$t" && mv "$t" "$S"
   for M in "Write|Edit" "Bash"; do
     t="$(mktemp)"; jq --arg m "$M" --arg c "$C" '
       .hooks //= {} | .hooks.PreToolUse //= [] |
@@ -185,7 +229,8 @@ install: done ($HARNESS) in $PROJ
 auto-config: JDK 17 + source_roots set automatically (see the lines above; verify source_roots if shown).
 next:
   1) verify  $KIT/core/config.json   (source_roots = your test packages · run.java_home = a JDK 17)
-  2) optional real wall:  $KIT/core/lock-kit.sh lock     (unlock: HEKTOR_FLAKYKIT_UNLOCK=1 ... unlock)
+  2) HARDEN (do not skip — see the note below):  $KIT/core/lock-kit.sh lock
+     (maintenance unlock: HEKTOR_FLAKYKIT_UNLOCK=1 $KIT/core/lock-kit.sh unlock)
   3) read    $KIT/SKILL.md   and   $KIT/core/README.md
 restart Claude Code / Cursor so the new hooks load. The engine works from any terminal immediately.
 EOF

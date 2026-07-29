@@ -153,10 +153,93 @@ claude_denied "$(bash_json "$PROJ" "$GATE_MUT_CMD")" \
 cursor_denied "$(cursor_bash_json "$PROJ" "$GATE_MUT_CMD")" \
   && ok || bad "cursor DENY Bash mutation of the relocated gate itself (shell-guard.py SURF): $GATE_MUT_CMD"
 
+echo "== Directory OPERANDS: every surface pattern used to end in '/', so the directory itself never" >&2
+echo "   matched — 'mv <kit> /tmp/x', 'rm -rf <kit>', 'mv <kit>/core /tmp/x' and 'rm -rf .claude/hooks'" >&2
+echo "   were ALLOW and unaudited at every tier below hardened, i.e. every existing install. ==" >&2
+# cwd is the PROJECT root here, not $SKILL: with cwd inside the kit tree a bare relative token would
+# resolve under the kit and make these assertions pass for the wrong reason.
+proj_bash_deny() {
+  claude_denied "$(bash_json "$PROJ" "$1")"        && ok || bad "claude DENY Bash (cwd=proj): $1"
+  cursor_denied "$(cursor_bash_json "$PROJ" "$1")" && ok || bad "cursor DENY Bash (cwd=proj): $1"
+}
+proj_bash_allow() {
+  claude_denied "$(bash_json "$PROJ" "$1")"        && bad "claude should ALLOW Bash (cwd=proj): $1" || ok
+  cursor_denied "$(cursor_bash_json "$PROJ" "$1")" && bad "cursor should ALLOW Bash (cwd=proj): $1" || ok
+}
+proj_bash_deny "mv $SKILL /tmp/shadow-aside"          # the whole kit tree as a single operand
+proj_bash_deny "rm -rf $SKILL"
+proj_bash_deny "mv $SKILL/core /tmp/core-aside"       # core/ as a DIRECTORY, not core/<file>
+proj_bash_deny "rm -rf $PROJ/.claude/hooks"           # takes the gate, its lib AND the record with it
+proj_bash_deny "rm -rf $PROJ/.cursor/hooks"
+# The lock-tier record: the gate script and the lib beside it were surface while the record the gate's
+# own shadow check depends on was not — editing the gate was DENY+audited, erasing its expectation was
+# ALLOW+silent.
+proj_bash_deny "printf 'degraded\\n' > $PROJ/.claude/hooks/.flaky-kit-expect"
+proj_bash_deny "rm -f $PROJ/.claude/hooks/.flaky-kit-expect"
+assert_claude_edit_deny "$PROJ/.claude/hooks/.flaky-kit-expect" "the out-of-tree lock-tier record"
+assert_cursor_edit_deny "$PROJ/.claude/hooks/.flaky-kit-expect" "the out-of-tree lock-tier record (parity)"
+
+echo "== Directory-operand SCOPE: deliberately bounded, so this is a control, not an omission ==" >&2
+# An ordinary file INSIDE .claude/hooks/ stays editable: those are this pack's other hooks, they are
+# legitimately edited, and the gates' own comments commit to that precision. Only the gate, its lib/,
+# the record, and the DIRECTORY as an operand are surface.
+proj_bash_allow "rm -f $PROJ/.claude/hooks/observe.sh"
+proj_bash_allow "cat $SKILL/core/config.json"          # reads still pass: a mutation verb is required
+
 echo "== Fix 2: SURF_RE stays byte-identical between the two gate scripts (parity) ==" >&2
 CLAUDE_SURF="$(grep -m1 '^SURF_RE=' "$CLAUDE_GATE")"
 CURSOR_SURF="$(grep -m1 '^SURF_RE=' "$CURSOR_GATE")"
 [ -n "$CLAUDE_SURF" ] && [ "$CLAUDE_SURF" = "$CURSOR_SURF" ] && ok || bad "SURF_RE identical across both gate scripts"
+
+echo "== SURF DRIFT: the bash-ERE fallback and shell-guard.py's SURF must classify the same paths ==" >&2
+# There are two surface patterns in two languages, "kept in sync" by comment only — and the review that
+# produced this round found the directory-operand gap present in BOTH plus match_surface, which is how a
+# three-way hand-sync fails. Compare decisions instead of trusting the comment: for an absolute path,
+# `rm -f <path>` always satisfies MUT_RE, so the bash fallback's verdict reduces to its SURF_RE, and
+# shell-guard.py's verdict to its SURF. Any disagreement is drift.
+SURF_RE_VAL="$(sed -n "s/^SURF_RE='\(.*\)'\$/\1/p" "$CLAUDE_GATE")"
+[ -n "$SURF_RE_VAL" ] && ok || bad "could not extract SURF_RE from the gate for the drift check"
+DRIFT=0
+for p in "$SKILL/core/config.json" "$SKILL/SKILL.md" "$SKILL" "$SKILL/core" \
+         "$PROJ/.claude/hooks/flaky-kit-self-protection-gate.sh" "$PROJ/.claude/hooks/.flaky-kit-expect" \
+         "$PROJ/.claude/hooks/lib/audit.sh" "$PROJ/.cursor/hooks/lib/audit.sh" \
+         "$PROJ/.cursor/hooks/flaky-kit-self-protection-gate.sh" \
+         "$PROJ/.claude/hooks" "$PROJ/.cursor/hooks" \
+         "$PROJ/.claude/hooks/observe.sh" "$PROJ/.claude/settings.json" "$PROJ/README.md" "/tmp/elsewhere"
+do
+  if printf '%s' "rm -f $p" | grep -qE "$SURF_RE_VAL"; then B=surface; else B=other; fi
+  if printf '%s' "rm -f $p" | HEKTOR_FK_CWD="$PROJ" python3 "$SKILL/core/shell-guard.py" >/dev/null 2>&1; then G=surface; else G=other; fi
+  [ "$B" = "$G" ] || { DRIFT=1; echo "   DRIFT: $p -> bash=$B python=$G" >&2; }
+done
+[ "$DRIFT" -eq 0 ] && ok || bad "the gates' bash SURF_RE and core/shell-guard.py's SURF disagree about at least one path — the two hand-synced patterns have drifted"
+
+echo "== Claim sweep: the retracted overclaims must not come back in new wording ==" >&2
+# The branch's governing rule is that a claim the mechanism does not deliver is a defect equal to a
+# broken mechanism — and these four claims came back, reworded, in four consecutive rounds. Guard the
+# exact phrases the way integrity-test.sh guards the retired INTEGRITY_FAKE_UID identifier. A hit is
+# tolerated only on a line that marks itself as a retraction, a historical quote, or an assertion ABOUT
+# the phrase; anything else is the claim being made again. `claim_free` is in the exclusion set because
+# the argument list below would otherwise match itself.
+#
+# Two honest limits: the sweep covers the KIT tree only, not docs/superpowers/{plans,specs} (those are
+# swept by hand at review time), and a phrase re-introduced with different line wrapping would slip past
+# a per-line fixed-string grep. It is a regression tripwire for the recurrence pattern actually
+# observed — the same sentence reappearing verbatim in a new file — not a proof of absence.
+claim_free() {
+  local hits n
+  hits="$(grep -rn -F "$1" --include='*.md' --include='*.mdc' --include='*.sh' --include='*.py' "$KITSRC" 2>/dev/null \
+          | grep -v -E 'retract|AMENDED|withdrawn|corrected|must not|bad "|claim_free|earlier|stale|no longer|used to')"
+  n="$(printf '%s' "$hits" | grep -c '[^[:space:]]')"
+  [ "$n" -eq 0 ] && ok \
+    || bad "a retracted claim is being asserted again: \"$1\" — $n line(s): $(printf '%s' "$hits" | head -1)"
+}
+claim_free 'the gate is a real wall'
+claim_free 'gates are real walls'
+claim_free 'gate itself walls'
+claim_free 'optional real wall'
+claim_free 'keyed to human consent'
+claim_free 'THIS is human consent'
+claim_free 'the privileged path cannot be automated'
 
 echo "== Fix 3: HEKTOR_FK_CWD-absent degrades observably, not silently ==" >&2
 SG="$SKILL/core/shell-guard.py"
@@ -168,6 +251,18 @@ printf '%s' "$ABS_CMD" | HEKTOR_FK_SURFACE="$SKILL/core" HEKTOR_FK_CWD="$SKILL" 
 [ "$RC_CWD" -eq 0 ]   && ok || bad "deny floor unaffected: absolute surface ref still DENYs with HEKTOR_FK_CWD present (rc=$RC_CWD)"
 grep -q "cwd unavailable" "$ERR_NOCWD" && ok || bad "stderr note printed when HEKTOR_FK_CWD is absent"
 grep -q "cwd unavailable" "$ERR_CWD"   && bad "no stderr note expected when HEKTOR_FK_CWD IS set" || ok
+
+echo "== HEKTOR_FK_SURFACE must be ADDITIVE: it used to REPLACE the surface pattern wholesale, so one" >&2
+echo "   environment variable disabled the primary Bash decision path outright ==" >&2
+printf '%s' "$ABS_CMD" | HEKTOR_FK_SURFACE=/definitely/nowhere python3 "$SG" >/dev/null 2>&1
+[ "$?" -eq 0 ] && ok || bad "a bogus HEKTOR_FK_SURFACE must not turn a verified DENY into an ALLOW — same class as the INTEGRITY_FAKE_UID back door, whose ruling was remove, not fence"
+# ...and it must still ADD a root, which is the seam's legitimate purpose (a kit installed anywhere
+# protects itself). The unset case below proves the added-root assertion is not vacuous.
+OUTSIDE_CMD="sed -i '' $WORK/elsewhere/kit/core/config.json"
+printf '%s' "$OUTSIDE_CMD" | HEKTOR_FK_SURFACE="$WORK/elsewhere/kit" python3 "$SG" >/dev/null 2>&1
+[ "$?" -eq 0 ] && ok || bad "HEKTOR_FK_SURFACE must still ADD a root — a kit installed outside .claude/skills/ has to be able to protect itself"
+printf '%s' "$OUTSIDE_CMD" | python3 "$SG" >/dev/null 2>&1
+[ "$?" -eq 1 ] && ok || bad "without the override that out-of-tree path must NOT be surface (otherwise the additive assertion above proves nothing)"
 
 echo "== Locked-kit operation intact (Round2 lock-kit.sh, unaffected by this round) ==" >&2
 # HEKTOR_FK_NO_SUDO=1 forces the degraded (chmod-only) tier: this fixture is a /tmp throwaway that
@@ -240,6 +335,36 @@ echo "== Task 6: out-of-tree shadow detection (the expectation lives OUTSIDE the
 # record (.claude/hooks/.flaky-kit-expect) regardless of which harness reads it, so a dual-harness
 # install must have BOTH gates notice the same shadowed tree, not just the Claude one. ---
 printf 'hardened\n' > "$PROJ/.claude/hooks/.flaky-kit-expect"
+
+echo "== Shadow case A: rename-and-REPLACE — the case the warning's own text describes ==" >&2
+# The detector's first version fired only when core/ was ABSENT, so this — move the tree aside and drop
+# a tree this account controls in its place — was completely silent, while FIVE places (spec §4,
+# core/lock-kit.sh, kernel.md's P4 row, and both gates' comments) asserted the detection as fact.
+# Ownership is the signal that cannot be forged without the password the hardened tier is built on: a
+# replacement cannot be root-owned. Also remove the replacement's .lock-state, so nothing in-tree hints
+# at what happened — an in-tree check cannot tell this from a fresh install, which is the whole reason
+# the record and this detector live outside the tree.
+mv "$SKILL" "$WORK/shadowed-kit"
+cp -R "$WORK/shadowed-kit" "$SKILL"
+rm -f "$SKILL/core/.lock-state"
+REPL_JSON='{"tool_name":"Bash","cwd":"%s","tool_input":{"command":"echo hi"}}'
+OUT="$(printf "$REPL_JSON" "$PROJ" | "$CLAUDE_GATE" 2>&1)"
+case "$OUT" in *SHADOW*) ok ;; *) bad "claude gate must warn when the recorded tier is hardened but the tree at the expected path is NOT root-owned — a rename-and-replace, got: $OUT" ;; esac
+CURSOR_OUT="$(printf '{"command":"echo hi","cwd":"%s"}' "$PROJ" | "$CURSOR_GATE" 2>&1)"
+case "$CURSOR_OUT" in *SHADOW*) ok ;; *) bad "cursor gate must warn on the same rename-and-replace, got: $CURSOR_OUT" ;; esac
+
+echo "== Shadow control: a legitimate maintenance window must NOT trip it (unlock refreshes the record) ==" >&2
+# Testing PROTECTION rather than PRESENCE only works because `unlock` writes `unlocked` to the record
+# (core/lock-kit.sh's write_expect). Without that, every open maintenance window would look exactly
+# like a shadowed kit and the warning would cry wolf on the normal path.
+printf 'unlocked\n' > "$PROJ/.claude/hooks/.flaky-kit-expect"
+OUT="$(printf "$REPL_JSON" "$PROJ" | "$CLAUDE_GATE" 2>&1)"
+case "$OUT" in *SHADOW*) bad "claude gate must stay silent while the record says 'unlocked' — a maintenance window is not a shadow" ;; *) ok ;; esac
+CURSOR_OUT="$(printf '{"command":"echo hi","cwd":"%s"}' "$PROJ" | "$CURSOR_GATE" 2>&1)"
+case "$CURSOR_OUT" in *SHADOW*) bad "cursor gate must stay silent while the record says 'unlocked'" ;; *) ok ;; esac
+printf 'hardened\n' > "$PROJ/.claude/hooks/.flaky-kit-expect"
+
+echo "== Shadow case B: renamed aside with NOTHING in its place ==" >&2
 rm -rf "$SKILL"                                   # simulate the kit dir being renamed away
 OUT="$(printf '{"tool_name":"Bash","cwd":"%s","tool_input":{"command":"echo hi"}}' "$PROJ" \
        | "$PROJ/.claude/hooks/flaky-kit-self-protection-gate.sh" 2>&1)"
