@@ -611,12 +611,16 @@ Expected: FAIL — `integrity_guard: command not found`
 #
 # Split out from integrity_guard so the messaging/decision half is a PURE function of the tier
 # string and can be driven directly by the test suite. An earlier draft kept them fused and let the
-# tests inject a fake uid through an INTEGRITY_FAKE_UID environment override — which handed anyone
-# able to set an env var a silent bypass of this very check: `INTEGRITY_FAKE_UID=0` turned a
-# `mismatch` tree into `hardened` and the guard returned 0 without printing a word. A one-variable
-# skeleton key to a control whose entire premise is that bypassing costs a password is not a test
-# seam, it is a hole. The seam now runs through the function boundary instead of through the
-# environment, so nothing in production reads an override at all.
+# tests inject a fake owner uid through an environment override — which handed anyone able to set a
+# variable a silent bypass of this very check: forcing the uid to 0 turned a `mismatch` tree into
+# `hardened` and the guard returned 0 without printing a word. A one-variable skeleton key to a
+# control whose entire premise is that bypassing costs a password is not a test seam, it is a hole.
+# The seam now runs through the function boundary instead of through the environment, so nothing in
+# production reads an override at all.
+#
+# NOTE for whoever edits this comment: do not name the retired variable here. The test suite greps
+# this whole file for that identifier to prove it never comes back, so writing it in a comment
+# fails the suite against its own documentation. (Reproduced during implementation: 33/1.)
 integrity_report() {
   local tier="${1:-}"
   case "$tier" in
