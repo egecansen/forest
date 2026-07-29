@@ -44,6 +44,18 @@ SKILL_DIR="$PROJ/$KIT"
 # --- engine + skill: the canonical home for EVERY harness (the gate's surface + the AGENTS.md/rule
 #     pointers all reference this path; the engine runs from here in any terminal). Always installed. ---
 mkdir -p "$SKILL_DIR/core"
+
+# Refuse to overwrite a hardened install. cp -R would hit EACCES on every root-owned file and bury
+# the real message under a wall of errors — and that EACCES is the protection working, not a bug.
+if [ -f "$SKILL_DIR/core/.lock-state" ] \
+   && grep -q '"tier"[[:space:]]*:[[:space:]]*"hardened"' "$SKILL_DIR/core/.lock-state" 2>/dev/null; then
+  echo "install: this project already has a HARDENED flaky-triage kit at $SKILL_DIR." >&2
+  echo "install: refusing to overwrite it. To upgrade, unlock first:" >&2
+  echo "install:   HEKTOR_FLAKYKIT_UNLOCK=1 $SKILL_DIR/core/lock-kit.sh unlock" >&2
+  echo "install: then re-run this installer, and re-lock afterwards with 'core/lock-kit.sh lock'." >&2
+  exit 75
+fi
+
 cp -R "$HERE/core/." "$SKILL_DIR/core/"
 cp "$HERE/adapters/claude/SKILL.md" "$SKILL_DIR/SKILL.md"
 chmod +x "$SKILL_DIR"/core/*.sh "$SKILL_DIR"/core/*.py 2>/dev/null || true
@@ -176,3 +188,6 @@ next:
   3) read    $KIT/SKILL.md   and   $KIT/core/README.md
 restart Claude Code / Cursor so the new hooks load. The engine works from any terminal immediately.
 EOF
+echo "install: then HARDEN the kit so its safety surface cannot be edited from agent context:" >&2
+echo "install:   $SKILL_DIR/core/lock-kit.sh lock          # asks for your password (chowns core/ to root)" >&2
+echo "install: without it the kit runs at the DEGRADED tier — read-only, but reversible by this same user." >&2
