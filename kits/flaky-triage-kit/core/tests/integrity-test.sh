@@ -28,5 +28,34 @@ is 0 "" stale
 is 501 banana degraded
 is 0 banana stale
 
+# --- the two readers: platform-branched stat and jq-less JSON scraping are the parts most likely
+# --- to differ across environments, so they get real filesystem fixtures rather than trust.
+# --- Representative uid pair: 0 (root), 501 (typical macOS user; Linux uses 1000+).
+RT="$(mktemp -d)"; trap 'rm -rf "$RT"' EXIT
+mkdir -p "$RT/core"; printf 'x\n' > "$RT/core/probe"
+
+# integrity_owner_uid
+[ -z "$(integrity_owner_uid /nonexistent-path-xyz)" ] && ok || bad "owner_uid on a missing path must print nothing"
+integrity_owner_uid /nonexistent-path-xyz >/dev/null; [ $? -eq 0 ] && ok || bad "owner_uid on a missing path must return 0"
+[ -z "$(integrity_owner_uid)" ] && ok || bad "owner_uid with no argument must print nothing, not error"
+[ "$(integrity_owner_uid "$RT/core/probe")" = "$(id -u)" ] && ok || bad "owner_uid must report the real owner of an existing file"
+# THE wedge case: stat unavailable must not abort a `set -e` caller (this is why return 0 is explicit)
+( set -euo pipefail; . "$HERE/../_integrity.sh"; PATH=/nonexistent-bin integrity_owner_uid /tmp >/dev/null ) 2>/dev/null \
+  && ok || bad "owner_uid must not abort a set -e caller when stat is unavailable"
+
+# integrity_state
+[ -z "$(integrity_state "$RT")" ] && ok || bad "state with no .lock-state must print nothing"
+integrity_state "$RT" >/dev/null; [ $? -eq 0 ] && ok || bad "state with no .lock-state must return 0"
+[ -z "$(integrity_state)" ] && ok || bad "state with no argument must print nothing, not error"
+printf '{"tier":"hardened","at":"2026-07-29T00:00:00Z"}\n' > "$RT/core/.lock-state"
+[ "$(integrity_state "$RT")" = hardened ] && ok || bad "state must read the tier the writer emits"
+printf '{"at":"x","note":"no tier here"}\n' > "$RT/core/.lock-state"
+[ -z "$(integrity_state "$RT")" ] && ok || bad "state must print nothing when no tier key is present"
+# Ambiguity: two tier keys must resolve the SAME way regardless of line wrapping — first wins.
+printf '{"history":[{"tier":"unlocked"},{"tier":"hardened"}]}\n' > "$RT/core/.lock-state"
+[ "$(integrity_state "$RT")" = unlocked ] && ok || bad "two tier keys on ONE line must resolve first-wins"
+printf '{"history":[{"tier":"unlocked"},\n{"tier":"hardened"}]}\n' > "$RT/core/.lock-state"
+[ "$(integrity_state "$RT")" = unlocked ] && ok || bad "two tier keys across TWO lines must resolve first-wins, same as one line"
+
 echo "integrity-test: $pass passed, $fail failed"
 [ "$fail" -eq 0 ]

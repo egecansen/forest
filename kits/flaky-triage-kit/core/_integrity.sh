@@ -18,19 +18,31 @@
 
 # integrity_owner_uid <path> -> numeric uid, or empty. BSD and GNU stat take different flags.
 integrity_owner_uid() {
-  local p="$1"
-  [ -e "$p" ] || return 0
+  local p="${1:-}"
+  [ -n "$p" ] && [ -e "$p" ] || return 0
   case "$(uname -s 2>/dev/null)" in
     Darwin|*BSD) stat -f %u "$p" 2>/dev/null ;;
     *)           stat -c %u "$p" 2>/dev/null ;;
   esac
+  # Explicit, NOT decorative: without it the function exits with `stat`'s status, so a missing or
+  # failing stat returns non-zero and aborts any caller running under `set -e` — the exact
+  # "never wedge a caller" violation this file's header promises not to commit.
+  return 0
 }
 
 # integrity_state <kit_root> -> the recorded tier, or empty when absent/unreadable.
 integrity_state() {
-  local f="$1/core/.lock-state"
-  [ -r "$f" ] || return 0
-  sed -n 's/.*"tier"[[:space:]]*:[[:space:]]*"\([a-z]*\)".*/\1/p' "$f" 2>/dev/null | head -1
+  local f="${1:-}/core/.lock-state"
+  [ -n "${1:-}" ] && [ -r "$f" ] || return 0
+  # `[^}]*` before the key, not `.*`: a greedy `.*` walks past the FIRST "tier" to the last one on
+  # the line, so a state file carrying two tier keys resolves to last-wins on one line and
+  # first-wins when the same content is split across lines (head -1). Anchoring the prefix with
+  # `[^}]*` (non-brace characters) makes it stop at object boundaries, ensuring the first "tier"
+  # key (typically in the first nested object) is matched in both layouts. The legitimate writer
+  # (Task 3) emits exactly one flat {"tier":...,"at":...}; this is about not being ambiguous when
+  # handed something else.
+  sed -n 's/^[^}]*"tier"[[:space:]]*:[[:space:]]*"\([a-z]*\)".*/\1/p' "$f" 2>/dev/null | head -1
+  return 0
 }
 
 # integrity_tier <owner_uid> <recorded_tier> -> hardened|unlocked|degraded|mismatch|stale
