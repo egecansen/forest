@@ -274,6 +274,9 @@ async function doAction(act, ds) {
   if (act === 'open-cursor') { await api('/api/open', { path, target: 'cursor' }); return; }
   if (act === 'repair') {
     const r = await api('/api/worktree/repair', { path });
+    // Pre-branch worktrees have no provision record to replay — repair can only
+    // guess, so hand the user to the picker instead of a dead-end toast.
+    if (r && r.error === 'no provision record') { openPicker(path); return; }
     if (!r || r.error || !r.scope) { toast(`Repair failed: ${(r && r.error) || 'server unreachable'} — open the picker and re-provision`); return; }
     toast(`Repaired · ${r.scope.active} hooks active, ${r.scope.missing} missing`);
     return;
@@ -351,7 +354,7 @@ async function submitFinish() {
   if (r.error) { toast(`Error: ${r.error}`); return; }
   if (state.mode === 'guided') { toast('Finish sequence sent to terminal'); return; }
   if (r.conflict) { toast('Merge conflict — resolve in your IDE, then press Finish again'); return; }
-  toast(`Landed ${r.targetBranch}${r.removed ? ', worktree removed' : ''}${r.stashConflict ? ' — stash pop conflicted, stash kept' : ''}`);
+  toast(`Landed ${r.targetBranch}${r.removed ? ', worktree removed' : ''}${r.stashConflict ? ' — stash pop conflicted, stash kept' : ''}${r.removeError ? ` — worktree remove failed: ${r.removeError}` : ''}${r.removeSkipped ? ` — worktree kept: ${r.removeSkipped}` : ''}`);
 }
 
 function openNewWorktree(repoPath) {
@@ -482,7 +485,7 @@ async function startSession() {
   btn.disabled = true;
   const r = await api('/api/launch', { path, selections, mode: state.mode });
   btn.disabled = false;
-  if (!r || (!r.ok && r.error)) { toast(`Launch failed: ${(r && r.error) || 'server unreachable'}`); return; }
+  if (!r || !r.ok) { toast(`Launch failed: ${(r && r.error) || 'server unreachable'}`); return; }
   closePicker();
   const prov = r.provisioned;
   const provMsg = prov && (prov.skills.length || prov.kits.length || prov.hooks)
