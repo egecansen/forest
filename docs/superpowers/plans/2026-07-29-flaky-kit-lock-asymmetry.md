@@ -143,7 +143,9 @@ Create `core/tests/integrity-test.sh`:
 ```bash
 #!/bin/bash
 # Test suite for core/_integrity.sh. Plain bash asserts, no framework.
-# The privileged path (real chown to root) cannot be automated — it needs a password. So the tier
+# The REAL chown-to-root cannot be automated — it needs a password. But the hardened LOGIC can be:
+# a PATH-shimmed `sudo` drives the whole branch as an unprivileged user (see the shim block below).
+# Only actual root ownership is deferred to the manual checklist. The tier
 # DECISION is a pure function of (owner uid, recorded tier) and is driven here with synthetic
 # inputs, exactly as core/tests/rerun-test.sh drives aggregate() via RERUN_LIB_ONLY.
 set -uo pipefail
@@ -347,6 +349,49 @@ HEKTOR_FLAKYKIT_UNLOCK=1 HEKTOR_FK_NO_SUDO=1 "$KIT/core/lock-kit.sh" unlock >/de
 [ -w "$KIT/core/config.json" ] && ok || bad "unlock with the intent marker must restore writability"
 grep -q '"tier"[[:space:]]*:[[:space:]]*"unlocked"' "$KIT/core/.lock-state" && ok || bad "state must record unlocked"
 
+# --- the HARDENED branch, driven WITHOUT root via a PATH-shimmed sudo -------------
+# An earlier draft of this plan asserted the hardened path could not be tested because it needs a
+# password. That is false, and leaving harden_targets() — the function that decides what becomes
+# root-owned — with zero coverage is how its first version shipped a two-command bypass. A shim
+# that logs its arguments, no-ops `chown`, and execs everything else drives the whole branch as an
+# unprivileged user: it cannot prove root ownership, but it pins the call SEQUENCE, the target
+# SET, and the counters, which is where the defects actually live.
+SHIM="$TMP/bin"; mkdir -p "$SHIM"
+cat > "$SHIM/sudo" <<'SH'
+#!/bin/bash
+echo "$@" >> "$SUDO_LOG"
+case "$1" in chown) exit 0 ;; *) exec "$@" ;; esac
+SH
+chmod +x "$SHIM/sudo"
+export SUDO_LOG="$TMP/sudo.log"; : > "$SUDO_LOG"
+KIT2="$TMP/kit2"; mkdir -p "$KIT2/core" "$KIT2/hooks"
+cp "$LOCK" "$KIT2/core/lock-kit.sh"; cp "$HERE/../_integrity.sh" "$KIT2/core/_integrity.sh"
+printf '{}\n' > "$KIT2/core/config.json"; printf 'x\n' > "$KIT2/SKILL.md"
+printf 'x\n' > "$KIT2/hooks/flaky-kit-self-protection-gate.sh"; chmod +x "$KIT2/core/lock-kit.sh"
+HOUT="$(PATH="$SHIM:$PATH" "$KIT2/core/lock-kit.sh" lock 2>&1)"
+
+case "$HOUT" in *HARDENED*) ok ;; *) bad "with sudo available the lock must reach the hardened tier" ;; esac
+case "$HOUT" in *"0 files"*) bad "hardened counters must not report 0 — priv_chmod must escalate too" ;; *) ok ;; esac
+grep -q "chown -R root" "$SUDO_LOG" && ok || bad "hardened lock must chown the surface to root"
+# THE regression guard for the two-command bypass: the kit ROOT must be a chown target, not just core/.
+grep -qE "chown -R root .*(^| )$KIT2( |$)" "$SUDO_LOG" && ok \
+  || bad "the kit root itself must be chowned — otherwise chmod u+w \$KIT + mv core aside bypasses the wall with no password"
+grep -q "$KIT2/hooks" "$SUDO_LOG" && ok || bad "hooks/ is on the surface and must be chowned"
+grep -q "$KIT2/SKILL.md" "$SUDO_LOG" && ok || bad "SKILL.md is on the surface and must be chowned"
+# Ordering: the state write must come BEFORE the write bits are stripped.
+[ "$(grep -n 'tee' "$SUDO_LOG" | head -1 | cut -d: -f1)" -lt "$(grep -n 'chmod' "$SUDO_LOG" | head -1 | cut -d: -f1)" ] \
+  && ok || bad "state must be written before the chmod sweep, or it lands in a read-only directory"
+case "$HOUT" in *"renamed aside"*) ok ;; *) bad "the hardened message must state the parent-rename residual instead of claiming an absolute" ;; esac
+
+# The no-invoking-user refusal (exit 78) is reachable with an `id` stub — it is not dead code.
+cat > "$SHIM/id" <<'SH'
+#!/bin/bash
+[ "$1" = "-un" ] && { echo root; exit 0; }; exec /usr/bin/id "$@"
+SH
+chmod +x "$SHIM/id"
+HEKTOR_FLAKYKIT_UNLOCK=1 PATH="$SHIM:$PATH" HEKTOR_FK_NO_SUDO=1 "$KIT2/core/lock-kit.sh" unlock >/dev/null 2>&1
+[ "$?" -eq 78 ] && ok || bad "unlock must refuse with 78 when there is no invoking user to hand ownership back to"
+
 echo "lock-tier-test: $pass passed, $fail failed"
 [ "$fail" -eq 0 ]
 ```
@@ -389,14 +434,32 @@ belong to root or the wall has holes in it:
 # so a rename of the kit dir cannot take it along — which is exactly why it is listed separately.
 harden_targets() {
   printf '%s\n' "$KIT/core"
+  [ -d "$KIT/hooks" ] && printf '%s\n' "$KIT/hooks"
   [ -f "$KIT/SKILL.md" ] && printf '%s\n' "$KIT/SKILL.md"
-  local g; g="$(git -C "$KIT" rev-parse --show-toplevel 2>/dev/null)/.claude/hooks/flaky-kit-self-protection-gate.sh"
-  [ -f "$g" ] && printf '%s\n' "$g"
+  local root; root="$(git -C "$KIT" rev-parse --show-toplevel 2>/dev/null)"
+  if [ -n "$root" ] && [ -f "$root/.claude/hooks/flaky-kit-self-protection-gate.sh" ]; then
+    printf '%s\n' "$root/.claude/hooks/flaky-kit-self-protection-gate.sh"
+  fi
+  # $KIT LAST and non-recursively-meaningful: it is listed so the kit ROOT DIRECTORY itself changes
+  # owner. This is load-bearing, not tidiness. `rename()` is governed by the write+execute bits of
+  # the PARENT directory, never by the target's own bits or ownership — so with $KIT owned by the
+  # invoking user, `chmod u+w "$KIT"` (which succeeds, because that user owns it) followed by
+  # `mv "$KIT/core" "$KIT/core.bak" && mkdir "$KIT/core"` swaps in an attacker-controlled core/
+  # without touching one root-owned file and without a password. Chowning only core/ therefore
+  # reduces the hardened tier to a two-command bypass. Root-owning $KIT closes it.
+  #
+  # What this still does NOT close, and the HARDENED message must not claim it does: $KIT's own
+  # parent (.claude/skills/) has to stay user-owned, because every other skill installs there — so
+  # $KIT itself can be renamed aside by the same trick one level up. That residual is the design's
+  # accepted one and is what the relocated gate's out-of-tree expectation detects (Task 6).
+  printf '%s\n' "$KIT"
   return 0
 }
 # In the hardened tier the surface belongs to root, so THIS user's chmod would fail — run it with
 # the same privilege that did the chown, or the counters below report 0 and the summary line lies.
-priv_chmod() { if [ "$TIER" = hardened ]; then sudo chmod "$@"; else chmod "$@"; fi; }
+# Tier is passed in, not read from a global: under `set -u` a global $TIER is unbound in the unlock
+# and status branches, so a future call site there would abort on an undefined variable.
+priv_chmod() { local t="$1"; shift; if [ "$t" = hardened ]; then sudo chmod "$@"; else chmod "$@"; fi; }
 ```
 
 Then replace the `lock)` branch body with the following. **Order matters and is easy to get wrong:**
@@ -406,30 +469,40 @@ at all — so the hardened path writes it through `sudo tee`.
 
 ```bash
     # 1. Escalate FIRST so we know which tier we actually achieved.
+    #    The tier is derived from the OBSERVED filesystem, never from chown's exit code. `chown -R`
+    #    over several targets exits non-zero if ANY of them failed but does not roll back the ones
+    #    that succeeded, so a half-success would otherwise leave TIER=degraded while core/ is
+    #    already root-owned — and every message and state write below would then be false.
+    #    stderr is captured, not discarded: a mistyped password, an aborted prompt and a
+    #    not-in-sudoers user all produce the same silent non-zero, and reporting all three as
+    #    "sudo unavailable" is exactly the dishonest degradation this kit exists to stop.
     TIER=degraded
     if have_sudo; then
-      targets="$(harden_targets)"
-      # One sudo call for the whole surface: credentials are cached after it, so the chmods below
-      # do not re-prompt, and the user types their password exactly once.
-      printf '%s\n' "$targets" | tr '\n' '\0' | xargs -0 sudo chown -R root 2>/dev/null && TIER=hardened
+      sudo_err="$(harden_targets | tr '\n' '\0' | xargs -0 sudo chown -R root 2>&1 >/dev/null)"
+      [ "$(integrity_owner_uid "$KIT/core")" = "0" ] && TIER=hardened
+    fi
+    if [ "$TIER" != hardened ] && [ -n "${sudo_err:-}" ]; then
+      echo "lock-kit: escalation failed — sudo said: $sudo_err" >&2
     fi
     # 2. Record the tier while the directory is still writable by SOMEONE.
     if [ "$TIER" = hardened ]; then
       printf '{"tier":"hardened","at":"%s"}\n' "$(date -u +%FT%TZ 2>/dev/null || echo '?')" \
         | sudo tee "$STATE" >/dev/null
     else
-      write_state degraded
+      write_state degraded \
+        || echo "lock-kit: WARNING could not record the tier in $STATE — 'status' will report from ownership alone" >&2
     fi
     # 3. Only now remove the write bits — files first, then dirs.
-    n=0; while IFS= read -r f; do priv_chmod a-w "$f" 2>/dev/null && n=$((n+1)); done < <(surface_files)
-    d=0; while IFS= read -r p; do priv_chmod a-w "$p" 2>/dev/null && d=$((d+1)); done < <(surface_dirs)
+    n=0; while IFS= read -r f; do priv_chmod "$TIER" a-w "$f" 2>/dev/null && n=$((n+1)); done < <(surface_files)
+    d=0; while IFS= read -r p; do priv_chmod "$TIER" a-w "$p" 2>/dev/null && d=$((d+1)); done < <(surface_dirs)
     if [ "$TIER" = hardened ]; then
-      echo "lock-kit: HARDENED $n files + $d dirs — the safety surface is owned by root. Reopening needs a password; no in-process write path can reverse it." >&2
+      echo "lock-kit: HARDENED $n files + $d dirs — the safety surface, including the kit root, is owned by root. Reopening needs a password; no write path inside this kit can reverse it." >&2
+      echo "lock-kit: residual (by design, not a gap): the kit DIRECTORY can still be renamed aside via its own parent, which must stay user-owned so other skills can install there. That is detected, not prevented — see the gate's out-of-tree expectation." >&2
       echo "lock-kit: to edit, run:  HEKTOR_FLAKYKIT_UNLOCK=1 $0 unlock" >&2
     else
       echo "lock-kit: DEGRADED — locked $n files + $d dirs read-only, but the surface is still owned by $ME." >&2
       echo "lock-kit: that means the SAME user (and therefore an agent running as them) can chmod it back." >&2
-      echo "lock-kit: for the real wall, re-run on a machine where sudo is available." >&2
+      echo "lock-kit: for the real wall, re-run where sudo is available and the escalation is accepted." >&2
     fi ;;
 ```
 
@@ -463,7 +536,7 @@ Append to the `status)` branch, after its two existing loops:
 - [ ] **Step 4: Run the test**
 
 Run: `bash core/tests/lock-tier-test.sh`
-Expected: PASS, 9 passed 0 failed
+Expected: PASS, 19 passed 0 failed
 
 - [ ] **Step 5: Confirm the whole suite is still green**
 
