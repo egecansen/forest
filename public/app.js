@@ -98,7 +98,10 @@ function render() {
     const shown = r.worktrees.filter((w) => matches(w, r.repo));
     const rows = shown.map((w) => rowHtml(w, r.repo)).join('');
     if (!rows) return '';
-    return `<div class="repo-group"><div class="repo-name"><span class="repo-name-label">${esc(r.repo)}<span class="repo-count">${shown.length}</span></span><button class="repo-add" data-repo="${esc(r.repoPath)}" title="New worktree in ${esc(r.repo)}">+ worktree</button></div>${rows}</div>`;
+    const removeBtn = r.listed
+      ? `<button class="repo-unlist" data-act="unlist-repo" data-path="${encodeURIComponent(r.repoPath)}" title="Remove ${esc(r.repo)} from the list (nothing on disk is deleted)">✕</button>`
+      : '';
+    return `<div class="repo-group"><div class="repo-name"><span class="repo-name-label">${esc(r.repo)}<span class="repo-count">${shown.length}</span></span><button class="repo-add" data-repo="${esc(r.repoPath)}" title="New worktree in ${esc(r.repo)}">+ worktree</button>${removeBtn}</div>${rows}</div>`;
   }).join('');
   $('#table').innerHTML = html || '<p class="empty">No worktrees match.</p>';
   renderReadout();
@@ -295,6 +298,13 @@ async function doAction(act, ds) {
     return;
   }
   if (act === 'finish') { openFinish(path); return; }
+  if (act === 'unlist-repo') {
+    if (!confirm(`Remove ${path} from forest's list?\n\nNothing on disk is deleted — the repo, its worktrees and its .claude/ stay exactly as they are.`)) return;
+    const r = await api('/api/repos/remove', { path });
+    if (!r || !r.ok) { toast(`Remove failed: ${(r && r.error) || 'server unreachable'}`); return; }
+    toast(`Removed ${path} from the list`);
+    return;
+  }
 }
 
 // Shared remove flow — used by the row prune button and the drawer.
@@ -495,6 +505,19 @@ async function startSession() {
   else toast(r.action === 'focused' ? 'Claude already running — Terminal brought to front' : `${provMsg}Launching Claude…`);
 }
 
+async function addRepoFromForm() {
+  const input = $('#addrepo-path');
+  const err = $('#addrepo-err');
+  const path = input.value.trim();
+  if (!path) return;
+  err.textContent = '';
+  const r = await api('/api/repos/add', { path });
+  if (!r || !r.ok) { err.textContent = (r && r.error) || 'server unreachable'; return; }
+  input.value = '';
+  $('#addrepo-form').classList.add('hidden');
+  toast(`Added ${path}`);
+}
+
 function wireEvents() {
   $('#mode-toggle').onclick = () => setMode(state.mode === 'auto' ? 'guided' : 'auto');
   $('#theme-toggle').onclick = toggleTheme;
@@ -518,6 +541,13 @@ function wireEvents() {
   });
   $('#search').oninput = (e) => { state.filter = e.target.value; render(); };
   $('#fetch-all').onclick = async () => { const r = await api('/api/fetch-all', { mode: state.mode }); toast(state.mode === 'guided' ? 'Sent to terminal' : 'Fetched all'); };
+  $('#addrepo-toggle').onclick = () => {
+    $('#addrepo-form').classList.toggle('hidden');
+    $('#addrepo-err').textContent = '';
+    $('#addrepo-path').focus();
+  };
+  $('#addrepo-go').onclick = addRepoFromForm;
+  $('#addrepo-path').addEventListener('keydown', (e) => { if (e.key === 'Enter') addRepoFromForm(); });
 
   $('#table').addEventListener('click', (e) => {
     const add = e.target.closest('.repo-add');

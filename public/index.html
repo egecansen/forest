@@ -24,6 +24,12 @@
     <button id="fetch-all" title="git fetch all repos">Fetch all</button>
     <button id="mode-toggle" class="mode-guided" title="Toggle guided / auto">Guided</button>
     <button id="theme-toggle" title="Toggle light / dark">☾</button>
+    <button id="addrepo-toggle" title="Add a repo to the list">+ repo</button>
+    <span id="addrepo-form" class="hidden">
+      <input id="addrepo-path" type="text" placeholder="/absolute/path/to/repo" size="34" />
+      <button id="addrepo-go" class="btn-accent">Add</button>
+      <span id="addrepo-err" class="addrepo-err"></span>
+    </span>
   </header>
 
   <main>
