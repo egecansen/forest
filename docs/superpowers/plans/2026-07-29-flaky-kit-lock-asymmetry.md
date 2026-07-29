@@ -161,8 +161,8 @@ is 0 hardened hardened
 # user-owned, agrees with state
 is 501 unlocked unlocked
 is 501 degraded degraded
-# fresh install: nothing recorded, user-owned -> the normal un-hardened tier
-is 501 "" degraded
+# fresh install: nothing recorded, user-owned -> not merely "degraded", genuinely unprotected
+is 501 "" unprotected
 # THE dangerous direction: recorded hardened, no longer root-owned
 is 501 hardened mismatch
 # stronger than recorded is safe, but the state file is out of date
@@ -170,7 +170,7 @@ is 0 degraded stale
 is 0 unlocked stale
 is 0 "" stale
 # any unknown recorded value is treated as unprotected, never as hardened
-is 501 banana degraded
+is 501 banana unprotected
 is 0 banana stale
 
 # --- the two readers: platform-branched stat and jq-less JSON scraping are the parts most likely
@@ -265,9 +265,18 @@ integrity_state() {
   return 0
 }
 
-# integrity_tier <owner_uid> <recorded_tier> -> hardened|unlocked|degraded|mismatch|stale
+# integrity_tier <owner_uid> <recorded_tier> -> hardened|unlocked|degraded|unprotected|mismatch|stale
 # Ranks protection: root-owned is 2, anything else is 1; a recorded "hardened" expects 2, all else 1.
 # Weaker-than-recorded is the dangerous direction and is the only one that yields `mismatch`.
+#
+# `unprotected` vs `degraded` is a real distinction, not a synonym pair, and collapsing them was a
+# bug: `degraded` means the surface IS read-only (chmod a-w) but this user can chmod it back;
+# `unprotected` means `lock` never ran at all and the files are plainly writable. A fresh install is
+# the second one — verified: no .lock-state, mode -rwxr-xr-x, a write succeeds. While both mapped to
+# `degraded`, every message describing "read-only but reversible" was simply false for the fresh
+# case, and `status` contradicted itself by printing `rw core/apply.sh` directly above
+# `tier: degraded`. Anything unrecognised also lands here: an unreadable record means we do not know,
+# and not-knowing must never read as protected.
 integrity_tier() {
   local owner="${1:-}" recorded="${2:-}" actual=1 expected=1
   [ "$owner" = "0" ] && actual=2
@@ -276,7 +285,7 @@ integrity_tier() {
   if [ "$actual" -gt "$expected" ]; then echo stale; return 0; fi
   case "$recorded" in
     hardened|unlocked|degraded) echo "$recorded" ;;
-    *)                          echo degraded ;;
+    *)                          echo unprotected ;;
   esac
   return 0
 }
@@ -588,10 +597,13 @@ case "$(rep_out unlocked)" in *"maintenance"*) ok ;; *) bad "unlocked must remin
 [ "$(rep_rc unlocked)" = 0 ] && ok || bad "unlocked must not block the run"
 case "$(rep_out degraded)" in *DEGRADED*) ok ;; *) bad "degraded must emit a one-line notice" ;; esac
 [ "$(rep_rc degraded)" = 0 ] && ok || bad "degraded must not block the run"
+case "$(rep_out unprotected)" in *UNPROTECTED*) ok ;; *) bad "unprotected must say lock never ran and the surface is writable" ;; esac
+case "$(rep_out unprotected)" in *"read-only"*) bad "unprotected must NOT describe the surface as read-only — a fresh install is writable" ;; *) ok ;; esac
+[ "$(rep_rc unprotected)" = 0 ] && ok || bad "unprotected must not block the run"
 case "$(rep_out mismatch)" in *MISMATCH*) ok ;; *) bad "mismatch must be loud" ;; esac
 [ "$(rep_rc mismatch)" = 76 ] && ok || bad "mismatch must return 76 so callers refuse"
 # Nothing may reach stdout: four entrypoints emit a machine-read contract there.
-for t in hardened stale unlocked degraded mismatch; do
+for t in hardened stale unlocked degraded unprotected mismatch; do
   [ -z "$(integrity_report "$t" 2>/dev/null)" ] || bad "integrity_report must never write to stdout (tier: $t)"
 done; ok
 # The production path must carry no environment override.
@@ -632,7 +644,10 @@ integrity_report() {
       echo "integrity: the kit is UNLOCKED (maintenance window open) — its safety surface is writable right now. Re-lock when done: core/lock-kit.sh lock" >&2
       return 0 ;;
     degraded)
-      echo "integrity: DEGRADED tier — the surface is read-only but still owned by this user, so this account can reverse it. Harden with: core/lock-kit.sh lock (needs sudo)" >&2
+      echo "integrity: DEGRADED tier — the surface is read-only but still owned by this user, so this account can reverse it with a single chmod. Harden with: core/lock-kit.sh lock (needs sudo)" >&2
+      return 0 ;;
+    unprotected)
+      echo "integrity: UNPROTECTED — lock has never run here, so the safety surface is plainly writable by this user and by any agent running as them. Nothing is enforcing the kit's invariants. Protect it with: core/lock-kit.sh lock (needs sudo)" >&2
       return 0 ;;
     mismatch)
       echo "integrity: MISMATCH — this kit was locked at the hardened tier, but core/ is no longer root-owned." >&2
@@ -659,7 +674,7 @@ The test block in Step 1 drives `integrity_report` directly with tier strings �
 - [ ] **Step 4: Run the test**
 
 Run: `bash core/tests/integrity-test.sh`
-Expected: PASS, 34 passed 0 failed
+Expected: PASS, 37 passed 0 failed
 
 - [ ] **Step 5: Call it from every entrypoint**
 
@@ -967,12 +982,18 @@ bad() { fail=$((fail+1)); echo "FAIL: $1" >&2; }
 
 P="$TMP/proj"; mkdir -p "$P"; git -C "$P" init -q
 OUT="$("$KITSRC/install.sh" --harness claude --project "$P" 2>&1)"
-case "$OUT" in *"lock-kit.sh lock"*) ok ;; *) bad "a fresh install must tell the user how to harden" ;; esac
+# Anchored to the NEW hint's own wording. An earlier draft matched only "lock-kit.sh lock", which a
+# pre-existing closing line already contained — so the assertion passed against an installer with no
+# hint at all. Proven by mutation: with the guard and hint stripped, that version still reported 2/3.
+case "$OUT" in *"WITHOUT that step nothing is protected"*) ok ;; *) bad "a fresh install must say plainly that nothing is protected yet, not just print a command" ;; esac
 
 # now pretend it is hardened and re-run: the installer must stop, not spew cp errors
 printf '{"tier":"hardened","at":"x"}\n' > "$P/.claude/skills/hektor-flaky-triage/core/.lock-state"
 OUT="$("$KITSRC/install.sh" --harness claude --project "$P" 2>&1)"; RC=$?
-case "$OUT" in *"unlock"*) ok ;; *) bad "re-installing over a hardened kit must instruct to unlock first" ;; esac
+# Anchored to the refusal's own wording for the same reason — the old boilerplate also contains
+# "unlock", so matching that alone could not distinguish "guard refused" from "guard absent and the
+# usual closing text printed".
+case "$OUT" in *"refusing to overwrite"*) ok ;; *) bad "re-installing over a hardened kit must print the refusal, not just any text containing 'unlock'" ;; esac
 [ "$RC" -ne 0 ] && ok || bad "re-installing over a hardened kit must exit non-zero"
 
 echo "install-guard-test: $pass passed, $fail failed"
@@ -1006,7 +1027,7 @@ And in the closing message, after the existing "After install: edit …config.js
 ```bash
 echo "install: then HARDEN the kit so its safety surface cannot be edited from agent context:" >&2
 echo "install:   $SKILL_DIR/core/lock-kit.sh lock          # asks for your password (chowns core/ to root)" >&2
-echo "install: without it the kit runs at the DEGRADED tier — read-only, but reversible by this same user." >&2
+echo "install: WITHOUT that step nothing is protected — a fresh install has no lock state and its files stay plainly writable by you, and therefore by any agent running as you. It is not read-only; 'degraded' (read-only but reversible with one chmod) is what you get on a machine where lock ran but sudo was unavailable." >&2
 ```
 
 - [ ] **Step 4: Run the test**
