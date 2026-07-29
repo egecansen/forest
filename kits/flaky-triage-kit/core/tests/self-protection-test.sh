@@ -234,5 +234,13 @@ assert_cursor_bash_allow 'echo ${HOME} && ls /tmp'
 assert_claude_bash_allow 'ls /tmp/{a,b}'
 assert_cursor_bash_allow 'ls /tmp/{a,b}'
 
+echo "== Task 6: out-of-tree shadow detection (the expectation lives OUTSIDE the kit tree) ==" >&2
+# --- shadow detection: the expectation lives OUTSIDE the kit tree ---
+printf 'hardened\n' > "$PROJ/.claude/hooks/.flaky-kit-expect"
+rm -rf "$SKILL"                                   # simulate the kit dir being renamed away
+OUT="$(printf '{"tool_name":"Bash","cwd":"%s","tool_input":{"command":"echo hi"}}' "$PROJ" \
+       | "$PROJ/.claude/hooks/flaky-kit-self-protection-gate.sh" 2>&1)"
+case "$OUT" in *SHADOW*|*"no longer present"*) ok ;; *) bad "gate must notice the kit tree vanished while the expectation says hardened" ;; esac
+
 echo "self-protection-test: $pass passed, $fail failed"
 [ "$fail" -eq 0 ]

@@ -133,6 +133,17 @@ case "$CMD" in
       write_state degraded \
         || echo "lock-kit: WARNING could not record the tier in $STATE — 'status' will report from ownership alone" >&2
     fi
+    # Mirror the tier OUTSIDE the kit tree so a rename of the kit dir can be spotted. Best effort:
+    # a project without a .claude/hooks/ (Cursor-only, or the engine used standalone) is not an error.
+    #
+    # Honest limit, stated plainly so nobody mistakes this for a tamper-proof record: .claude/hooks/
+    # must stay user-writable (the pack installer writes its own hooks there without sudo), so
+    # .flaky-kit-expect is deletable by exactly the same actor who can rename $KIT aside. This does
+    # not close the residual harden_targets() documents above — it converts a silent single `mv`
+    # into a two-step act, and it still catches the common accidental case (a rename/cleanup that
+    # forgets to also scrub the expectation file). Detection, not prevention, and not un-defeatable.
+    EXPECT_DIR="$(git -C "$KIT" rev-parse --show-toplevel 2>/dev/null)/.claude/hooks"
+    [ -d "$EXPECT_DIR" ] && printf '%s\n' "$(integrity_state "$KIT")" > "$EXPECT_DIR/.flaky-kit-expect" 2>/dev/null || true
     # 3. Only now remove the write bits — files first, then dirs.
     n=0; while IFS= read -r f; do priv_chmod "$TIER" a-w "$f" 2>/dev/null && n=$((n+1)); done < <(surface_files)
     d=0; while IFS= read -r p; do priv_chmod "$TIER" a-w "$p" 2>/dev/null && d=$((d+1)); done < <(surface_dirs)

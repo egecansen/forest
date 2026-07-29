@@ -77,6 +77,22 @@ INPUT=$(cat)
 TOOL_NAME=$(echo "$INPUT" | "$JQ" -r '.tool_name // empty' 2>/dev/null || echo "")
 CWD=$(echo "$INPUT" | "$JQ" -r '.cwd // empty' 2>/dev/null || echo "")
 
+# Shadow check: the kit tree can be renamed aside and replaced without touching a single root-owned
+# file, because rename() is governed by the parent directory. We cannot PREVENT that from here — but
+# we hold the expectation OUTSIDE the kit tree, so we can say so out loud.
+#
+# Honest limit: .claude/hooks/.flaky-kit-expect lives in a directory that must stay user-writable
+# (this pack's own installer writes hooks there without sudo), so the SAME actor who can rename the
+# kit tree aside can also delete this file — the record is not tamper-proof. What it still buys: a
+# silent single `mv` becomes a two-step act, and a forgotten/incomplete cleanup (the common
+# accidental case) still gets caught. Detection, not prevention.
+_ROOT="${CLAUDE_PROJECT_DIR:-$CWD}"
+_EXPECT="$_ROOT/.claude/hooks/.flaky-kit-expect"
+if [ -r "$_EXPECT" ] && [ "$(cat "$_EXPECT" 2>/dev/null)" = "hardened" ] \
+   && [ ! -d "$_ROOT/.claude/skills/hektor-flaky-triage/core" ]; then
+  echo "flaky-kit gate: SHADOW WARNING — this project recorded a hardened flaky-triage kit, but the kit tree is no longer present at its expected path. It may have been renamed aside and replaced. Verify before trusting anything the kit reports." >&2
+fi
+
 # Surface = the kit's invariant logic, config, protection hooks, and skill prompt — PLUS both
 # harnesses' self-protection gate scripts and their vendored libs (Round2 re-review: a prior audit
 # found `.cursor/hooks/*` and `.claude/hooks/lib/*` sat OUTSIDE this pattern entirely, so a Claude
