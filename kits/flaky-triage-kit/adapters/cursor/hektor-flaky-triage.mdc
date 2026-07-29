@@ -57,6 +57,8 @@ bury the table under tooling narration · end the session while ledger.sh valida
 ## Self-protection
 The kit guards its own files (`core/`, `hooks/`, `SKILL.md`) from silent self-modification via a Cursor
 `beforeShellExecution` + Write|Edit gate (`.cursor/hooks/flaky-kit-self-protection-gate.sh`). Bypass for
-deliberate maintenance: `HEKTOR_FLAKYKIT_UNLOCK=1`. The OS-level wall is `core/lock-kit.sh lock`.
+deliberate maintenance: `HEKTOR_FLAKYKIT_UNLOCK=1`. Underneath that gate, `core/lock-kit.sh lock` reaches
+an OS-level **hardened** tier (root-owned, password-gated reopen — the real wall) when `sudo` is
+available; without it, it degrades to a chmod-only bit the same user can reverse.
 
 This rule file is local-only and won't appear in any PR.

@@ -5,7 +5,9 @@
 #       Install into a repo and wire EVERY harness (Claude Code + Cursor + AGENTS.md) in one shot, and
 #       auto-detect JDK 17 + source_roots so there is no manual config step. Idempotent.
 #   hektor-triage-kit lock | unlock | status
-#       OS-level self-protection wall for an installed kit (proxies core/lock-kit.sh in the target repo).
+#       OS-level protection tier for an installed kit (proxies core/lock-kit.sh in the target repo):
+#       hardened (root-owned, password-gated reopen — the real wall) when sudo is available, else a
+#       chmod-only degraded tier the same user can reverse. `status` names which tier actually holds.
 #   hektor-triage-kit link [<bindir>]
 #       Symlink this command onto PATH (default ~/.local/bin) so `hektor-triage-kit` works from anywhere.
 #   hektor-triage-kit help
@@ -32,7 +34,7 @@ case "$sub" in
     case ":$PATH:" in *":$BINDIR:"*) ;; *) echo "note: add $BINDIR to PATH to call 'hektor-triage-kit' from anywhere" ;; esac ;;
 
   -h|--help|help)
-    sed -n '2,11p' "${BASH_SOURCE[0]:-$0}" | sed 's/^# \{0,1\}//' ;;
+    sed -n '2,13p' "${BASH_SOURCE[0]:-$0}" | sed 's/^# \{0,1\}//' ;;
 
   *)
     echo "hektor-triage-kit: unknown subcommand '$sub' (try: install | lock | unlock | status | link | help)" >&2

@@ -25,7 +25,8 @@ hektor-triage-kit install --project /path/to/your/repo
 
 `install` auto-configures everything — **no manual config step**: it auto-detects **JDK 17** (writes
 `run.java_home`) and **source_roots** (your `src/test/java`), then wires every harness. Other subcommands:
-`hektor-triage-kit lock|unlock|status` (the OS self-protection wall) and `link` (put it on PATH).
+`hektor-triage-kit lock|unlock|status` (the OS-level protection tier — **hardened** when `sudo` is
+available, chmod-only **degraded** otherwise; see `core/lock-kit.sh`'s header) and `link` (put it on PATH).
 (`./install.sh` still works directly if you prefer.)
 
 `all` wires it **everywhere** in one shot:
@@ -62,9 +63,15 @@ echo '{"file":"…","old":"…","new":"…"}' | "$KIT/apply.sh"   # working-tree
 The kit guards its own `core/` · `SKILL.md` — plus its own protection gate at
 `.claude/hooks/flaky-kit-self-protection-gate.sh` (deliberately installed OUTSIDE this tree so
 renaming the tree can't take the detector with it) — from silent self-modification (a gate that
-denies agent writes there unless `HEKTOR_FLAKYKIT_UNLOCK=1`). The **OS-level wall that holds in every harness**:
+denies agent writes there unless `HEKTOR_FLAKYKIT_UNLOCK=1`). Underneath that gate, `lock-kit.sh`
+reaches for an OS-level tier: **hardened** — `core/**` and the kit root chown'd to root, so
+reopening needs a password — is the wall that holds in every harness, because it's enforced by the
+OS, not by any hook. Without `sudo` it **degrades** to a chmod-only read-only bit the same user (and
+therefore an agent running as them) can reverse — friction, not a wall. `lock-kit.sh status` names
+which tier is actually in effect.
 ```bash
-core/lock-kit.sh lock        # chmod the surface read-only
+core/lock-kit.sh lock        # hardens (chown to root) when sudo is available; degrades to a
+                              # chmod-only read-only bit otherwise
 HEKTOR_FLAKYKIT_UNLOCK=1 core/lock-kit.sh unlock
 ```
 

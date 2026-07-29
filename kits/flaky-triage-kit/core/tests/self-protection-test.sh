@@ -17,8 +17,9 @@
 #     handling for them, so `{ cd core && sed -i '' config.json; }`'s `cd` (mangled to `"{ cd
 #     core"` by the naive splitter) never matched `CD_RE` and the write sailed through.
 # After this round, no further fixes chase shell constructs here — see the honest-framing note
-# in shell-guard.py: this string-analysis gate is best-effort friction, not a hard wall; the
-# real wall is `core/lock-kit.sh lock` (OS read-only, dir-level).
+# in shell-guard.py: this string-analysis gate is best-effort friction, not a hard wall; the real
+# wall, at the hardened tier, is `core/lock-kit.sh lock` chown'ing core/** (dir-level) to root —
+# below hardened it degrades to the same chmod-only friction this gate already is.
 #
 # Plain bash asserts, no framework (mirrors apply-test.sh's style). Runs entirely against /tmp
 # fixtures that mimic install.sh's real on-disk layout for BOTH harnesses, sharing one core/ copy:

@@ -105,7 +105,9 @@ VERB  = re.compile(r'\bsed\s+-i\b|\b(?:tee|cp|mv|rm|chmod|chown|truncate|dd|inst
 REDIR = re.compile(r'>>?')
 # interpreter inline-code (`python3 -c`, `perl -e`, `node -e`, ...) can write a file via open()/print —
 # invisible to verb/redirect matching. Flag conservatively when one touches the surface (read OR write).
-# This is best-effort friction; the airtight wall for ALL writers (incl. compiled programs) is lock-kit.sh.
+# This is best-effort friction; the airtight wall for ALL writers (incl. compiled programs) is
+# lock-kit.sh's hardened tier (chown to root, password-gated reopen) — below hardened it degrades
+# to a chmod-only bit the same user can reverse, which is friction, not airtight.
 INTERP = re.compile(r'\b(?:python[0-9.]*|perl|ruby|node|deno|bun|php|osascript)\b')
 INLINE = re.compile(r'(?:^|\s)-(?:c|e)\b')
 

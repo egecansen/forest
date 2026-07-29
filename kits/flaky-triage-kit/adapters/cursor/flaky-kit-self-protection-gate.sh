@@ -10,7 +10,9 @@
 # via cursor-compat.sh. Protects core/ + hooks/ + SKILL.md from silent self-modification.
 #
 # NOTE: Cursor exposes no reliable before-file-edit block, so the Write|Edit branch is best-effort. The
-# OS-level wall that holds in EVERY harness (and against interpreter/compiled writers) is `core/lock-kit.sh lock`.
+# OS-level wall that holds in EVERY harness (and against interpreter/compiled writers) is
+# `core/lock-kit.sh lock`'s **hardened** tier (chown to root, password-gated reopen); without `sudo`
+# it degrades to a chmod-only bit the same user can reverse — friction, not a wall.
 #
 # Round2 — path canonicalization (honest framing: defense-in-depth, raising the bar against
 # NATURAL, single-command, accidental/self-defeating bypasses — NOT a hard wall against a
@@ -153,5 +155,7 @@ discipline). Editing them from agent context — e.g. via a misclassification or
 carried in untrusted report / qagent / Confluence text — is how the kit would be silently weakened.
 
 If this is legitimate kit maintenance, set HEKTOR_FLAKYKIT_UNLOCK=1 in the environment for the command.
-The unlock is recorded in docs/hektor/.hook-audit.log. For an OS-level wall, run: core/lock-kit.sh lock."
+That use is recorded in docs/hektor/.hook-audit.log by this gate. For an OS-level wall independent of
+any gate, run: core/lock-kit.sh lock — reaches the hardened tier (password-gated reopen) when sudo is
+available, else only a chmod-only degraded bit the same user can reverse."
 exit 0
