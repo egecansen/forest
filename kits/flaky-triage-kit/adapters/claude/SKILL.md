@@ -59,9 +59,13 @@ per-cluster confirmation rerun happens after the pick, before applying that clus
    (I4/I9 evidence: golden BEFORE vs tb NOW; dismiss any that pass). Then, for the confirmed-real
    ones: `core/apply` (working tree, diff, never commit) → `core/compile` (fast compile-check,
    right JDK baked in — before the slow tb run) → **green-proof** on the tb. **Green-proof =
-   pass^N**: the test is green on *all* N re-runs (`core/rerun` reports per-test `confidence`;
-   require `confidence==1.0` over `runs≥N`) — **one green run is NOT proof** (a flaky test passes
-   ~half the time, so a single green is the most likely false "fixed"). Record progress with
+   pass^N, and you don't grade it yourself:** pipe the rerun JSON through `core/gate` —
+   `core/rerun <fqcns> <tb> | core/gate` — and treat ONLY `decision:"accepted"` as green.
+   `rejected` = still red/flaky. `inconclusive` = under-proven or an untrustworthy box: run more,
+   never round it up to fixed. One green run is NOT proof (a flake passes ~half the time, so a
+   single green is the most likely false "fixed"). Before you report a cluster fixed, pipe your own
+   one-line summary through `core/hedge-scan`; a hit (exit 2) means your own wording says you
+   aren't sure — go get the proof instead of shipping the hedge. Record progress with
    core/ledger.sh cluster-state (selected → applied --passes/--runs → green|flagged), and phase
    transitions with core/ledger.sh event phase-enter --phase <p>. For vrt-bucket clusters, record
    each failing test's vrt_url (ingest tags it) via core/ledger.sh cluster-vrt <id> <fqcn> <url> so

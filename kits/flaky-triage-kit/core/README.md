@@ -17,6 +17,8 @@ and calls these; it MUST NOT mutate state except through them (kernel P2).
 | `dom-capture` | **real site URL** (e.g. `https://www.sahibinden.com/otomobil`) + tb → rendered DOM; `-Dui.testbox` routes to the box | author fixes from the real DOM (N2, **proven tb128**); **I1** validates url+tb; output LOCAL-TRANSIENT; **kit-sourced** test (no suite class) |
 | `dom-on-failure` | test-fqcn + tb → DOM dumped **at the failure point** (runs the real test; `DomDumpOnFailure` auto-registered) | flow-gated selector breaks (payment / posting / flag-detail) that single-URL `dom-capture` can't reach (N2); **proven tb161** |
 | `rerun` | FQCN list + `tb` → pass/fail (+ flaky-confidence over N) | **I2** existence via gradle discovery · **I9** health-check tb first |
+| `gate` | `rerun` JSON → `verifier-result` (`accepted` / `rejected` / `inconclusive` per test + `all_accepted`) | **I11**/§5.3 pass^N is a machine-checked DECISION, not the fixer grading its own work · **I9** an untrustworthy box/run decides nothing · read-only |
+| `hedge-scan` | fixer's own summary text → clean (0) / HEDGED + matched phrases (2) | cheap deterministic pre-screen: self-reported uncertainty ("should work", "only ran once") is not a green — catch it before spending a reviewer call |
 | `apply` | a fix patch → applied in the working tree (git-tracked, clean-tree check) + diff | **I3** confined to `source_roots`, git-reversible, kit never commits · **I10** rev-pin |
 | `ledger` | read/write run state via validated subcommands (v2: cluster-upsert / cluster-state / event / validate · cluster-vrt) | **I5** re-derive "applied" from source, never trust ledger for safety · **I11** `validate --final` gates session end |
 | `summary` | ledger → convergence report | **I7** allowlist emitted fields (no raw stackTrace / PII / tokens) |
@@ -24,8 +26,9 @@ and calls these; it MUST NOT mutate state except through them (kernel P2).
 ## Invariant → module index (for review)
 
 I1 ingest · I2 rerun · I3 apply · I4 (skill, evidence-gated) · I5 ledger ·
-I6 cluster · I7 summary · I8 (skill — never commit/ticket/disable) · I9 rerun ·
-I10 apply. P3/P5/P6 config · P7 ledger · P4 `../hooks/flaky-kit-self-protection-gate.sh`.
+I6 cluster · I7 summary · I8 (skill — never commit/ticket/disable) · I9 rerun + gate ·
+I10 apply · I11 rerun (per-test completeness) + gate (the accept/reject decision).
+P3/P5/P6 config · P7 ledger · P4 `../hooks/flaky-kit-self-protection-gate.sh`.
 
 ## Status
 

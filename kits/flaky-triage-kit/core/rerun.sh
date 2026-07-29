@@ -90,6 +90,16 @@ SEL="$(jq -r '.run.select_flag' "$CFG")"; N="${RERUN_N:-$(jq -r '.run.flaky_conf
 base_cmd=(env "JAVA_HOME=$JH" "$REPO/$WD/gradlew" -p "$REPO/$WD" test --rerun-tasks --no-build-cache
      "-Dspring.profiles.active=$PROF" "-Denv.launchpad=$LP" "-Denv.data.center=$DC"
      "-Dui.testbox=$TB" "-Dui.browser.type=$BR" "--console=plain")
+# Optional selenoid browser pin (hektor-conventions "mandatory -D set"). Opt-in via config: an
+# EMPTY chrome_version passes nothing, so behaviour is unchanged unless the box actually pins a
+# version. Validated like every other externally-supplied value (I1) — a version is digits and
+# dots, nothing else — even though base_cmd is an ARRAY (no word-splitting, no eval), because the
+# value still reaches gradle as a -D and a junk pin fails every run in a confusing way.
+CV="$(jq -r '.run.chrome_version // ""' "$CFG")"
+if [ -n "$CV" ]; then
+  strict_match "$CV" '[0-9]+(\.[0-9]+)*' || { echo "I1: bad run.chrome_version rejected: $CV" >&2; exit 77; }
+  base_cmd+=("-Dchrome.version=$CV")
+fi
 while IFS= read -r e; do base_cmd+=("-x" "$e"); done < <(jq -r '.run.gradle_excludes[]' "$CFG")
 run_pass(){ "${base_cmd[@]}" "$SEL=$1" > "$2" 2>&1 || true; }   # $1=test-csv  $2=logfile
 

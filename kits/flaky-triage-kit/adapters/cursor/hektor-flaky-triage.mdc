@@ -38,8 +38,12 @@ per-cluster confirmation rerun happens after the pick, before applying that clus
    cluster's FQCNs on the tb (clean) — `core/rerun <fqcn-csv> <tb>` — to confirm real vs
    flaky/already-green (I4/I9 evidence: golden BEFORE vs tb NOW; dismiss any that pass). Then, for the
    confirmed-real ones: `core/apply` (working tree, diff, never commit) → `core/compile` →
-   **green-proof = pass^N** (green on ALL N re-runs, `confidence==1.0`; one green run is NOT proof — a
-   flaky test passes ~half the time). Record progress with core/ledger.sh cluster-state (selected → applied --passes/--runs → green|flagged), and phase transitions with core/ledger.sh event phase-enter --phase <p>. For vrt-bucket clusters, record each failing test's vrt_url (ingest tags it) via core/ledger.sh cluster-vrt <id> <fqcn> <url> so the console can surface the baseline-vs-regression review. Widen to blast radius for shared layouts.
+   **green-proof = pass^N, and you don't grade it yourself**: pipe the rerun through the gate —
+   `core/rerun <fqcn-csv> <tb> | core/gate` — and treat ONLY `decision:"accepted"` as green;
+   `rejected` = still red/flaky, `inconclusive` = under-proven or untrustworthy box (run more, never
+   round up to fixed). One green run is NOT proof — a flaky test passes ~half the time. Before
+   reporting a cluster fixed, pipe your own one-line summary through `core/hedge-scan`; a hit
+   (exit 2) means your own wording says you aren't sure — get the proof instead. Record progress with core/ledger.sh cluster-state (selected → applied --passes/--runs → green|flagged), and phase transitions with core/ledger.sh event phase-enter --phase <p>. For vrt-bucket clusters, record each failing test's vrt_url (ingest tags it) via core/ledger.sh cluster-vrt <id> <fqcn> <url> so the console can surface the baseline-vs-regression review. Widen to blast radius for shared layouts.
 4. **Re-cluster and re-present.** Re-cluster the REMAINING + any newly-surfaced failures; present the
    UPDATED table (same discipline as step 2). Steering may split/redefine. Loop to step 2's decision —
    one prompt, not per-item.

@@ -17,6 +17,8 @@
     "launchpad": "selenoid",
     "data_center": "x",
     "browser": "chrome",
+    "chrome_version": "",
+    "_chrome_version_doc": "OPTIONAL. When non-empty, rerun.sh passes -Dchrome.version=<v>. hektor-conventions lists it in the mandatory -D set for selenoid launchpads (the box pins a browser image per version); left EMPTY by default because — unlike profile/env.launchpad/ui.browser.type, whose omission has a documented hard failure (SpringBootConfiguration / WorkspacePropertyDefiner NPE / WebDriverFactory NPE) — no such failure is documented for this one, and pinning a version that the box does not host is itself a way to break every run. Set it to the version your testbox serves.",
     "select_flag": "-Dtests",
     "flaky_confidence_runs": 3
   },
