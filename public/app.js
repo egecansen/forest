@@ -511,7 +511,14 @@ async function addRepoFromForm() {
   const path = input.value.trim();
   if (!path) return;
   err.textContent = '';
-  const r = await api('/api/repos/add', { path });
+  const btn = $('#addrepo-go');
+  btn.disabled = true;
+  let r;
+  try {
+    r = await api('/api/repos/add', { path });
+  } finally {
+    btn.disabled = false;
+  }
   if (!r || !r.ok) { err.textContent = (r && r.error) || 'server unreachable'; return; }
   input.value = '';
   $('#addrepo-form').classList.add('hidden');

@@ -2,6 +2,7 @@ node_modules/
 .DS_Store
 config.json
 config.local.json
+repos.json
 *.log
 .playwright-mcp/
 forest-*.png
