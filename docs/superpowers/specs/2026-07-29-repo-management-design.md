@@ -63,9 +63,22 @@ In order, on the resolved path:
 1. `~` is expanded; a relative path is rejected (`not-absolute`) rather than
    resolved against the server's cwd, which is not what the user means.
 2. The directory must exist (`not-found`).
-3. It must be a git repository — `git -C <path> rev-parse --git-dir` succeeds
-   (`not-a-repo`). This accepts a worktree or a bare-adjacent checkout without
-   forest having to reason about which.
+3. It must be a repository forest can actually render — a literal `.git` entry
+   exists (`isRenderableRepo`, defined once in `lib/discover.mjs` and imported by
+   `lib/repos.mjs`, so the accept criterion and the render criterion are the same
+   predicate). When that fails but `git -C <path> rev-parse --show-toplevel`
+   names a different directory, the path is a subdirectory of a repo and the
+   rejection says so, naming the real root (`inside-repo`). A bare repo is
+   rejected as `not-a-repo`.
+
+   **Corrected 2026-07-29.** This step originally specified `rev-parse --git-dir`
+   and argued it "accepts a worktree or a bare-adjacent checkout without forest
+   having to reason about which". That predicate is also true from any
+   *subdirectory* of a repo and inside a bare repo — neither of which discovery
+   can render — so a pasted subdirectory was accepted, persisted, answered 200
+   and then silently skipped, with the journal falsely reporting it was "no
+   longer a git repository". Two documents defining a repo two ways, never side
+   by side, is what let five clean task reviews miss it.
 4. It must not already be in the list, compared by **real path**
    (`already-listed`), so a symlinked alias cannot produce a duplicate card.
 
