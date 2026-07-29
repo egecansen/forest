@@ -190,4 +190,4 @@ restart Claude Code / Cursor so the new hooks load. The engine works from any te
 EOF
 echo "install: then HARDEN the kit so its safety surface cannot be edited from agent context:" >&2
 echo "install:   $SKILL_DIR/core/lock-kit.sh lock          # asks for your password (chowns core/ to root)" >&2
-echo "install: without it the kit runs at the DEGRADED tier — read-only, but reversible by this same user." >&2
+echo "install: WITHOUT that step nothing is protected — a fresh install has no lock state and its files stay plainly writable by you, and therefore by any agent running as you. It is not read-only; 'degraded' (read-only but reversible with one chmod) is what you get on a machine where lock ran but sudo was unavailable." >&2

@@ -45,9 +45,18 @@ integrity_state() {
   return 0
 }
 
-# integrity_tier <owner_uid> <recorded_tier> -> hardened|unlocked|degraded|mismatch|stale
+# integrity_tier <owner_uid> <recorded_tier> -> hardened|unlocked|degraded|unprotected|mismatch|stale
 # Ranks protection: root-owned is 2, anything else is 1; a recorded "hardened" expects 2, all else 1.
 # Weaker-than-recorded is the dangerous direction and is the only one that yields `mismatch`.
+#
+# `unprotected` vs `degraded` is a real distinction, not a synonym pair, and collapsing them was a
+# bug: `degraded` means the surface IS read-only (chmod a-w) but this user can chmod it back;
+# `unprotected` means `lock` never ran at all and the files are plainly writable. A fresh install is
+# the second one — verified: no .lock-state, mode -rwxr-xr-x, a write succeeds. While both mapped to
+# `degraded`, every message describing "read-only but reversible" was simply false for the fresh
+# case, and `status` contradicted itself by printing `rw core/apply.sh` directly above
+# `tier: degraded`. Anything unrecognised also lands here: an unreadable record means we do not know,
+# and not-knowing must never read as protected.
 integrity_tier() {
   local owner="${1:-}" recorded="${2:-}" actual=1 expected=1
   [ "$owner" = "0" ] && actual=2
@@ -56,7 +65,7 @@ integrity_tier() {
   if [ "$actual" -gt "$expected" ]; then echo stale; return 0; fi
   case "$recorded" in
     hardened|unlocked|degraded) echo "$recorded" ;;
-    *)                          echo degraded ;;
+    *)                          echo unprotected ;;
   esac
   return 0
 }
@@ -84,7 +93,10 @@ integrity_report() {
       echo "integrity: the kit is UNLOCKED (maintenance window open) — its safety surface is writable right now. Re-lock when done: core/lock-kit.sh lock" >&2
       return 0 ;;
     degraded)
-      echo "integrity: DEGRADED tier — the surface is read-only but still owned by this user, so this account can reverse it. Harden with: core/lock-kit.sh lock (needs sudo)" >&2
+      echo "integrity: DEGRADED tier — the surface is read-only but still owned by this user, so this account can reverse it with a single chmod. Harden with: core/lock-kit.sh lock (needs sudo)" >&2
+      return 0 ;;
+    unprotected)
+      echo "integrity: UNPROTECTED — lock has never run here, so the safety surface is plainly writable by this user and by any agent running as them. Nothing is enforcing the kit's invariants. Protect it with: core/lock-kit.sh lock (needs sudo)" >&2
       return 0 ;;
     mismatch)
       echo "integrity: MISMATCH — this kit was locked at the hardened tier, but core/ is no longer root-owned." >&2

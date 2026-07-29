@@ -16,8 +16,8 @@ is 0 hardened hardened
 # user-owned, agrees with state
 is 501 unlocked unlocked
 is 501 degraded degraded
-# fresh install: nothing recorded, user-owned -> the normal un-hardened tier
-is 501 "" degraded
+# fresh install: nothing recorded, user-owned -> not merely "degraded", genuinely unprotected
+is 501 "" unprotected
 # THE dangerous direction: recorded hardened, no longer root-owned
 is 501 hardened mismatch
 # stronger than recorded is safe, but the state file is out of date
@@ -25,7 +25,7 @@ is 0 degraded stale
 is 0 unlocked stale
 is 0 "" stale
 # any unknown recorded value is treated as unprotected, never as hardened
-is 501 banana degraded
+is 501 banana unprotected
 is 0 banana stale
 
 # --- the two readers: platform-branched stat and jq-less JSON scraping are the parts most likely
@@ -74,10 +74,13 @@ case "$(rep_out unlocked)" in *"maintenance"*) ok ;; *) bad "unlocked must remin
 [ "$(rep_rc unlocked)" = 0 ] && ok || bad "unlocked must not block the run"
 case "$(rep_out degraded)" in *DEGRADED*) ok ;; *) bad "degraded must emit a one-line notice" ;; esac
 [ "$(rep_rc degraded)" = 0 ] && ok || bad "degraded must not block the run"
+case "$(rep_out unprotected)" in *UNPROTECTED*) ok ;; *) bad "unprotected must say lock never ran and the surface is writable" ;; esac
+case "$(rep_out unprotected)" in *"read-only"*) bad "unprotected must NOT describe the surface as read-only — a fresh install is writable" ;; *) ok ;; esac
+[ "$(rep_rc unprotected)" = 0 ] && ok || bad "unprotected must not block the run"
 case "$(rep_out mismatch)" in *MISMATCH*) ok ;; *) bad "mismatch must be loud" ;; esac
 [ "$(rep_rc mismatch)" = 76 ] && ok || bad "mismatch must return 76 so callers refuse"
 # Nothing may reach stdout: four entrypoints emit a machine-read contract there.
-for t in hardened stale unlocked degraded mismatch; do
+for t in hardened stale unlocked degraded unprotected mismatch; do
   [ -z "$(integrity_report "$t" 2>/dev/null)" ] || bad "integrity_report must never write to stdout (tier: $t)"
 done; ok
 # The production path must carry no environment override.
