@@ -153,7 +153,7 @@ makes repair a re-run of a recorded input rather than a guess.
 New module `lib/session-scope.mjs`:
 
 ```js
-resolveSessionScope(worktreePath, { userSettingsPath = '~/.claude/settings.json' })
+resolveSessionScope(worktreePath, { userSettingsPath = join(homedir(), '.claude', 'settings.json') })
   → { active: [{ event, matcher, command, file, source }],
       missing: [ …same shape… ],
       inline:  [ …commands with no resolvable file path… ],
@@ -194,8 +194,13 @@ created before this change), the action opens the picker instead of guessing.
 
 - Picker: kits, skills and harness stay three separate groups; a scope preview
   line under the launch button.
-- Worktree card: kit badge (from `.forest-provision.json`) and gate badge (from
-  the resolver). Repair action appears only when `missing` is non-empty.
+- Worktree card: gate badge (from the resolver). Repair action appears only when
+  `missing` is non-empty.
+- **Not implemented:** the kit badge (which kits a worktree runs, from
+  `.forest-provision.json`). It was specified here, dropped from the plan without
+  a note, and never built — so the record's second stated purpose, making a
+  worktree self-describing, is still unrealized. Tracked in
+  `docs/superpowers/follow-ups-2026-07-29-kit-isolation.md`.
 
 No change to the launch flow itself: pick, launch.
 
@@ -204,8 +209,15 @@ No change to the launch flow itself: pick, launch.
 - Existing worktrees stay where they are and keep being listed.
 - The gate badge marks the broken ones. `tech-WEBT-254523` is expected to show
   `missing: 16` until repaired or recreated.
-- Repair for legacy worktrees is provisioning the missing hooks in place; moving
-  them (`git worktree move`) is optional and manual.
+- Repair does **not** apply to legacy worktrees, and this spec originally claimed
+  otherwise. Repair replays a recorded provisioning; a worktree created before
+  this change has no record, and forest cannot infer which pack a missing hook
+  came from — verified on a real worktree whose 16 missing hooks were registered
+  by its parent repo's settings with no record of their source anywhere. The
+  honest paths for a legacy worktree are: open the picker and re-provision, or
+  recreate the worktree under the new root. The Repair action therefore opens the
+  picker when no record exists, rather than failing.
+- Moving a legacy worktree (`git worktree move`) is optional and manual.
 - No flag day: new worktrees use the new root, old ones keep working.
 
 ## Out of scope
