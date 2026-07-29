@@ -36,7 +36,7 @@
 | `core/lock-kit.sh` | modify | Hardened tier, internal escalation, per-path `status`, state writing |
 | `core/config.json` | modify | Two new env-override doc keys |
 | `core/rerun.sh` | modify | Honour `HEKTOR_FK_DATA_CENTER` / `HEKTOR_FK_CHROME_VERSION` |
-| `core/tests/integrity-test.sh` | create | Drives the pure function through all four states — no sudo |
+| `core/tests/integrity-test.sh` | create | Drives the tier decision through all states with synthetic inputs, plus real-filesystem fixtures for the two readers — no sudo |
 | `core/tests/self-protection-test.sh` | modify | Fixture follows the relocated gate |
 | `adapters/claude/flaky-kit-self-protection-gate.sh` | modify | `SURF_RE`/`match_surface` for the new location; shadow detection |
 | `adapters/cursor/flaky-kit-self-protection-gate.sh` | modify | Same two changes, Cursor side |
@@ -171,6 +171,34 @@ is 0 "" stale
 is 501 banana degraded
 is 0 banana stale
 
+# --- the two readers: platform-branched stat and jq-less JSON scraping are the parts most likely
+# --- to differ across environments, so they get real filesystem fixtures rather than trust.
+RT="$(mktemp -d)"; trap 'rm -rf "$RT"' EXIT
+mkdir -p "$RT/core"; printf 'x\n' > "$RT/core/probe"
+
+# integrity_owner_uid
+[ -z "$(integrity_owner_uid /nonexistent-path-xyz)" ] && ok || bad "owner_uid on a missing path must print nothing"
+integrity_owner_uid /nonexistent-path-xyz >/dev/null; [ $? -eq 0 ] && ok || bad "owner_uid on a missing path must return 0"
+[ -z "$(integrity_owner_uid)" ] && ok || bad "owner_uid with no argument must print nothing, not error"
+[ "$(integrity_owner_uid "$RT/core/probe")" = "$(id -u)" ] && ok || bad "owner_uid must report the real owner of an existing file"
+# THE wedge case: stat unavailable must not abort a `set -e` caller (this is why return 0 is explicit)
+( set -euo pipefail; . "$HERE/../_integrity.sh"; PATH=/nonexistent-bin integrity_owner_uid /tmp >/dev/null ) 2>/dev/null \
+  && ok || bad "owner_uid must not abort a set -e caller when stat is unavailable"
+
+# integrity_state
+[ -z "$(integrity_state "$RT")" ] && ok || bad "state with no .lock-state must print nothing"
+integrity_state "$RT" >/dev/null; [ $? -eq 0 ] && ok || bad "state with no .lock-state must return 0"
+[ -z "$(integrity_state)" ] && ok || bad "state with no argument must print nothing, not error"
+printf '{"tier":"hardened","at":"2026-07-29T00:00:00Z"}\n' > "$RT/core/.lock-state"
+[ "$(integrity_state "$RT")" = hardened ] && ok || bad "state must read the tier the writer emits"
+printf '{"at":"x","note":"no tier here"}\n' > "$RT/core/.lock-state"
+[ -z "$(integrity_state "$RT")" ] && ok || bad "state must print nothing when no tier key is present"
+# Ambiguity: two tier keys must resolve the SAME way regardless of line wrapping — first wins.
+printf '{"history":[{"tier":"unlocked"},{"tier":"hardened"}]}\n' > "$RT/core/.lock-state"
+[ "$(integrity_state "$RT")" = unlocked ] && ok || bad "two tier keys on ONE line must resolve first-wins"
+printf '{"history":[{"tier":"unlocked"},\n{"tier":"hardened"}]}\n' > "$RT/core/.lock-state"
+[ "$(integrity_state "$RT")" = unlocked ] && ok || bad "two tier keys across TWO lines must resolve first-wins, same as one line"
+
 echo "integrity-test: $pass passed, $fail failed"
 [ "$fail" -eq 0 ]
 ```
@@ -203,19 +231,30 @@ Expected: FAIL — `_integrity.sh` does not exist, sourcing errors out
 
 # integrity_owner_uid <path> -> numeric uid, or empty. BSD and GNU stat take different flags.
 integrity_owner_uid() {
-  local p="$1"
-  [ -e "$p" ] || return 0
+  local p="${1:-}"
+  [ -n "$p" ] && [ -e "$p" ] || return 0
   case "$(uname -s 2>/dev/null)" in
     Darwin|*BSD) stat -f %u "$p" 2>/dev/null ;;
     *)           stat -c %u "$p" 2>/dev/null ;;
   esac
+  # Explicit, NOT decorative: without it the function exits with `stat`'s status, so a missing or
+  # failing stat returns non-zero and aborts any caller running under `set -e` — the exact
+  # "never wedge a caller" violation this file's header promises not to commit.
+  return 0
 }
 
 # integrity_state <kit_root> -> the recorded tier, or empty when absent/unreadable.
 integrity_state() {
-  local f="$1/core/.lock-state"
-  [ -r "$f" ] || return 0
-  sed -n 's/.*"tier"[[:space:]]*:[[:space:]]*"\([a-z]*\)".*/\1/p' "$f" 2>/dev/null | head -1
+  local f="${1:-}/core/.lock-state"
+  [ -n "${1:-}" ] && [ -r "$f" ] || return 0
+  # `[^"]*` before the key, not `.*`: a greedy `.*` walks past the FIRST "tier" to the last one on
+  # the line, so a state file carrying two tier keys resolves to last-wins on one line and
+  # first-wins when the same content is split across lines (head -1). Anchoring the prefix so it
+  # cannot cross a quote makes the first occurrence win in both layouts. The legitimate writer
+  # (Task 3) emits exactly one flat {"tier":...,"at":...}; this is about not being ambiguous when
+  # handed something else.
+  sed -n 's/^[^"]*"tier"[[:space:]]*:[[:space:]]*"\([a-z]*\)".*/\1/p' "$f" 2>/dev/null | head -1
+  return 0
 }
 
 # integrity_tier <owner_uid> <recorded_tier> -> hardened|unlocked|degraded|mismatch|stale
@@ -238,7 +277,7 @@ integrity_tier() {
 - [ ] **Step 4: Run the test**
 
 Run: `bash core/tests/integrity-test.sh`
-Expected: PASS, 10 passed 0 failed
+Expected: PASS, 22 passed 0 failed
 
 - [ ] **Step 5: Commit**
 
@@ -509,7 +548,7 @@ integrity_guard() {
 - [ ] **Step 4: Run the test**
 
 Run: `bash core/tests/integrity-test.sh`
-Expected: PASS, 18 passed 0 failed
+Expected: PASS, 30 passed 0 failed
 
 - [ ] **Step 5: Call it from every entrypoint**
 
