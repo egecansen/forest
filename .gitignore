@@ -5,3 +5,4 @@ config.local.json
 *.log
 .playwright-mcp/
 forest-*.png
+.claude/worktrees/
