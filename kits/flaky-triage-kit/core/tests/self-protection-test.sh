@@ -179,6 +179,17 @@ proj_bash_deny "rm -f $PROJ/.claude/hooks/.flaky-kit-expect"
 assert_claude_edit_deny "$PROJ/.claude/hooks/.flaky-kit-expect" "the out-of-tree lock-tier record"
 assert_cursor_edit_deny "$PROJ/.claude/hooks/.flaky-kit-expect" "the out-of-tree lock-tier record (parity)"
 
+echo "== Interpreter inline programs: the branch still bites on an absolute path, and a benign one-liner" >&2
+echo "   run from INSIDE the kit tree is not flagged for its identifiers ==" >&2
+# Widening the surface to the kit DIRECTORY made every bare identifier inside `-c`/`-e` code resolve to a
+# path under the kit, so `python3 -c 'import sys; print(sys.argv)'` denied because of the word `import`.
+# The inline program's text is excluded from path canonicalization; the literal match still applies.
+assert_claude_bash_deny  "python3 -c 'open(\"$SKILL/core/config.json\",\"w\").write(\"x\")'"
+assert_cursor_bash_deny  "python3 -c 'open(\"$SKILL/core/config.json\",\"w\").write(\"x\")'"
+assert_claude_bash_allow "python3 -c 'import sys; print(sys.argv)'"
+assert_cursor_bash_allow "python3 -c 'import sys; print(sys.argv)'"
+assert_claude_bash_allow "python3 -c 'print(1.5)'"
+
 echo "== Directory-operand SCOPE: deliberately bounded, so this is a control, not an omission ==" >&2
 # An ordinary file INSIDE .claude/hooks/ stays editable: those are this pack's other hooks, they are
 # legitimately edited, and the gates' own comments commit to that precision. Only the gate, its lib/,

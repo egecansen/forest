@@ -415,7 +415,19 @@ def operand_candidates(text):
 def is_surface_write(frag, base=None):
     dq = dequote(frag)                                   # dequoted catches s\ed / 'rm' / sh -c "..."
     surf_hit = bool(SURF.search(frag) or SURF.search(dq))
-    if not surf_hit:
+    # An interpreter's INLINE PROGRAM is code, not shell path operands, so its text is excluded from the
+    # canonicalization pass below. Bare identifiers inside it (`import`, `print`, `open`, `unlink`)
+    # resolve against the tracked cwd like any other token, and once the surface includes the kit
+    # DIRECTORY that means every `python3 -c '...'` run from inside the kit tree reports a surface hit:
+    # `python3 -c 'import sys; print(sys.argv)'` denied purely because `import` joined onto a cwd under
+    # the kit. Caught by comparing against the pre-fix module rather than by a test, which is why this
+    # note is here. The literal SURF.search() above is unaffected, so an ABSOLUTE surface path inside an
+    # inline program still denies (verified). What stays uncaught, unchanged from before this round and
+    # not newly introduced: a RELATIVE surface path inside an inline program
+    # (`python3 -c 'open("core/config.json","w")'`). Closing that needs the program parsed as code, which
+    # is the class of completeness the module docstring declines to chase.
+    inline_prog = bool(INTERP.search(dq) and INLINE.search(dq))
+    if not surf_hit and not inline_prog:
         # Round2 canonicalization pass: a `./`, `../`, symlink-aliased, or bare cwd-relative token
         # can land on the surface with no literal substring match at all — resolve each operand token
         # against `base` (the tracked cwd) and re-check.
