@@ -1,7 +1,7 @@
 #!/bin/bash
 # core/_integrity.sh — is this tree still the tree that was locked?
 #
-# WHY: core/lock-kit.sh can now establish a HARDENED tier (core/** owned by root, so only a
+# WHY: core/lock-kit.sh can establish a HARDENED tier (the safety surface owned by root, so only a
 # password-gated sudo can reopen it) or fall back to a DEGRADED tier (chmod a-w only, which the
 # owning user — and therefore the agent — can always reverse). A kit that silently slipped from the
 # first to the second would still LOOK locked while enforcing nothing. Source this and ask.
@@ -9,9 +9,11 @@
 # LIMIT, stated up front: this check lives INSIDE the tree it validates, so it cannot detect
 # SHADOWING (`mv` the kit dir aside and put a fake one in its place) — a shadowed tree carries its
 # own state file and is indistinguishable from a fresh un-hardened install. That case is the
-# relocated gate's job (.claude/hooks/, outside the shadowable tree). This check catches ACCIDENTS:
-# an upgrade that dropped ownership, a kit installed but never hardened, a maintenance unlock left
-# open. Two different jobs, deliberately not conflated.
+# relocated gate's job (.claude/hooks/, outside the shadowable tree), and the gate does it by asking
+# whether the tree is still ROOT-OWNED rather than whether it still exists — an ownership check is the
+# one question a replacement tree cannot answer in its own favour without the password. This check
+# catches ACCIDENTS: an upgrade that dropped ownership, a kit installed but never hardened, a
+# maintenance unlock left open. Two different jobs, deliberately not conflated.
 #
 # Never wedges a caller: every function returns 0 and prints its answer, mirroring hektor_audit's
 # "a broken check must not break the run" discipline.
