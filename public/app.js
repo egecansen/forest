@@ -45,6 +45,13 @@ function statusBadge(w) {
   if (w.status.dirty) return `<span class="badge b-changed">${w.status.changed} changed</span>`;
   return `<span class="badge b-clean">clean</span>`;
 }
+function gateBadge(w) {
+  const s = w.scope;
+  if (!s || (!s.active && !s.missing)) return '';
+  return s.missing
+    ? `<span class="badge b-stale" title="hook scripts registered but absent — the gates are not running">gates ${s.active} · missing ${s.missing}</span>`
+    : `<span class="badge b-clean" title="every registered hook resolves to a file">gates ${s.active}</span>`;
+}
 function agentCell(a) {
   const cls = a.state === 'running' ? 'run' : a.state === 'idle' ? 'idle' : 'unknown';
   const label = a.state === 'running' ? (a.kind || 'agent') : a.state;
@@ -70,7 +77,7 @@ function rowHtml(w, repo) {
   const pruneable = (w.stale || w.merged) && !w.isPrimary;
   return `<div class="row ${w.isPrimary ? '' : 'nested'}" data-path="${enc}">
     <div class="col-branch branch">${ticketCell(w)}</div>
-    <div class="col-status">${statusBadge(w)}</div>
+    <div class="col-status">${statusBadge(w)}${gateBadge(w)}</div>
     <div class="col-owner">${esc(w.owner)}</div>
     <div class="col-agent">${agentCell(w.agent)}</div>
     <div class="col-age">${ageCell(w)}</div>
@@ -78,6 +85,7 @@ function rowHtml(w, repo) {
     <div class="col-actions actions">
       <button title="Quick task" data-act="task" data-path="${enc}">⚡</button>
       <button title="Launch Claude" data-act="launch" data-path="${enc}">▶</button>
+      ${w.scope && w.scope.missing ? `<button title="Repair ${w.scope.missing} missing hook script(s)" data-act="repair" data-path="${enc}">🩹</button>` : ''}
       <button title="Open in Cursor" data-act="open-cursor" data-path="${enc}">⤓</button>
       ${w.isPrimary ? '' : `<button data-act="finish" data-path="${enc}" title="Finish: land this worktree's branch in the main checkout">✓</button>`}
       ${pruneable ? `<button title="Prune" data-act="remove" data-path="${enc}" data-repo="${encodeURIComponent(w.repoPath)}" data-primary="${w.isPrimary}">🧹</button>` : ''}
@@ -264,6 +272,12 @@ async function doAction(act, ds) {
   const path = decodeURIComponent(ds.path);
   if (act === 'launch') { openPicker(path); return; }
   if (act === 'open-cursor') { await api('/api/open', { path, target: 'cursor' }); return; }
+  if (act === 'repair') {
+    const r = await api('/api/worktree/repair', { path });
+    if (!r || r.error) { toast(`Repair failed: ${(r && r.error) || 'server unreachable'} — open the picker and re-provision`); return; }
+    toast(`Repaired · ${r.scope.active} hooks active, ${r.scope.missing} missing`);
+    return;
+  }
   if (act === 'task') {
     const prompt = state.mode === 'auto' ? window.prompt('Task for Claude (headless):') : null;
     if (state.mode === 'auto' && !prompt) return;
@@ -427,12 +441,26 @@ function openPicker(path) {
   $('#picker').classList.remove('hidden');
   syncMasters();
   updatePickerCount();
+  refreshPickerScope(path);
 }
 function closePicker() { $('#picker').classList.add('hidden'); pickerPath = null; }
 function updatePickerCount() {
   const n = document.querySelectorAll('#pk-body .pk-cb:checked').length;
   $('#pk-count').textContent = n ? `${n} selected` : 'none selected';
   $('#pk-start').textContent = n ? 'Provision & start' : 'Start session';
+}
+// What the session will load today — before provisioning anything. Makes the
+// remaining ~/.claude inheritance visible instead of implicit.
+async function refreshPickerScope(path) {
+  const el = $('#pk-scope');
+  el.textContent = '';
+  el.classList.remove('warn');
+  const s = await api('/api/worktree/scope', { path });
+  if (!s || s.error) return;
+  el.textContent = s.missing.length
+    ? `${s.active} hooks active · ${s.missing.length} missing`
+    : `${s.active} hooks active · ${s.sources.length} settings source(s)`;
+  if (s.missing.length) el.classList.add('warn');
 }
 function collectSel() {
   const sel = {};
@@ -459,7 +487,9 @@ async function startSession() {
   const prov = r.provisioned;
   const provMsg = prov && (prov.skills.length || prov.kits.length || prov.hooks)
     ? `${prov.skills.length} skill(s)${prov.kits.length ? `, ${prov.kits.length} kit(s)` : ''}${prov.hooks ? ', gates' : ''} · ` : '';
-  toast(r.action === 'focused' ? 'Claude already running — Terminal brought to front' : `${provMsg}Launching Claude…`);
+  const miss = r.scope && r.scope.missing ? r.scope.missing.length : 0;
+  if (miss) toast(`${provMsg}Launching Claude — ${miss} registered hook script(s) missing`);
+  else toast(r.action === 'focused' ? 'Claude already running — Terminal brought to front' : `${provMsg}Launching Claude…`);
 }
 
 function wireEvents() {

@@ -324,6 +324,8 @@ main { max-width: 1320px; margin: 0 auto; padding: 16px 18px 210px; }
 .pk-item-label { font-size: 13.5px; color: var(--ink); }
 .pk-item-desc { font-size: 11.5px; line-height: 1.4; color: var(--muted); }
 .pk-count { margin-right: auto; align-self: center; color: var(--muted); font-size: 12px; }
+.pk-scope { font-size: 12px; opacity: .65; margin-left: 10px; }
+.pk-scope.warn { opacity: 1; color: var(--amber, #d08a2a); }
 
 .apply-row { display: flex; gap: 8px; align-items: center; margin-bottom: 4px; }
 .apply-row select { flex: 1; padding: 8px 10px; font: 13px var(--font-mono); color: var(--ink); background: var(--bg); border: 1px solid var(--line); border-radius: 8px; }
