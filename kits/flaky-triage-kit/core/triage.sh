@@ -5,5 +5,6 @@
 #  apply→compile→rerun→ledger→summary. Keep it simple — see SKILL.md "Presentation discipline".)
 set -uo pipefail
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+. "$HERE/_integrity.sh"; integrity_guard "$HERE/.." || exit 76
 [ -n "${1:-}" ] || { echo "usage: triage.sh <s-report-url>" >&2; exit 64; }
 "$HERE/ingest.sh" "$1" | "$HERE/cluster.sh"

@@ -60,3 +60,31 @@ integrity_tier() {
   esac
   return 0
 }
+
+# integrity_guard <kit_root> -> 0 to proceed, 76 to refuse. Prints to stderr, never stdout, so it
+# can never contaminate a script whose stdout is a JSON contract (rerun, gate, ledger, summary).
+# INTEGRITY_FAKE_UID exists ONLY for the test suite — the real uid cannot be forced to root without
+# a password, and a decision function that cannot be exercised is a decision function nobody trusts.
+integrity_guard() {
+  local kit="$1" uid tier
+  uid="${INTEGRITY_FAKE_UID:-$(integrity_owner_uid "$kit/core")}"
+  tier="$(integrity_tier "$uid" "$(integrity_state "$kit")")"
+  case "$tier" in
+    hardened) return 0 ;;
+    stale)
+      echo "integrity: core/ is root-owned but .lock-state disagrees — treating as hardened; re-run 'core/lock-kit.sh lock' to refresh the record" >&2
+      return 0 ;;
+    unlocked)
+      echo "integrity: the kit is UNLOCKED (maintenance window open) — its safety surface is writable right now. Re-lock when done: core/lock-kit.sh lock" >&2
+      return 0 ;;
+    degraded)
+      echo "integrity: DEGRADED tier — the surface is read-only but still owned by this user, so this account can reverse it. Harden with: core/lock-kit.sh lock (needs sudo)" >&2
+      return 0 ;;
+    mismatch)
+      echo "integrity: MISMATCH — this kit was locked at the hardened tier, but core/ is no longer root-owned." >&2
+      echo "integrity: this is not the tree that was hardened. Refusing: nothing it produces — summary, verdict, cluster table — should be trusted." >&2
+      echo "integrity: if you unlocked deliberately, run 'core/lock-kit.sh lock' to re-establish the tier." >&2
+      return 76 ;;
+  esac
+  return 0
+}

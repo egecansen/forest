@@ -40,6 +40,8 @@
 # Env: GATE_BUILD=<pinned @timestamp>  (optional, recorded for traceability)
 #      GATE_TS=<iso8601>               (optional; else `date -u`)
 set -uo pipefail
+HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+. "$HERE/_integrity.sh"; integrity_guard "$HERE/.." || exit 76
 JQ="$(command -v jq || true)"; [ -n "$JQ" ] || { echo "gate: jq required" >&2; exit 69; }
 
 IN="$(cat)"

@@ -8,6 +8,7 @@
 set -uo pipefail
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 APPLY="$HERE/../apply.sh"
+INTEGRITY="$HERE/../_integrity.sh"
 WORK="$(mktemp -d)"; trap 'rm -rf "$WORK"' EXIT
 pass=0; fail=0
 ok()  { pass=$((pass+1)); }
@@ -24,6 +25,7 @@ git_init() { # $1=dir
 REPO_A="$WORK/repo-a"; mkdir -p "$REPO_A/core"
 git_init "$REPO_A"
 cp "$APPLY" "$REPO_A/core/apply.sh"; chmod +x "$REPO_A/core/apply.sh"
+cp "$INTEGRITY" "$REPO_A/core/_integrity.sh"
 OUTSIDE_A="$WORK/outside-a"; mkdir -p "$OUTSIDE_A"
 printf 'TOP SECRET ORIGINAL\n' > "$OUTSIDE_A/secret.txt"
 jq -n --arg r "$OUTSIDE_A" '{source_roots:[$r]}' > "$REPO_A/core/config.json"
@@ -39,6 +41,7 @@ OUT_A="$(printf '%s' "$REQ_A" | "$REPO_A/core/apply.sh" 2>&1)"; RC_A=$?
 REPO_B="$WORK/repo-b"; mkdir -p "$REPO_B/core" "$REPO_B/src"
 git_init "$REPO_B"
 cp "$APPLY" "$REPO_B/core/apply.sh"; chmod +x "$REPO_B/core/apply.sh"
+cp "$INTEGRITY" "$REPO_B/core/_integrity.sh"
 printf 'hello world\n' > "$REPO_B/src/Foo.txt"
 jq -n '{source_roots:["src"]}' > "$REPO_B/core/config.json"
 git -C "$REPO_B" add -A; git -C "$REPO_B" commit -qm init >/dev/null
@@ -56,6 +59,7 @@ OUT_B="$(printf '%s' "$REQ_B" | "$REPO_B/core/apply.sh" 2>&1)"; RC_B=$?
 REPO_C="$WORK/repo-c"; mkdir -p "$REPO_C/core"
 git_init "$REPO_C"
 cp "$APPLY" "$REPO_C/core/apply.sh"
+cp "$INTEGRITY" "$REPO_C/core/_integrity.sh"
 sed -i '' 's/if not (cand == repo or cand.startswith(repo + os.sep)):/if False:  # TEST-ONLY: confinement neutralized to isolate-test the clean-tree gate/' "$REPO_C/core/apply.sh"
 grep -q 'TEST-ONLY: confinement neutralized' "$REPO_C/core/apply.sh" && ok || bad "fixture sed patch applied (sanity)"
 chmod +x "$REPO_C/core/apply.sh"
@@ -78,6 +82,7 @@ OUT_C="$(printf '%s' "$REQ_C" | "$REPO_C/core/apply.sh" 2>&1)"; RC_C=$?
 #     runs, leaving the decoy cwd repo's target file byte-for-byte unchanged.
 NONREPO_D="$WORK/nonrepo-d"; mkdir -p "$NONREPO_D/core"
 cp "$APPLY" "$NONREPO_D/core/apply.sh"; chmod +x "$NONREPO_D/core/apply.sh"
+cp "$INTEGRITY" "$NONREPO_D/core/_integrity.sh"
 # deliberately NO `git init` anywhere above $NONREPO_D/core — $HERE has no enclosing .git at all
 # (WORK lives under mktemp -d, outside any repo, so this holds).
 jq -n '{source_roots:["src"]}' > "$NONREPO_D/core/config.json"

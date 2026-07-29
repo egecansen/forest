@@ -16,6 +16,7 @@
 #           anything else exits 78 before either gate runs.
 set -uo pipefail
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"; CFG="$HERE/config.json"
+. "$HERE/_integrity.sh"; integrity_guard "$HERE/.." || exit 76
 for t in jq git python3; do command -v "$t" >/dev/null || { echo "apply: $t required" >&2; exit 69; }; done
 REPO="$(git -C "$HERE" rev-parse --show-toplevel 2>/dev/null)"; REPO_RC=$?   # repo from the script's own dir, not the caller's cwd
 # Fail CLOSED here, before ANY confinement/clean-tree logic runs — see Round2 Fix A note above.

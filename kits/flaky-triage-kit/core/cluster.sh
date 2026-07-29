@@ -5,6 +5,7 @@
 # Contract: ingest JSON (stdin) → stdout JSON [ {sig,count,sample,recipe,tier_hint,boxes,tests:[fqcn]} ]
 set -uo pipefail
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+. "$HERE/_integrity.sh"; integrity_guard "$HERE/.." || exit 76
 CFG="$HERE/config.json"
 command -v jq >/dev/null || { echo "cluster: jq required" >&2; exit 69; }
 

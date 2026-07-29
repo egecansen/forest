@@ -68,6 +68,8 @@ build_result(){ # $1=stripped-combined-log  $2=runs_requested (N — see aggrega
 # (a pure function of parsed outcomes + runs_requested) with synthetic pass logs, no gradle/Selenoid.
 if [ "${RERUN_LIB_ONLY:-0}" = "1" ]; then return 0 2>/dev/null || exit 0; fi
 
+. "$HERE/_integrity.sh"; integrity_guard "$HERE/.." || exit 76
+
 if [ -n "${RERUN_FROM_LOG:-}" ]; then _t="$(mktemp)"; strip < "$RERUN_FROM_LOG" > "$_t"; build_result "$_t" 1; rm -f "$_t"; exit 0; fi
 
 TESTS="${1:-}"; TB="${2:-}"

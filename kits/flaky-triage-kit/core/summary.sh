@@ -4,6 +4,8 @@
 # Enforces: I7 — emit ONLY allowlisted fields (sig, status, test count); never raw stackTrace / PII / tokens.
 # Contract: ledger JSON (stdin) → human-readable report.
 set -uo pipefail
+HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+. "$HERE/_integrity.sh"; integrity_guard "$HERE/.." || exit 76
 command -v jq >/dev/null || { echo "summary: jq required" >&2; exit 69; }
 
 jq -r '

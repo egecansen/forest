@@ -5,6 +5,7 @@
 # Contract:  $1 = report URL  →  stdout JSON { build:{name,startMs,docTs,failCount}, fails:[docs] }
 set -uo pipefail
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+. "$HERE/_integrity.sh"; integrity_guard "$HERE/.." || exit 76
 CFG="$HERE/config.json"
 . "$HERE/_strict.sh"   # Round3: shared whole-string shape matcher (closes the grep-newline anchor bypass)
 for t in jq curl; do command -v "$t" >/dev/null || { echo "ingest: $t required" >&2; exit 69; }; done

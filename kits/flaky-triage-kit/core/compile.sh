@@ -8,6 +8,7 @@
 # Contract: (no args) → compiles :compileTestJava → stdout JSON {ok, errors:[…first lines]} ; exit 0 ok / 1 fail
 set -uo pipefail
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"; CFG="$HERE/config.json"
+. "$HERE/_integrity.sh"; integrity_guard "$HERE/.." || exit 76
 command -v jq >/dev/null || { echo "compile: jq required" >&2; exit 69; }
 . "$HERE/_lock.sh"
 

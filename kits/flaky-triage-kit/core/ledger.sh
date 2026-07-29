@@ -6,6 +6,8 @@
 # Writes: route ALL mutations through cluster-upsert / cluster-state / event (kernel P2). `set` remains
 # for exotic repairs only. Untrusted values bind via --arg (jq-injection discipline).
 set -uo pipefail
+HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+. "$HERE/_integrity.sh"; integrity_guard "$HERE/.." || exit 76
 command -v jq >/dev/null || { echo "ledger: jq required" >&2; exit 69; }
 CMD="${1:-}"; FILE="${2:-}"
 [ -n "$CMD" ] && [ -n "$FILE" ] || { echo "usage: ledger.sh init|get|set|cluster-upsert|cluster-state|cluster-vrt|event|validate <file> [...]" >&2; exit 64; }

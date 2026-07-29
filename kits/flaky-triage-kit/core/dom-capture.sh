@@ -13,6 +13,7 @@
 # Modes: DOMCAP_DRY=1 (print the gradle cmd, don't run).  Output file is LOCAL-TRANSIENT — never ship (I7).
 set -uo pipefail
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"; CFG="$HERE/config.json"
+. "$HERE/_integrity.sh"; integrity_guard "$HERE/.." || exit 76
 . "$HERE/_lock.sh"   # A (N6): serialize gradle on this working copy
 . "$HERE/_strict.sh"   # Round3: shared whole-string shape matcher (closes the grep-newline anchor bypass)
 for t in jq git; do command -v "$t" >/dev/null || { echo "dom-capture: $t required" >&2; exit 69; }; done

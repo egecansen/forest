@@ -9,6 +9,8 @@
 #   DEP ticket  → distribution = issuelinks of type "Deployment" (the shipped dev tickets).
 #   Story/Task  → distribution empty; use 'other' (linked, e.g. Cloners) + the parent epic (caller fetches).
 set -uo pipefail
+HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+. "$HERE/_integrity.sh"; integrity_guard "$HERE/.." || exit 76
 command -v jq >/dev/null || { echo "correlate: jq required" >&2; exit 69; }
 
 jq '
