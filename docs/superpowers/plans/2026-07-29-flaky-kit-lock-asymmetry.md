@@ -858,7 +858,20 @@ runbook and the test fixture follow it."
 **Files:**
 - Modify: `kits/flaky-triage-kit/core/lock-kit.sh` (write the expectation on a successful lock)
 - Modify: `kits/flaky-triage-kit/adapters/claude/flaky-kit-self-protection-gate.sh` (read it, warn on regression)
-- Modify: `kits/flaky-triage-kit/core/tests/self-protection-test.sh` (assert the warning)
+- Modify: **`kits/flaky-triage-kit/adapters/cursor/flaky-kit-self-protection-gate.sh`** (the same check — an
+  earlier draft of this plan listed only the Claude adapter, which left Cursor-driven sessions with no
+  detection at all)
+- Modify: `kits/flaky-triage-kit/core/tests/self-protection-test.sh` (assert the warning, **on both gates**)
+
+**Both harnesses must carry the check.** `install.sh` installs a Cursor gate at
+`.cursor/hooks/flaky-kit-self-protection-gate.sh`, and `lock` writes the expectation under
+`.claude/hooks/` whenever that directory exists — which, in a dual-harness install, it does. Wiring
+the check into the Claude gate alone means a Cursor session never reads the record and never warns,
+so the one thing this task exists to provide — *something outside the kit notices* — is absent for
+exactly the users who chose the other harness. The Cursor gate resolves the project root from its own
+payload/`git rev-parse` rather than `CLAUDE_PROJECT_DIR`; use whatever that file already uses, and
+keep the expectation path itself (`.claude/hooks/.flaky-kit-expect`) identical in both, since `lock`
+writes exactly one record regardless of which harness reads it.
 
 **Interfaces:**
 - Consumes: `integrity_owner_uid` / `integrity_tier` from Task 2.
