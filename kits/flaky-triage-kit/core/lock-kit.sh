@@ -142,8 +142,11 @@ case "$CMD" in
     # not close the residual harden_targets() documents above — it converts a silent single `mv`
     # into a two-step act, and it still catches the common accidental case (a rename/cleanup that
     # forgets to also scrub the expectation file). Detection, not prevention, and not un-defeatable.
-    EXPECT_DIR="$(git -C "$KIT" rev-parse --show-toplevel 2>/dev/null)/.claude/hooks"
-    [ -d "$EXPECT_DIR" ] && printf '%s\n' "$(integrity_state "$KIT")" > "$EXPECT_DIR/.flaky-kit-expect" 2>/dev/null || true
+    expect_root="$(git -C "$KIT" rev-parse --show-toplevel 2>/dev/null)"
+    if [ -n "$expect_root" ] && [ -d "$expect_root/.claude/hooks" ]; then
+      expect_tier="$(integrity_state "$KIT")"
+      [ -n "$expect_tier" ] && printf '%s\n' "$expect_tier" > "$expect_root/.claude/hooks/.flaky-kit-expect" 2>/dev/null
+    fi
     # 3. Only now remove the write bits — files first, then dirs.
     n=0; while IFS= read -r f; do priv_chmod "$TIER" a-w "$f" 2>/dev/null && n=$((n+1)); done < <(surface_files)
     d=0; while IFS= read -r p; do priv_chmod "$TIER" a-w "$p" 2>/dev/null && d=$((d+1)); done < <(surface_dirs)

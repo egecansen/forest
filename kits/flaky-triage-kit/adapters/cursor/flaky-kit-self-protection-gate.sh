@@ -88,6 +88,27 @@ CMD="$(cc_command)"
 FP="$(cc_file_path)"
 CWD="$(cc_json '.cwd // .workspace_roots[0] // .workspaceRoots[0] // .workspace_root // empty')"
 
+# Shadow check: SAME detection as the Claude gate (kept in sync manually — see header note). The
+# kit tree can be renamed aside and replaced without touching a single root-owned file, because
+# rename() is governed by the parent directory. We cannot PREVENT that from here — but we hold the
+# expectation OUTSIDE the kit tree, so we can say so out loud. Root is resolved via cc_repo_root()
+# (this file's own project-root accessor — workspace_roots/cwd, falling back to git) rather than
+# through Claude's CLAUDE_PROJECT_DIR, which does not exist in this harness. The expectation PATH
+# itself stays identical to the Claude gate's (.claude/hooks/.flaky-kit-expect) — lock writes
+# exactly one record regardless of which harness reads it.
+#
+# Honest limit: .claude/hooks/.flaky-kit-expect lives in a directory that must stay user-writable
+# (this pack's own installer writes hooks there without sudo), so the SAME actor who can rename the
+# kit tree aside can also delete this file — the record is not tamper-proof. What it still buys: a
+# silent single `mv` becomes a two-step act, and a forgotten/incomplete cleanup (the common
+# accidental case) still gets caught. Detection, not prevention.
+_ROOT="$(cc_repo_root)"
+_EXPECT="$_ROOT/.claude/hooks/.flaky-kit-expect"
+if [ -r "$_EXPECT" ] && [ "$(cat "$_EXPECT" 2>/dev/null)" = "hardened" ] \
+   && [ ! -d "$_ROOT/.claude/skills/hektor-flaky-triage/core" ]; then
+  echo "flaky-kit gate: SHADOW WARNING — this project recorded a hardened flaky-triage kit, but the kit tree is no longer present at its expected path. It may have been renamed aside and replaced. Verify before trusting anything the kit reports." >&2
+fi
+
 if [ -n "$CMD" ]; then
   # beforeShellExecution: no cheap grep prefilter (see header note) — go straight to the shared
   # quote/subshell/canonicalization-aware surface-write check, threading cwd for its cd tracking.
