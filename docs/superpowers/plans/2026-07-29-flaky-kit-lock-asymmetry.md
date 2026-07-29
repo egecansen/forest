@@ -12,7 +12,12 @@
 
 ## Global Constraints
 
-- **The kit is locked.** Before editing anything under `kits/flaky-triage-kit/core/`, run `HEKTOR_FLAKYKIT_UNLOCK=1 core/lock-kit.sh unlock` from the kit root; re-lock with `core/lock-kit.sh lock` when the task's commit is done. Files under `adapters/` are not on the lock surface and need no unlock.
+- **The kit is unlocked for the whole run, not per task.** The controller unlocks once
+  (`HEKTOR_FLAKYKIT_UNLOCK=1 core/lock-kit.sh unlock` from the kit root) before Task 1 and re-locks
+  once after Task 8. Do **not** unlock or re-lock inside a task: Task 3 rewrites `lock-kit.sh`
+  itself, so a per-task re-lock would run a half-migrated locker against a tree the next task must
+  edit. If a write fails with `Permission denied`, stop and report it — do not work around it.
+  Files under `adapters/` are not on the lock surface and never needed an unlock.
 - **bash 3.2 compatible** — this is macOS's system bash. No associative arrays, no `${var^^}`. Keep EREs in unquoted variables inside `[[ =~ ]]` (see `core/_strict.sh`'s portability note).
 - **No `sudo -E`, ever.** The script runs as the user and escalates internally for the single `chown`. Reading `HEKTOR_FLAKYKIT_UNLOCK` happens *before* any escalation.
 - **`stat` is not portable:** BSD/macOS is `stat -f %u`, GNU/Linux is `stat -c %u`. Branch on `uname -s` exactly as `adapters/_lib/audit.sh` does for `chflags`/`chattr`.
@@ -54,13 +59,7 @@ Removes the only day-to-day reason to open the lock. Independent of everything e
 **Interfaces:**
 - Produces: env vars `HEKTOR_FK_DATA_CENTER`, `HEKTOR_FK_CHROME_VERSION`. Precedence is **env wins over config**, matching `HEKTOR_FK_JAVA_HOME` at `rerun.sh:85`.
 
-- [ ] **Step 1: Unlock the kit**
-
-```bash
-cd kits/flaky-triage-kit && HEKTOR_FLAKYKIT_UNLOCK=1 core/lock-kit.sh unlock
-```
-
-- [ ] **Step 2: Write the failing test**
+- [ ] **Step 1: Write the failing test**
 
 Append to `core/tests/rerun-test.sh`, before its final `echo`:
 
@@ -74,12 +73,12 @@ DRY_OUT="$(HEKTOR_FK_CHROME_VERSION='1;rm -rf /' RERUN_DRY=1 bash "$HERE/../reru
 case "$DRY_OUT" in *"I1"*) ok ;; *) bad "a malformed HEKTOR_FK_CHROME_VERSION must be I1-rejected, not passed through" ;; esac
 ```
 
-- [ ] **Step 3: Run it and watch it fail**
+- [ ] **Step 2: Run it and watch it fail**
 
 Run: `bash core/tests/rerun-test.sh`
 Expected: FAIL — `HEKTOR_FK_DATA_CENTER must override run.data_center`
 
-- [ ] **Step 4: Implement**
+- [ ] **Step 3: Implement**
 
 In `core/rerun.sh`, replace the `DC=` assignment and the `CV=` assignment:
 
@@ -93,7 +92,7 @@ CV="${HEKTOR_FK_CHROME_VERSION:-$(jq -r '.run.chrome_version // ""' "$CFG")}"
 
 The existing `strict_match "$CV" '[0-9]+(\.[0-9]+)*'` guard already covers the env path — it validates whatever `CV` ends up holding.
 
-- [ ] **Step 5: Document the seam in config.json**
+- [ ] **Step 4: Document the seam in config.json**
 
 Change the `_portability` value to end with:
 
@@ -101,15 +100,14 @@ Change the `_portability` value to end with:
 (3) run.data_center and run.chrome_version are per-run operational knobs, overridable via HEKTOR_FK_DATA_CENTER / HEKTOR_FK_CHROME_VERSION so a hardened (root-owned) kit never needs unlocking for routine work. The SECURITY fields — es.host, es.host_allowlist, jira.host, qagent.endpoint, source_roots — are deliberately NOT env-overridable and are protected by the lock.
 ```
 
-- [ ] **Step 6: Run tests**
+- [ ] **Step 5: Run tests**
 
 Run: `bash core/tests/rerun-test.sh`
 Expected: PASS, 24 passed 0 failed
 
-- [ ] **Step 7: Re-lock and commit**
+- [ ] **Step 6: Commit**
 
 ```bash
-core/lock-kit.sh lock
 git add kits/flaky-triage-kit/core/rerun.sh kits/flaky-triage-kit/core/config.json kits/flaky-triage-kit/core/tests/rerun-test.sh
 git commit -m "kit: env overrides for data_center and chrome_version
 
@@ -515,13 +513,32 @@ Expected: PASS, 18 passed 0 failed
 
 - [ ] **Step 5: Call it from every entrypoint**
 
-For each of the 13 scripts listed under **Files**, add immediately after the existing `HERE=`/`CFG=` line:
+**Only 8 of the 13 scripts define `HERE`.** Verified: `ingest`, `cluster`, `rerun`, `apply`,
+`compile`, `dom-capture`, `dom-on-failure`, `triage` have a `HERE=` line; `ledger`, `summary`,
+`gate`, `correlate`, `qagent` do **not**. Do not assume an anchor that is not there.
+
+For the **8 that already define `HERE`**, add immediately after that line:
 
 ```bash
 . "$HERE/_integrity.sh"; integrity_guard "$HERE/.." || exit 76
 ```
 
-For `rerun.sh` place it *after* the `RERUN_LIB_ONLY` early-return at line 70, so sourcing the library for unit tests does not trigger a guard against the source tree.
+For the **5 that do not** (`ledger.sh`, `summary.sh`, `gate.sh`, `correlate.sh`, `qagent.sh`), add
+both lines immediately after their `set -uo pipefail`:
+
+```bash
+HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+. "$HERE/_integrity.sh"; integrity_guard "$HERE/.." || exit 76
+```
+
+Two placement rules that are not optional:
+
+- **`rerun.sh`:** put the guard *after* the `RERUN_LIB_ONLY` early-return (currently line 70). That
+  seam exists so `core/tests/rerun-test.sh` can source the aggregation functions without running the
+  CLI body; a guard above it would fire against the source tree during unit tests.
+- **`gate.sh` and `summary.sh`:** both write a contract to **stdout** (verifier JSON, the report).
+  `integrity_guard` prints only to stderr by design, so this is safe — but keep the guard above the
+  first line that writes stdout so a refusal happens before any partial output.
 
 - [ ] **Step 6: Confirm the whole suite is still green**
 
