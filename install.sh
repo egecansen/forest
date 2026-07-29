@@ -157,6 +157,33 @@ EOF
   fi
 fi
 
+# ---------------------------------------------------------------------------
+# 5) Kits — delegate to each kit's own installer. LAST, so a kit's harness
+#    registrations land on top of the pack's rather than under them.
+#
+#    Why delegate instead of shipping a copy under skills/: the flaky-triage kit
+#    used to exist TWICE — once as kits/flaky-triage-kit (maintained) and once as
+#    skills/hektor-flaky-triage (a frozen fork). Both installed to the SAME path,
+#    .claude/skills/hektor-flaky-triage, so whichever installer ran last won, and
+#    running this one last silently downgraded a hardened kit to the stale fork.
+#    The fork is gone; the kit is now the single source and installs itself here.
+#    Sibling skills that reference `hektor-flaky-triage/core/*` (hektor-verify,
+#    hektor-bug-discovery, hektor-visual-regression) keep resolving unchanged —
+#    the install path is identical, only the content is now the maintained one.
+# ---------------------------------------------------------------------------
+for kit_installer in "$HERE"/kits/*/install.sh; do
+  [ -x "$kit_installer" ] || continue
+  kit_name="$(basename "$(dirname "$kit_installer")")"
+  "$kit_installer" --harness "$HARNESS" --project "$PROJ"; kit_rc=$?
+  if [ "$kit_rc" -eq 0 ]; then
+    echo "install: kit '$kit_name' installed (delegated to its own installer)"
+  else
+    # Never fail the whole pack install because one kit's installer did — the pack's
+    # skills/hooks are already in place and useful on their own. Say so loudly instead.
+    echo "install: WARN kit '$kit_name' installer FAILED (exit $kit_rc) — pack assets are installed, that kit is NOT; re-run $kit_installer to see why" >&2
+  fi
+done
+
 cat >&2 <<EOF
 
 install: done ($HARNESS) in $PROJ

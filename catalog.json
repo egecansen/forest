@@ -47,12 +47,6 @@
       "description": "Diagnose a SINGLE failing JUnit test in web-ui-test via evidence-based triage — Selenoid VNC artefacts, screenshots from web-ui-test/temp/images/…"
     },
     {
-      "id": "hektor-flaky-triage",
-      "label": "Flaky Triage",
-      "group": "triage",
-      "description": "Triage a flaky testbox run: take an s-report URL + a testbox, re-run the failing tests on that tb, and present ONE clusters table ordered easy-fix →…"
-    },
-    {
       "id": "hektor-from-jira",
       "label": "From Jira",
       "group": "authoring",
