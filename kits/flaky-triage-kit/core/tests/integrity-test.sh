@@ -1,10 +1,19 @@
 #!/bin/bash
 # Test suite for core/_integrity.sh. Plain bash asserts, no framework.
-# The privileged path (real chown to root) cannot be automated — it needs a password. So the tier
-# DECISION is a pure function of (owner uid, recorded tier) and is driven here with synthetic
-# inputs, exactly as core/tests/rerun-test.sh drives aggregate() via RERUN_LIB_ONLY.
+#
+# Only ONE thing here needs a password and is therefore deferred to the manual checklist: making a
+# path genuinely owned by uid 0. Everything else about the privileged path IS automated — the tier
+# DECISION is a pure function of (owner uid, recorded tier) and is driven with synthetic inputs,
+# exactly as core/tests/rerun-test.sh drives aggregate() via RERUN_LIB_ONLY; and the whole hardened
+# BRANCH of lock-kit.sh runs under PATH-shimmed sudo/stat in core/tests/lock-tier-test.sh. The claim
+# "the privileged path cannot be automated" that stood here is retracted — the file next to it
+# disproves it — and corrected rather than deleted so the mistake stays legible.
+#
+# The `mismatch` REFUSAL needs no privilege at all: it fires on "recorded hardened + not root-owned",
+# which is any fixture's default state. That is what the entrypoint section at the bottom exploits.
 set -uo pipefail
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+CORE="$(cd "$HERE/.." && pwd)"
 . "$HERE/../_integrity.sh"
 pass=0; fail=0
 ok()  { pass=$((pass+1)); }
@@ -85,6 +94,44 @@ for t in hardened stale unlocked degraded unprotected mismatch; do
 done; ok
 # The production path must carry no environment override.
 grep -q 'INTEGRITY_FAKE_UID' "$HERE/../_integrity.sh" && bad "no environment override may remain in _integrity.sh — it silences the guard for anyone who can set a variable" || ok
+
+# --- integrity_guard: the COMPOSITION, and that the entrypoints actually call it ----------------
+# Until this section existed, `integrity_guard() { return 0; }` left the entire suite green: the two
+# HALVES were covered (integrity_tier with synthetic uids, integrity_report with synthetic tiers) and
+# nothing tested that they were wired together, that any entrypoint called the result, or that any
+# entrypoint refused. Deleting the guard from apply.sh — the one entrypoint that writes to the repo —
+# was invisible.
+KF="$(mktemp -d)"; trap 'rm -rf "$RT" "$KF"' EXIT
+mkdir -p "$KF/core"
+for f in "$CORE"/*.sh "$CORE"/*.py "$CORE"/*.json; do [ -f "$f" ] && cp "$f" "$KF/core/"; done
+# Recorded hardened, actually user-owned = `mismatch`. No privilege needed to arrange it.
+printf '{"tier":"hardened","at":"x"}\n' > "$KF/core/.lock-state"
+
+[ "$(integrity_state "$KF")" = hardened ] && ok || bad "guard fixture must record the hardened tier"
+integrity_guard "$KF" >/dev/null 2>&1
+[ "$?" -eq 76 ] && ok || bad "integrity_guard must compose owner+state into a tier and refuse (76) on a mismatched tree — neither half's test covers the composition"
+case "$(integrity_guard "$KF" 2>&1 >/dev/null)" in *MISMATCH*) ok ;; *) bad "integrity_guard must pass the composed tier to integrity_report, so the MISMATCH text reaches stderr" ;; esac
+[ -z "$(integrity_guard "$KF" 2>/dev/null)" ] && ok || bad "integrity_guard must never write to stdout"
+
+# Every entrypoint must REFUSE, and must keep stdout clean while refusing: four of them emit a
+# machine-read JSON contract there, and a caller that parses partial output is worse than one that
+# gets nothing.
+ENTRYPOINTS="apply cluster compile correlate dom-capture dom-on-failure gate ingest ledger qagent rerun summary triage"
+for e in $ENTRYPOINTS; do
+  out="$(cd "$KF" && bash "$KF/core/$e.sh" </dev/null 2>/dev/null)"; rc=$?
+  [ "$rc" -eq 76 ] && ok || bad "$e.sh must refuse with 76 on a mismatched tier (got $rc)"
+  [ -z "$out" ]    && ok || bad "$e.sh must keep stdout empty when it refuses (got: $out)"
+done
+
+# Pin the call sites by IDENTITY, not just by count: this fails both when a guard line is deleted and
+# when a NEW entrypoint lands without one. lock-kit.sh is excluded because it is the tool that
+# establishes the tier (guarding it would lock the operator out of their own repair path), and
+# hedge-scan.sh because it is a pure text screen that reads nothing from the kit's state.
+ACTUAL_GUARDED="$(grep -lF 'integrity_guard "$HERE/.." || exit 76' "$CORE"/*.sh 2>/dev/null \
+                  | while IFS= read -r f; do b="$(basename "$f")"; printf '%s\n' "${b%.sh}"; done | sort | tr '\n' ' ')"
+EXPECT_GUARDED="$(printf '%s\n' $ENTRYPOINTS | sort | tr '\n' ' ')"
+[ "$ACTUAL_GUARDED" = "$EXPECT_GUARDED" ] && ok \
+  || bad "the set of entrypoints calling integrity_guard must be exactly [$EXPECT_GUARDED] — got [$ACTUAL_GUARDED]"
 
 echo "integrity-test: $pass passed, $fail failed"
 [ "$fail" -eq 0 ]
