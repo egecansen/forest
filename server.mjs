@@ -10,6 +10,7 @@ import { runGit } from './lib/git.mjs';
 import { listPacks } from './lib/packs.mjs';
 import { createActionHandler } from './lib/actions.mjs';
 import { pruneLandings } from './lib/landed.mjs';
+import { readRepoList } from './lib/repos.mjs';
 
 const ROOT = fileURLToPath(new URL('.', import.meta.url));
 const PUBLIC = join(ROOT, 'public');
@@ -20,6 +21,9 @@ const registry = createRegistry();
 const journal = createJournal({ max: 300 });
 const sizes = new Map();
 
+let repoList = await readRepoList(ROOT);
+const warnedRepos = new Set();
+
 const clients = new Set(); // SSE response objects
 
 function broadcast(event, data) {
@@ -29,7 +33,13 @@ function broadcast(event, data) {
 journal.subscribe((entry) => broadcast('journal', entry));
 
 async function snapshot() {
-  return buildSnapshot(config, { registry, nowMs: Date.now(), claudeProjectsDir: CLAUDE_PROJECTS, sizes });
+  const snap = await buildSnapshot(config, { registry, nowMs: Date.now(), claudeProjectsDir: CLAUDE_PROJECTS, sizes, repoList });
+  for (const p of snap.skippedRepos) {
+    if (warnedRepos.has(p)) continue;
+    warnedRepos.add(p);
+    journal.add({ cmd: `repo skipped: ${p} is no longer a git repository (still listed)`, cwd: ROOT, mode: 'auto' });
+  }
+  return snap;
 }
 
 const MIME = { '.html': 'text/html', '.css': 'text/css', '.js': 'text/javascript', '.json': 'application/json', '.woff2': 'font/woff2', '.svg': 'image/svg+xml' };
@@ -61,7 +71,12 @@ export function readBody(req) {
 }
 
 // Shared context handed to the action router (Task 8).
-export const ctx = { config, registry, journal, broadcast, snapshot, CLAUDE_PROJECTS };
+export const ctx = {
+  config, registry, journal, broadcast, snapshot, CLAUDE_PROJECTS,
+  forestRoot: ROOT,
+  getRepoList: () => repoList,
+  setRepoList: (list) => { repoList = list; warnedRepos.clear(); },
+};
 
 // Action router is attached in Task 8; defaults to 404 until then.
 export let handleAction = async (req, res) => { res.writeHead(404).end('no action'); };
