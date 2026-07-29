@@ -1075,10 +1075,19 @@ grep -rln 'lock-kit' kits/flaky-triage-kit/
 
 Read **every** mention of the lock in **every** file that list returns — including `README.md`,
 `cross-harness.md`, the `hektor-triage-kit` CLI's help text, and the Cursor `.mdc` rule, none of
-which any earlier round opened. For each mention apply one test: *does this sentence promise more
-than the hardened tier actually delivers, or describe the mechanism as a `chmod`/read-only bit?*
-Both are the retracted claim. Record every mention you examined in the report, including the ones
-you judge fine, so the sweep is auditable rather than asserted.
+which any earlier round opened. For each mention apply one test — and read it at its widest, because
+a narrower version of this criterion has now been too small three separate times: *does this
+sentence say anything untrue about **what protects what**?*
+
+That covers promising more than the hardened tier delivers, and describing the mechanism as a
+`chmod`/read-only bit. It also covers claims about the **gate's** enforcement rather than the lock's
+— which the narrower wording excluded, and which is how `adapters/claude/…:26`'s "this harness
+doesn't honor PreToolUse `deny`" survived four rounds while five other places in the same tree say
+the opposite and the same file's own Failure→action table, 45 lines below, treats `deny` as the
+actual runtime outcome.
+
+Record every mention you examined in the report, including the ones you judge fine, so the sweep is
+auditable rather than asserted.
 
 `README.md:67` is the sharpest example of why this matters: the kit's front-door README still
 documents the command as `core/lock-kit.sh lock  # chmod the surface read-only` — the pre-project
