@@ -1,5 +1,7 @@
 #!/bin/bash
-# core/lock-kit.sh — put a REAL OS-level wall (read-only bit) around the kit's safety surface.
+# core/lock-kit.sh — establishes the strongest OS-level protection tier it can on the kit's safety
+# surface: hardened (root-owned, password-gated reopen) when possible, else a chmod read-only bit.
+# See TIERS below — naming only "a read-only bit" here would describe the weaker, reversible tier.
 #
 # WHY
 # ---

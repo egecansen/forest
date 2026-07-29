@@ -72,9 +72,11 @@
 #   wants to bypass it — `base64 ... | bash`, `eval "$x"`, process substitution, exotic quoting, a
 #   compiled writer, or any construct that doesn't reduce to a literal, parseable Bash command string
 #   all bypass by construction, no matter how much more string-analysis is layered on. Past this
-#   round, further hardening does NOT mean chasing more shell constructs here — the REAL wall is
-#   `core/lock-kit.sh lock` (an OS-level read-only bit, now directory-level, unaffected by any of the
-#   above). Do not read completeness into anything below.
+#   round, further hardening does NOT mean chasing more shell constructs here — the REAL wall, at
+#   the **hardened** tier, is `core/lock-kit.sh lock` chown'ing core/** (and the kit root) to root,
+#   unaffected by any of the above; below hardened it degrades to a directory-level chmod-only bit,
+#   which is friction, not a wall (a same-user chmod reverses it). Do not read completeness into
+#   anything below.
 import sys, re, os
 
 # Protected surface = the kit's own files, PLUS the self-protection gate scripts (both harnesses)

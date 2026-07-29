@@ -48,8 +48,10 @@ otherwise) and the gate now also matches **Bash** writes (redirect/`sed -i`/`cp`
 sibling gate blocked a `settings.json` edit), so the gate is a real wall when locked, not just an
 audit signal (kernel §14 META). For an OS-level wall independent of the CLI, `core/lock-kit.sh
 lock` reaches for the **hardened** tier: `core/**`, `hooks/**`, and the kit root itself chowned to
-root, so reopening needs a password, not just `HEKTOR_FLAKYKIT_UNLOCK=1` (that flag is an audit
-intent-marker, not consent — the password is). Without `sudo` it **degrades** to the old
+root, so reopening needs a password, not just `HEKTOR_FLAKYKIT_UNLOCK=1` (that flag is an intent
+marker, not consent — the password is; it's logged to the audit log only when a PreToolUse gate
+intercepts an agent's call with it set, never by `lock-kit.sh` running directly). Without `sudo` it
+**degrades** to the old
 chmod-a-w-only behaviour, which the same user can reverse. `core/_integrity.sh` asserts the tier
 that's actually there at every entrypoint (2026-07-29), so a silent slip from hardened to degraded
 can't pass as still-protected.

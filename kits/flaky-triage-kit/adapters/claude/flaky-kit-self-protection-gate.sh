@@ -28,9 +28,14 @@
 # deliberate, audited act. It now also matches Bash commands that mutate the
 # surface (redirect / sed -i / cp / mv / rm / chmod / git checkout|apply|restore|
 # stash|reset|clean / rsync / patch), closing the Write|Edit-only gap heuristically.
-# The REAL wall (an OS read-only bit) is `core/lock-kit.sh`, also keyed to
-# HEKTOR_FLAKYKIT_UNLOCK. Legitimate kit maintenance sets the unlock flag; the use
-# is logged to docs/hektor/.hook-audit.log.
+# The REAL wall, when reached, is `core/lock-kit.sh lock`'s **hardened** tier: core/** (and the kit
+# root) chown'd to root, so reopening needs a password, not merely this gate's chmod-based friction.
+# Below hardened — chmod-only "degraded," or never locked at all ("unprotected") — this gate is the
+# only friction there is; naming it "an OS read-only bit" without the tier would describe the
+# degraded case, which a same-user chmod reverses. HEKTOR_FLAKYKIT_UNLOCK is an intent marker, not
+# consent. Legitimate kit maintenance sets it; THIS gate logs that use to docs/hektor/.hook-audit.log
+# when it (not `core/lock-kit.sh` itself) intercepts the matching call — see the Failure -> action
+# table below, and `core/lock-kit.sh`'s own header for why running it directly is never logged there.
 #
 # Round2 — path canonicalization (honest framing: this is defense-in-depth, raising
 # the bar against NATURAL, single-command, accidental/self-defeating bypasses — it
@@ -57,8 +62,10 @@
 # defense-in-depth against natural/accidental and simple adversarial surface writes. It CANNOT be
 # made complete against a shell-capable agent — `base64 ... | bash`, `eval`, process substitution,
 # exotic quoting, and compiled writers all bypass it by construction, no matter how much more
-# pattern-matching is added. The REAL wall is `core/lock-kit.sh lock` (an OS-level read-only bit,
-# now directory-level) — this gate is friction on top of that wall, never a substitute for it.
+# pattern-matching is added. The REAL wall, at the **hardened** tier, is `core/lock-kit.sh lock`
+# chown'ing core/** (and the kit root) to root — not merely a read-only bit, which a same-user chmod
+# reverses; below hardened it degrades to exactly that chmod-only bit. This gate is friction on top
+# of whichever tier is actually reached, never a substitute for either.
 #
 # Failure -> action
 # -----------------

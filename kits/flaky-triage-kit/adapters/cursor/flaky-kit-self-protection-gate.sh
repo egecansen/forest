@@ -32,8 +32,10 @@
 # defense-in-depth against natural/accidental and simple adversarial surface writes. It CANNOT be
 # made complete against a shell-capable agent — `base64 ... | bash`, `eval`, process substitution,
 # exotic quoting, and compiled writers all bypass it by construction, no matter how much more
-# pattern-matching is added. The REAL wall is `core/lock-kit.sh lock` (an OS-level read-only bit,
-# now directory-level) — this gate is friction on top of that wall, never a substitute for it.
+# pattern-matching is added. The REAL wall, at the **hardened** tier, is `core/lock-kit.sh lock`
+# chown'ing core/** (and the kit root) to root — not merely a read-only bit, which a same-user chmod
+# reverses; below hardened it degrades to exactly that chmod-only bit. This gate is friction on top
+# of whichever tier is actually reached, never a substitute for either.
 set -uo pipefail
 
 _DIR="$(dirname "${BASH_SOURCE[0]}")"
