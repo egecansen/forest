@@ -714,8 +714,32 @@ is produces nothing worth trusting."
 - Modify: `kits/flaky-triage-kit/install.sh:104` (the `C=` registration path) and the Cursor block
 - Modify: `kits/flaky-triage-kit/adapters/claude/flaky-kit-self-protection-gate.sh` (`SURF_RE` line 84, `match_surface` lines 113-122)
 - Modify: `kits/flaky-triage-kit/adapters/cursor/flaky-kit-self-protection-gate.sh` (same two constructs)
+- Modify: **`kits/flaky-triage-kit/core/shell-guard.py`** (its own `SURF` regex — see below; an earlier
+  draft of this plan omitted this file and the omission produced a live Bash-vector bypass)
 - Modify: `kits/flaky-triage-kit/core/tests/self-protection-test.sh:50-64` (fixture layout)
 - Modify: `kits/flaky-triage-kit/enforcement-codeowners.md:21-23`
+
+**`shell-guard.py` carries its OWN surface pattern, and it is the one that decides.** The gates'
+bash-level `SURF_RE`/`MUT_RE` grep is only the *degraded fallback* used when python3 or the script is
+unavailable; the normal Bash-branch path shells out to `shell-guard.py`, whose `SURF` regex is
+hardcoded separately. Updating the two gates without updating it leaves the primary engine matching
+the gate's **old**, now-nonexistent location while the new one is unprotected — and no test notices,
+because the fixture assertions exercise the Edit/Write path (bash `match_surface`), not the Bash
+path. Replace the dead `hooks/\S*\.sh` alternative rather than adding alongside it, so the two
+patterns cannot drift further apart:
+
+```python
+    else re.compile(r'\.claude/skills/hektor-flaky-triage/(core/|SKILL\.md)'
+                     r'|\.claude/hooks/flaky-kit-self-protection-gate\.sh'
+                     r'|\.cursor/hooks/(flaky-kit-self-protection-gate\.sh|lib/)'
+                     r'|\.claude/hooks/lib/')
+```
+
+and add a Bash-branch assertion to the fixture proving a mutation of
+`$PROJ/.claude/hooks/flaky-kit-self-protection-gate.sh` is DENIED, mirroring the existing `core/`
+Bash cases. Verify directly, not only through the suite:
+`printf '%s' "sed -i '' .claude/hooks/flaky-kit-self-protection-gate.sh" | HEKTOR_FK_CWD=/tmp python3 core/shell-guard.py; echo $?`
+must print `0` (deny). Before the fix it prints `1`.
 
 **Interfaces:**
 - Produces: gate installed at `.claude/hooks/flaky-kit-self-protection-gate.sh`; the settings.json registration points there.
