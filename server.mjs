@@ -10,7 +10,7 @@ import { runGit } from './lib/git.mjs';
 import { listPacks } from './lib/packs.mjs';
 import { createActionHandler } from './lib/actions.mjs';
 import { pruneLandings } from './lib/landed.mjs';
-import { readRepoList } from './lib/repos.mjs';
+import { readRepoState } from './lib/repos.mjs';
 
 const ROOT = fileURLToPath(new URL('.', import.meta.url));
 const PUBLIC = join(ROOT, 'public');
@@ -21,7 +21,14 @@ const registry = createRegistry();
 const journal = createJournal({ max: 300 });
 const sizes = new Map();
 
-let repoList = await readRepoList(ROOT);
+// Spec §1: "Malformed file → empty list plus one warning in the journal."
+// readRepoList alone can't tell "absent" from "unreadable" (both come back
+// []), so read the full state here and journal once when it's the latter.
+const { repos: initialRepoList, malformed: repoListMalformed } = await readRepoState(ROOT);
+let repoList = initialRepoList;
+if (repoListMalformed) {
+  journal.add({ cmd: 'repos.json is malformed and was ignored (nothing was overwritten) — listed repos are unavailable until it is fixed', cwd: ROOT, mode: 'auto' });
+}
 const warnedRepos = new Set();
 
 const clients = new Set(); // SSE response objects

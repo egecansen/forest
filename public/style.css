@@ -83,6 +83,14 @@ header {
 }
 #search::placeholder { color: var(--muted); }
 
+/* Sits in a <span> inside <header>, so `header button` below never reaches
+   it — styled to match #search, its nearest input neighbour. */
+#addrepo-path {
+  padding: 8px 12px; font: inherit; color: var(--ink);
+  border: 1px solid var(--line); border-radius: 9px; background: var(--bg);
+}
+#addrepo-path::placeholder { color: var(--muted); }
+
 header button {
   padding: 8px 13px; font: inherit; color: var(--ink); border: 1px solid var(--line);
   border-radius: 9px; background: var(--bg); cursor: pointer; transition: border-color .12s, background .12s;
@@ -127,6 +135,15 @@ main { max-width: 1320px; margin: 0 auto; padding: 16px 18px 210px; }
   border-radius: 8px; cursor: pointer; transition: color .12s, border-color .12s, background .12s;
 }
 .repo-add:hover { color: var(--accent); border-color: var(--accent); background: var(--accent-weak); }
+/* Lives inside .repo-name, not <header>, so `header button` never reaches
+   it either — sized like .repo-add, its nearest button neighbour, but
+   coloured to warn since it's destructive (drops the repos.json entry). */
+.repo-unlist {
+  margin-left: 6px; font: 12px var(--font-ui); color: var(--muted);
+  background: transparent; border: 1px solid transparent; padding: 4px 10px;
+  border-radius: 8px; cursor: pointer; transition: color .12s, border-color .12s, background .12s;
+}
+.repo-unlist:hover { color: var(--danger); border-color: var(--danger); background: var(--danger-weak); }
 .repo-count {
   font-family: var(--font-mono); font-size: 11px; font-weight: 500; color: var(--muted);
   border: 1px solid var(--line); border-radius: 999px; padding: 0 7px;
@@ -138,6 +155,12 @@ main { max-width: 1320px; margin: 0 auto; padding: 16px 18px 210px; }
 }
 .repo-name + .row { border-top: none; }
 .row:hover { background: var(--accent-weak); }
+
+/* Stub group body (Finding 2): a listed repo discovery can't render — stale,
+   moved, or never a repo forest can show — gets one message row instead of
+   worktree rows, under the same removable .repo-name header. */
+.repo-stub { padding: 11px 16px; color: var(--muted); font-size: 13px; border-top: 1px solid var(--line); }
+.repo-name + .repo-stub { border-top: none; }
 
 /* branch rail — nested worktrees branch off their repo. Indent only the
    branch cell so columns 2-7 stay aligned with the header row. */

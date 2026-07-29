@@ -93,16 +93,46 @@ function rowHtml(w, repo) {
   </div>`;
 }
 
+// The basename of a listed repo path — client-side equivalent of node's
+// path.basename() for the absolute POSIX paths forest deals in. Falls back
+// to the raw path so a degenerate entry (e.g. "/") never renders a blank
+// header label.
+function baseName(p) {
+  const raw = String(p ?? '');
+  const s = raw.replace(/\/+$/, '');
+  const i = s.lastIndexOf('/');
+  const name = i === -1 ? s : s.slice(i + 1);
+  return name || raw;
+}
+
+// A listed path discovery couldn't render (deleted, renamed, unmounted disk —
+// or the Finding-1 case, a subdirectory/bare-repo that never should have been
+// accepted). Without this stub the entry sits in repos.json with no card and
+// no way for the user to remove it — editing the file by hand is exactly the
+// workflow this feature exists to eliminate. Reuses the same
+// data-act="unlist-repo" control (and doAction branch) the normal group's ✕
+// uses, so removal works identically.
+function skippedGroupHtml(path) {
+  const name = baseName(path);
+  return `<div class="repo-group"><div class="repo-name"><span class="repo-name-label">${esc(name)}</span><button class="repo-unlist" data-act="unlist-repo" data-path="${encodeURIComponent(path)}" title="Remove ${esc(name)} from the list (nothing on disk is deleted)">✕</button></div><div class="repo-stub">${esc(path)} is listed but not currently a git repository.</div></div>`;
+}
+
 function render() {
-  const html = state.snapshot.repos.map((r) => {
+  const groupsHtml = state.snapshot.repos.map((r) => {
     const shown = r.worktrees.filter((w) => matches(w, r.repo));
     const rows = shown.map((w) => rowHtml(w, r.repo)).join('');
-    if (!rows) return '';
+    // A scanned (non-listed) repo with nothing visible has no removable
+    // control to preserve, so it's fine to drop the card entirely. A listed
+    // repo must stay on screen — and stay removable — even when a search
+    // filter hides every one of its worktrees.
+    if (!rows && !r.listed) return '';
     const removeBtn = r.listed
       ? `<button class="repo-unlist" data-act="unlist-repo" data-path="${encodeURIComponent(r.repoPath)}" title="Remove ${esc(r.repo)} from the list (nothing on disk is deleted)">✕</button>`
       : '';
     return `<div class="repo-group"><div class="repo-name"><span class="repo-name-label">${esc(r.repo)}<span class="repo-count">${shown.length}</span></span><button class="repo-add" data-repo="${esc(r.repoPath)}" title="New worktree in ${esc(r.repo)}">+ worktree</button>${removeBtn}</div>${rows}</div>`;
   }).join('');
+  const skippedHtml = (state.snapshot.skippedRepos || []).map(skippedGroupHtml).join('');
+  const html = groupsHtml + skippedHtml;
   $('#table').innerHTML = html || '<p class="empty">No worktrees match.</p>';
   renderReadout();
 }
