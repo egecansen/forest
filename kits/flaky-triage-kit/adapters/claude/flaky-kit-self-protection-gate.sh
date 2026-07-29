@@ -17,7 +17,9 @@
 # injection (kernel.md §Packaging P1), or plain drift could neuter the kit with
 # one Edit (P2/P4). This gate denies Write/Edit to the kit's safety surface:
 #   - .claude/skills/hektor-flaky-triage/core/**        (invariant logic + config)
-#   - .claude/skills/hektor-flaky-triage/hooks/*.sh     (this gate — protect the protector)
+#   - .claude/hooks/flaky-kit-self-protection-gate.sh   (this gate — protect the protector; lives
+#                                                        outside the kit tree so it can't be
+#                                                        renamed away along with it, see Task 5/6)
 #   - .claude/skills/hektor-flaky-triage/SKILL.md       (the skill prompt + safety rules)
 #
 # Mirrors .claude/hooks/enforcement-self-protection-gate.sh. This is FRICTION,
@@ -81,7 +83,7 @@ CWD=$(echo "$INPUT" | "$JQ" -r '.cwd // empty' 2>/dev/null || echo "")
 # session could freely Edit the Cursor gate — or this gate's own audit lib — and neither gate would
 # notice. Kept precise: only the gate filenames + their lib/ dirs, not the whole `.cursor/`/
 # `.claude/hooks/` trees, which hold plenty of unrelated, legitimately-editable files).
-SURF_RE='\.claude/skills/hektor-flaky-triage/(core/|hooks/[^[:space:]]*\.sh|SKILL\.md)|\.cursor/hooks/(flaky-kit-self-protection-gate\.sh|lib/)|\.claude/hooks/lib/'
+SURF_RE='\.claude/skills/hektor-flaky-triage/core/|\.claude/hooks/flaky-kit-self-protection-gate\.sh|\.cursor/hooks/(flaky-kit-self-protection-gate\.sh|lib/)|\.claude/hooks/lib/|\.claude/skills/hektor-flaky-triage/SKILL\.md'
 # Bash mutation indicators (redirect / in-place / copy / move / delete / perm / git-mutate / rsync /
 # patch) — heuristic, errs toward flagging. Used as the fallback ONLY when python3/shell-guard.py
 # is unavailable for the Bash branch below (degraded precision, documented, not silent).
@@ -111,12 +113,12 @@ except Exception:
 
 match_surface() {  # $1 = a path -> sets SURFACE and returns 0, or returns 1
   case "$1" in
-    */.claude/skills/hektor-flaky-triage/core/*)       SURFACE="kit core (invariant logic + config)"; return 0 ;;
-    */.claude/skills/hektor-flaky-triage/hooks/*.sh)   SURFACE="kit protection hook (Claude)"; return 0 ;;
-    */.claude/skills/hektor-flaky-triage/SKILL.md)     SURFACE="kit skill prompt"; return 0 ;;
-    */.cursor/hooks/flaky-kit-self-protection-gate.sh) SURFACE="kit protection hook (Cursor)"; return 0 ;;
-    */.cursor/hooks/lib/*)                             SURFACE="kit protection hook lib (Cursor)"; return 0 ;;
-    */.claude/hooks/lib/*)                             SURFACE="kit protection hook lib (Claude)"; return 0 ;;
+    */.claude/skills/hektor-flaky-triage/core/*)          SURFACE="kit core (invariant logic + config)"; return 0 ;;
+    */.claude/skills/hektor-flaky-triage/SKILL.md)        SURFACE="kit skill prompt"; return 0 ;;
+    */.claude/hooks/flaky-kit-self-protection-gate.sh)    SURFACE="kit protection hook (Claude)"; return 0 ;;
+    */.cursor/hooks/flaky-kit-self-protection-gate.sh)    SURFACE="kit protection hook (Cursor)"; return 0 ;;
+    */.cursor/hooks/lib/*)                                SURFACE="kit protection hook lib (Cursor)"; return 0 ;;
+    */.claude/hooks/lib/*)                                SURFACE="kit protection hook lib (Claude)"; return 0 ;;
     *) return 1 ;;
   esac
 }
@@ -140,7 +142,7 @@ case "$TOOL_NAME" in
     # canonicalize — ever runs. Every Bash command now pays one python3 spawn when the guard is
     # available; correctness over the fast path for a self-protection gate. Fail-open to the
     # whole-string MUT grep only if python3/the guard is unavailable (degraded, documented).
-    GUARD="$(cd "$(dirname "${BASH_SOURCE[0]}")/../core" 2>/dev/null && pwd)/shell-guard.py"
+    GUARD="${CLAUDE_PROJECT_DIR:-$(git rev-parse --show-toplevel 2>/dev/null)}/.claude/skills/hektor-flaky-triage/core/shell-guard.py"
     if command -v python3 >/dev/null 2>&1 && [ -f "$GUARD" ]; then
       printf '%s' "$CMDSTR" | HEKTOR_FK_CWD="$CWD" python3 "$GUARD" || exit 0
     else

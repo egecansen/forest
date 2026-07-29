@@ -48,7 +48,7 @@ bad() { fail=$((fail+1)); echo "FAIL: $1" >&2; }
 # --- fixture: mimic install.sh's on-disk layout, sharing one core/ copy between both harnesses ---
 PROJ="$WORK/proj"
 SKILL="$PROJ/.claude/skills/hektor-flaky-triage"
-mkdir -p "$SKILL/core" "$SKILL/hooks" "$PROJ/.claude/hooks/lib" "$PROJ/.cursor/hooks/lib" "$PROJ/.cursor/rules"
+mkdir -p "$SKILL/core" "$PROJ/.claude/hooks/lib" "$PROJ/.cursor/hooks/lib" "$PROJ/.cursor/rules"
 git -C "$PROJ" init -q
 git -C "$PROJ" config user.email test@example.com
 git -C "$PROJ" config user.name self-protection-test
@@ -56,20 +56,20 @@ git -C "$PROJ" config user.name self-protection-test
 cp "$CORE/shell-guard.py" "$SKILL/core/shell-guard.py"
 cp "$CORE/lock-kit.sh"    "$SKILL/core/lock-kit.sh"
 cp "$CORE/_integrity.sh"  "$SKILL/core/_integrity.sh"   # lock-kit.sh sources this; must ship alongside it
-cp "$KITSRC/adapters/claude/flaky-kit-self-protection-gate.sh" "$SKILL/hooks/flaky-kit-self-protection-gate.sh"
+cp "$KITSRC/adapters/claude/flaky-kit-self-protection-gate.sh" "$PROJ/.claude/hooks/flaky-kit-self-protection-gate.sh"
 cp "$KITSRC/adapters/_lib/audit.sh"                             "$PROJ/.claude/hooks/lib/audit.sh"
 cp "$KITSRC/adapters/cursor/flaky-kit-self-protection-gate.sh"  "$PROJ/.cursor/hooks/flaky-kit-self-protection-gate.sh"
 cp "$KITSRC/adapters/cursor/lib/cursor-compat.sh"               "$PROJ/.cursor/hooks/lib/cursor-compat.sh"
 cp "$KITSRC/adapters/_lib/audit.sh"                             "$PROJ/.cursor/hooks/lib/audit.sh"
 chmod +x "$SKILL/core/shell-guard.py" "$SKILL/core/lock-kit.sh" \
-         "$SKILL/hooks/flaky-kit-self-protection-gate.sh" "$PROJ/.cursor/hooks/flaky-kit-self-protection-gate.sh"
+         "$PROJ/.claude/hooks/flaky-kit-self-protection-gate.sh" "$PROJ/.cursor/hooks/flaky-kit-self-protection-gate.sh"
 printf '{"kit":"config"}\n'      > "$SKILL/core/config.json"
 printf '# unrelated cursor rule\n' > "$PROJ/.cursor/rules/hektor-flaky-triage.mdc"
 printf '{}\n'                    > "$PROJ/.claude/settings.json"
 printf 'x\n'                     > "$PROJ/README.md"
 git -C "$PROJ" add -A >/dev/null; git -C "$PROJ" commit -qm init >/dev/null
 
-CLAUDE_GATE="$SKILL/hooks/flaky-kit-self-protection-gate.sh"
+CLAUDE_GATE="$PROJ/.claude/hooks/flaky-kit-self-protection-gate.sh"
 CURSOR_GATE="$PROJ/.cursor/hooks/flaky-kit-self-protection-gate.sh"
 
 run_claude() { (cd "$PROJ" && printf '%s' "$1" | CLAUDE_PROJECT_DIR="$PROJ" "$CLAUDE_GATE"); }
@@ -131,7 +131,12 @@ assert_claude_edit_deny  "$PROJ/.claude/hooks/lib/audit.sh"                     
 assert_claude_edit_allow "$PROJ/.cursor/rules/hektor-flaky-triage.mdc"           "unrelated cursor rule file"
 assert_claude_edit_allow "$PROJ/.claude/settings.json"                          "unrelated claude settings"
 
-assert_cursor_edit_deny  "$SKILL/hooks/flaky-kit-self-protection-gate.sh"        "claude gate script (regression)"
+echo "== Fix 2 (Task 5): relocated Claude gate lives at .claude/hooks/, out of the shadowable kit tree ==" >&2
+assert_claude_edit_deny  "$PROJ/.claude/hooks/flaky-kit-self-protection-gate.sh" "the relocated Claude gate protects itself at its new path"
+assert_claude_edit_deny  "$SKILL/core/apply.sh"                                  "kit core is still surface after the move"
+assert_claude_edit_allow "$PROJ/.claude/hooks/observe.sh"                        "an unrelated pack hook is NOT surface"
+
+assert_cursor_edit_deny  "$PROJ/.claude/hooks/flaky-kit-self-protection-gate.sh" "claude gate script (regression)"
 assert_cursor_edit_deny  "$PROJ/.claude/hooks/lib/audit.sh"                      "claude audit lib (parity)"
 assert_cursor_edit_deny  "$PROJ/.cursor/hooks/flaky-kit-self-protection-gate.sh" "cursor gate self-protect"
 assert_cursor_edit_deny  "$PROJ/.cursor/hooks/lib/cursor-compat.sh"              "cursor lib self-protect"

@@ -19,8 +19,8 @@ Bitbucket Data Center reads `CODEOWNERS` from the repo root, `.bitbucket/`, or `
 ```
 # CODEOWNERS — flaky-triage kit safety surface. Replace @qa-automation with the real team/handle (TODO).
 /.claude/skills/hektor-flaky-triage/core/    @qa-automation
-/.claude/skills/hektor-flaky-triage/hooks/   @qa-automation
 /.claude/skills/hektor-flaky-triage/SKILL.md @qa-automation
+/.claude/hooks/flaky-kit-self-protection-gate.sh @qa-automation
 /docs/hektor/flaky-triage-kit/               @qa-automation
 ```
 

@@ -43,11 +43,10 @@ SKILL_DIR="$PROJ/$KIT"
 
 # --- engine + skill: the canonical home for EVERY harness (the gate's surface + the AGENTS.md/rule
 #     pointers all reference this path; the engine runs from here in any terminal). Always installed. ---
-mkdir -p "$SKILL_DIR/core" "$SKILL_DIR/hooks"
+mkdir -p "$SKILL_DIR/core"
 cp -R "$HERE/core/." "$SKILL_DIR/core/"
 cp "$HERE/adapters/claude/SKILL.md" "$SKILL_DIR/SKILL.md"
-cp "$HERE/adapters/claude/flaky-kit-self-protection-gate.sh" "$SKILL_DIR/hooks/flaky-kit-self-protection-gate.sh"
-chmod +x "$SKILL_DIR"/core/*.sh "$SKILL_DIR"/core/*.py "$SKILL_DIR/hooks"/*.sh 2>/dev/null || true
+chmod +x "$SKILL_DIR"/core/*.sh "$SKILL_DIR"/core/*.py 2>/dev/null || true
 echo "install: engine + SKILL.md -> $KIT/"
 
 # --- auto-configure the installed config so there's no manual step (never clobbers valid values) ---
@@ -97,11 +96,16 @@ vendor() { # $1=src  $2=dest (only if absent — never clobber an existing insta
   fi
 }
 
-# --- Claude Code: register the gate in settings.json (PreToolUse Write|Edit + Bash) ---
+# --- Claude Code: gate + register in settings.json (PreToolUse Write|Edit + Bash) ---
+# The gate installs to .claude/hooks/ — OUTSIDE the kit tree at .claude/skills/hektor-flaky-triage/
+# — so renaming that tree aside cannot take its own detector along with it (Task 5).
 if [ "$do_claude" = 1 ]; then
+  mkdir -p "$PROJ/.claude/hooks"
+  cp "$HERE/adapters/claude/flaky-kit-self-protection-gate.sh" "$PROJ/.claude/hooks/flaky-kit-self-protection-gate.sh"
+  chmod +x "$PROJ/.claude/hooks/flaky-kit-self-protection-gate.sh" 2>/dev/null || true
   vendor "$HERE/adapters/_lib/audit.sh" "$PROJ/.claude/hooks/lib/audit.sh"
   S="$PROJ/.claude/settings.json"; [ -f "$S" ] || echo '{}' > "$S"
-  C='"$CLAUDE_PROJECT_DIR/.claude/skills/hektor-flaky-triage/hooks/flaky-kit-self-protection-gate.sh"'
+  C='"$CLAUDE_PROJECT_DIR/.claude/hooks/flaky-kit-self-protection-gate.sh"'
   for M in "Write|Edit" "Bash"; do
     t="$(mktemp)"; jq --arg m "$M" --arg c "$C" '
       .hooks //= {} | .hooks.PreToolUse //= [] |
