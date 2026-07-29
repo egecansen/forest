@@ -7,7 +7,10 @@
 > the SKLS staging tree into a shared repo). Until then the live walls are:
 > 1. `hooks/flaky-kit-self-protection-gate.sh` — PreToolUse gate (deny **is** honored by the current CLI;
 >    see kernel §14 META). Now also matches Bash writes.
-> 2. `core/lock-kit.sh lock` — an OS read-only bit on the surface (consent-gated unlock).
+> 2. `core/lock-kit.sh lock` — an OS read-only bit on the surface, at the **hardened** tier root-owned
+>    (reopening needs a password, not just `HEKTOR_FLAKYKIT_UNLOCK=1`, which is an audit
+>    intent-marker, not consent); degrades to a chmod-only bit the same user can reverse when `sudo`
+>    is unavailable.
 
 ## When the kit lives in a tracked repo
 
