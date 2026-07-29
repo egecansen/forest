@@ -274,7 +274,7 @@ async function doAction(act, ds) {
   if (act === 'open-cursor') { await api('/api/open', { path, target: 'cursor' }); return; }
   if (act === 'repair') {
     const r = await api('/api/worktree/repair', { path });
-    if (!r || r.error) { toast(`Repair failed: ${(r && r.error) || 'server unreachable'} — open the picker and re-provision`); return; }
+    if (!r || r.error || !r.scope) { toast(`Repair failed: ${(r && r.error) || 'server unreachable'} — open the picker and re-provision`); return; }
     toast(`Repaired · ${r.scope.active} hooks active, ${r.scope.missing} missing`);
     return;
   }
@@ -456,7 +456,7 @@ async function refreshPickerScope(path) {
   el.textContent = '';
   el.classList.remove('warn');
   const s = await api('/api/worktree/scope', { path });
-  if (!s || s.error) return;
+  if (!s || s.error || !s.sources) return;
   el.textContent = s.missing.length
     ? `${s.active} hooks active · ${s.missing.length} missing`
     : `${s.active} hooks active · ${s.sources.length} settings source(s)`;
