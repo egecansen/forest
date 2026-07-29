@@ -25,9 +25,16 @@
 # (dirs need it to stay traversable, scripts need it to stay runnable), so git sees no
 # 100644<->100755 mode flip. It never touches file/dir CONTENT.
 #
-# Usage:  core/lock-kit.sh lock      # chmod a-w the surface — writes then fail at the OS layer
-#         core/lock-kit.sh unlock    # chmod u+w the surface — requires HEKTOR_FLAKYKIT_UNLOCK=1
-#         core/lock-kit.sh status    # show writability of each surface file/dir
+# Usage:  core/lock-kit.sh lock      # tries `sudo chown -R root` on the safety surface first (may
+#                                    # prompt for a password); success reaches the HARDENED tier
+#                                    # (password-gated reopen). Without sudo — or with it refused —
+#                                    # it DEGRADES to the old chmod-a-w-only behaviour and says so
+#                                    # loudly. HEKTOR_FK_NO_SUDO=1 forces the degraded path on purpose
+#                                    # (used by the test suite and by anyone who wants the old
+#                                    # behaviour without being prompted).
+#         core/lock-kit.sh unlock    # chown back to the invoking user (if hardened) + chmod u+w —
+#                                    # requires HEKTOR_FLAKYKIT_UNLOCK=1
+#         core/lock-kit.sh status    # show writability of each surface file/dir + the recorded tier
 set -uo pipefail
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"     # .../hektor-flaky-triage/core
 KIT="$(cd "$HERE/.." && pwd)"                            # .../hektor-flaky-triage
@@ -73,42 +80,70 @@ surface_dirs() {
 # so a rename of the kit dir cannot take it along — which is exactly why it is listed separately.
 harden_targets() {
   printf '%s\n' "$KIT/core"
+  [ -d "$KIT/hooks" ] && printf '%s\n' "$KIT/hooks"
   [ -f "$KIT/SKILL.md" ] && printf '%s\n' "$KIT/SKILL.md"
-  local g; g="$(git -C "$KIT" rev-parse --show-toplevel 2>/dev/null)/.claude/hooks/flaky-kit-self-protection-gate.sh"
-  [ -f "$g" ] && printf '%s\n' "$g"
+  local root; root="$(git -C "$KIT" rev-parse --show-toplevel 2>/dev/null)"
+  if [ -n "$root" ] && [ -f "$root/.claude/hooks/flaky-kit-self-protection-gate.sh" ]; then
+    printf '%s\n' "$root/.claude/hooks/flaky-kit-self-protection-gate.sh"
+  fi
+  # $KIT LAST and non-recursively-meaningful: it is listed so the kit ROOT DIRECTORY itself changes
+  # owner. This is load-bearing, not tidiness. `rename()` is governed by the write+execute bits of
+  # the PARENT directory, never by the target's own bits or ownership — so with $KIT owned by the
+  # invoking user, `chmod u+w "$KIT"` (which succeeds, because that user owns it) followed by
+  # `mv "$KIT/core" "$KIT/core.bak" && mkdir "$KIT/core"` swaps in an attacker-controlled core/
+  # without touching one root-owned file and without a password. Chowning only core/ therefore
+  # reduces the hardened tier to a two-command bypass. Root-owning $KIT closes it.
+  #
+  # What this still does NOT close, and the HARDENED message must not claim it does: $KIT's own
+  # parent (.claude/skills/) has to stay user-owned, because every other skill installs there — so
+  # $KIT itself can be renamed aside by the same trick one level up. That residual is the design's
+  # accepted one and is what the relocated gate's out-of-tree expectation detects (Task 6).
+  printf '%s\n' "$KIT"
   return 0
 }
 # In the hardened tier the surface belongs to root, so THIS user's chmod would fail — run it with
 # the same privilege that did the chown, or the counters below report 0 and the summary line lies.
-priv_chmod() { if [ "$TIER" = hardened ]; then sudo chmod "$@"; else chmod "$@"; fi; }
+# Tier is passed in, not read from a global: under `set -u` a global $TIER is unbound in the unlock
+# and status branches, so a future call site there would abort on an undefined variable.
+priv_chmod() { local t="$1"; shift; if [ "$t" = hardened ]; then sudo chmod "$@"; else chmod "$@"; fi; }
 
 case "$CMD" in
   lock)
     # 1. Escalate FIRST so we know which tier we actually achieved.
+    #    The tier is derived from the OBSERVED filesystem, never from chown's exit code. `chown -R`
+    #    over several targets exits non-zero if ANY of them failed but does not roll back the ones
+    #    that succeeded, so a half-success would otherwise leave TIER=degraded while core/ is
+    #    already root-owned — and every message and state write below would then be false.
+    #    stderr is captured, not discarded: a mistyped password, an aborted prompt and a
+    #    not-in-sudoers user all produce the same silent non-zero, and reporting all three as
+    #    "sudo unavailable" is exactly the dishonest degradation this kit exists to stop.
     TIER=degraded
     if have_sudo; then
-      targets="$(harden_targets)"
-      # One sudo call for the whole surface: credentials are cached after it, so the chmods below
-      # do not re-prompt, and the user types their password exactly once.
-      printf '%s\n' "$targets" | tr '\n' '\0' | xargs -0 sudo chown -R root 2>/dev/null && TIER=hardened
+      sudo_err="$(harden_targets | tr '\n' '\0' | xargs -0 sudo chown -R root 2>&1 >/dev/null)"
+      [ "$(integrity_owner_uid "$KIT/core")" = "0" ] && TIER=hardened
+    fi
+    if [ "$TIER" != hardened ] && [ -n "${sudo_err:-}" ]; then
+      echo "lock-kit: escalation failed — sudo said: $sudo_err" >&2
     fi
     # 2. Record the tier while the directory is still writable by SOMEONE.
     if [ "$TIER" = hardened ]; then
       printf '{"tier":"hardened","at":"%s"}\n' "$(date -u +%FT%TZ 2>/dev/null || echo '?')" \
         | sudo tee "$STATE" >/dev/null
     else
-      write_state degraded
+      write_state degraded \
+        || echo "lock-kit: WARNING could not record the tier in $STATE — 'status' will report from ownership alone" >&2
     fi
     # 3. Only now remove the write bits — files first, then dirs.
-    n=0; while IFS= read -r f; do priv_chmod a-w "$f" 2>/dev/null && n=$((n+1)); done < <(surface_files)
-    d=0; while IFS= read -r p; do priv_chmod a-w "$p" 2>/dev/null && d=$((d+1)); done < <(surface_dirs)
+    n=0; while IFS= read -r f; do priv_chmod "$TIER" a-w "$f" 2>/dev/null && n=$((n+1)); done < <(surface_files)
+    d=0; while IFS= read -r p; do priv_chmod "$TIER" a-w "$p" 2>/dev/null && d=$((d+1)); done < <(surface_dirs)
     if [ "$TIER" = hardened ]; then
-      echo "lock-kit: HARDENED $n files + $d dirs — the safety surface is owned by root. Reopening needs a password; no in-process write path can reverse it." >&2
+      echo "lock-kit: HARDENED $n files + $d dirs — the safety surface, including the kit root, is owned by root. Reopening needs a password; no write path inside this kit can reverse it." >&2
+      echo "lock-kit: residual (by design, not a gap): the kit DIRECTORY can still be renamed aside via its own parent, which must stay user-owned so other skills can install there. That is detected, not prevented — see the gate's out-of-tree expectation." >&2
       echo "lock-kit: to edit, run:  HEKTOR_FLAKYKIT_UNLOCK=1 $0 unlock" >&2
     else
       echo "lock-kit: DEGRADED — locked $n files + $d dirs read-only, but the surface is still owned by $ME." >&2
       echo "lock-kit: that means the SAME user (and therefore an agent running as them) can chmod it back." >&2
-      echo "lock-kit: for the real wall, re-run on a machine where sudo is available." >&2
+      echo "lock-kit: for the real wall, re-run where sudo is available and the escalation is accepted." >&2
     fi ;;
   unlock)
     [ "${HEKTOR_FLAKYKIT_UNLOCK:-0}" = "1" ] \
@@ -116,12 +151,13 @@ case "$CMD" in
     [ -n "$ME" ] && [ "$ME" != root ] \
       || { echo "lock-kit: refusing unlock — no invoking user to return ownership to (running as a direct root shell?). Re-run as the user who owns the project." >&2; exit 78; }
     if [ "$(integrity_owner_uid "$KIT/core")" = "0" ]; then
-      printf '%s\n' "$(harden_targets)" | tr '\n' '\0' | xargs -0 sudo chown -R "$ME" \
+      harden_targets | tr '\n' '\0' | xargs -0 sudo chown -R "$ME" \
         || { echo "lock-kit: unlock aborted — chown back to $ME failed; the kit stays hardened" >&2; exit 77; }
     fi
     d=0; while IFS= read -r p; do chmod u+w "$p" && d=$((d+1)); done < <(surface_dirs)
     n=0; while IFS= read -r f; do chmod u+w "$f" && n=$((n+1)); done < <(surface_files)
-    write_state unlocked
+    write_state unlocked \
+      || echo "lock-kit: WARNING could not record the tier in $STATE — 'status' will report from ownership alone" >&2
     echo "lock-kit: UNLOCKED $n files + $d dirs for $ME. Re-lock when done:  $0 lock" >&2 ;;
   status)
     while IFS= read -r f; do
