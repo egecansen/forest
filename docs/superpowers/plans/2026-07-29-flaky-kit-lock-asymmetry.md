@@ -1060,11 +1060,29 @@ The spec exists because `lock-kit.sh` claimed a wall it did not have. Leaving th
 - Modify: **`kits/flaky-triage-kit/adapters/claude/flaky-kit-self-protection-gate.sh`** and
   **`core/shell-guard.py`** — four surviving "REAL wall" sentences, see below
 
-**A whole-tree sweep, not a header edit.** Every claim about the lock has to be re-read, wherever it
-lives. Grep the kit for `REAL wall`, `human consent`, `consent-gated`, `audit`, `read-only bit` and
-judge each hit against the code as it now stands. Three separate rounds of this task each found
-another survivor, every one of them in a sentence that appeared in no diff — that is this task's
-characteristic failure mode, and a fourth round is avoided by sweeping rather than spot-fixing.
+**Sweep by FILE, not by phrase.** Four rounds of this task have each found another survivor, and the
+reason the phrase-based sweep failed is that the claim keeps changing clothes: grepping `REAL wall`
+found four sentences and missed nine more saying the same thing as "the OS-level wall that holds in
+EVERY harness", "the airtight wall for ALL writers", and a capability-matrix row titled "Wall — stop
+ALL writers". Two of the nine sat in files that same round edited, lines away from a sentence it did
+fix.
+
+So enumerate the files, not the wordings:
+
+```
+grep -rln 'lock-kit' kits/flaky-triage-kit/
+```
+
+Read **every** mention of the lock in **every** file that list returns — including `README.md`,
+`cross-harness.md`, the `hektor-triage-kit` CLI's help text, and the Cursor `.mdc` rule, none of
+which any earlier round opened. For each mention apply one test: *does this sentence promise more
+than the hardened tier actually delivers, or describe the mechanism as a `chmod`/read-only bit?*
+Both are the retracted claim. Record every mention you examined in the report, including the ones
+you judge fine, so the sweep is auditable rather than asserted.
+
+`README.md:67` is the sharpest example of why this matters: the kit's front-door README still
+documents the command as `core/lock-kit.sh lock  # chmod the surface read-only` — the pre-project
+mechanism, in the first place a new user looks.
 
 Specifically, four sentences still describe `lock-kit.sh` as "the REAL wall"
 (`adapters/claude/…:31` and `:60`, `adapters/cursor/…:35`, `core/shell-guard.py:75`). Note the
