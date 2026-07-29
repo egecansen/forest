@@ -130,7 +130,12 @@ else
   exit 0
 fi
 
-# Unlock honoured (and audited) — same human-consent flag as the Claude gate + lock-kit.sh.
+# Unlock honoured (and audited HERE, by this gate, when it's the one intercepting the call) — same
+# flag as the Claude gate + lock-kit.sh, but HEKTOR_FLAKYKIT_UNLOCK is an intent marker, not
+# consent; calling it "the human-consent flag" is the exact claim this kit's docs retract elsewhere
+# (core/lock-kit.sh's header). The real consent, where the hardened tier requires any, is the sudo
+# password lock-kit.sh prompts for — and lock-kit.sh's own direct invocations of `unlock` are never
+# logged to the audit log at all, unlike this gate's interception of an agent's call.
 if [ "${HEKTOR_FLAKYKIT_UNLOCK:-0}" = "1" ]; then
   hektor_audit "flaky-triage kit safety surface unlocked for write (Cursor): ${TARGET} (HEKTOR_FLAKYKIT_UNLOCK=1)"
   exit 0

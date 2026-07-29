@@ -20,7 +20,10 @@
 #   hardened — core/** is owned by ROOT. chmod requires OWNERSHIP, so the agent (running as you)
 #              cannot reverse it; reopening needs sudo, which needs a password only a human at the
 #              keyboard can supply. THIS is human consent. HEKTOR_FLAKYKIT_UNLOCK is not consent —
-#              it is an intent marker recorded in the audit log.
+#              it is an intent marker, and only sometimes a recorded one: the PreToolUse gate logs
+#              its use when IT intercepts an agent's surface-mutating call, but running this script
+#              directly — as `lock`/`unlock` always are — is not recorded anywhere by this file
+#              (`hektor_audit` is never called here). The password above is the only real gate.
 #   degraded — chmod a-w only, because sudo was unavailable or the escalation was refused. Honest
 #              name: the surface IS read-only, but the same user — and therefore an agent running
 #              as them — can chmod it back. Friction, not a wall.
@@ -188,7 +191,7 @@ case "$CMD" in
     fi ;;
   unlock)
     [ "${HEKTOR_FLAKYKIT_UNLOCK:-0}" = "1" ] \
-      || { echo "lock-kit: refusing unlock — set HEKTOR_FLAKYKIT_UNLOCK=1 (records intent in the audit log; the PASSWORD below is the actual consent)" >&2; exit 77; }
+      || { echo "lock-kit: refusing unlock — set HEKTOR_FLAKYKIT_UNLOCK=1 (an agent's use of this flag is logged ONLY when a PreToolUse gate intercepts it; running this script directly, as you are now, is not recorded anywhere by this file. The PASSWORD below is the actual consent)" >&2; exit 77; }
     [ -n "$ME" ] && [ "$ME" != root ] \
       || { echo "lock-kit: refusing unlock — no invoking user to return ownership to (running as a direct root shell?). Re-run as the user who owns the project." >&2; exit 78; }
     if [ "$(integrity_owner_uid "$KIT/core")" = "0" ]; then
