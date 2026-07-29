@@ -76,6 +76,22 @@
     </div>
   </div>
 
+  <div id="finishwt" class="modal hidden">
+    <div class="modal-card">
+      <h3>Finish worktree</h3>
+      <p id="fw-summary" class="hint"></p>
+      <div id="fw-namechoice" class="hidden">
+        <label class="row-inline"><input type="radio" name="fw-name" id="fw-name-branch" checked /> <span id="fw-name-branch-label"></span></label>
+        <label class="row-inline"><input type="radio" name="fw-name" id="fw-name-wt" /> <span id="fw-name-wt-label"></span></label>
+      </div>
+      <label class="row-inline"><input id="fw-remove" type="checkbox" checked /> Remove worktree after landing</label>
+      <div class="modal-actions">
+        <button id="fw-cancel" class="btn-ghost">Cancel</button>
+        <button id="fw-go" class="btn-accent">Finish</button>
+      </div>
+    </div>
+  </div>
+
   <div id="picker" class="modal hidden">
     <div class="modal-card picker-card">
       <h3>Start a Claude session</h3>

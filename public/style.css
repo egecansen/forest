@@ -304,6 +304,7 @@ main { max-width: 1320px; margin: 0 auto; padding: 16px 18px 210px; }
 
 /* drawer danger zone — deliberate, separated remove action */
 .drawer-danger { margin-top: 26px; padding-top: 16px; border-top: 1px solid var(--line); }
+.drawer-eject { margin-top: 16px; padding-top: 16px; border-top: 1px solid var(--line); }
 
 /* ---- skill/kit picker ---- */
 .picker-card { width: 540px; max-width: 94vw; }

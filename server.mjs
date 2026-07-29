@@ -9,6 +9,7 @@ import { createJournal } from './lib/journal.mjs';
 import { runGit } from './lib/git.mjs';
 import { listPacks } from './lib/packs.mjs';
 import { createActionHandler } from './lib/actions.mjs';
+import { pruneLandings } from './lib/landed.mjs';
 
 const ROOT = fileURLToPath(new URL('.', import.meta.url));
 const PUBLIC = join(ROOT, 'public');
@@ -97,6 +98,9 @@ const server = http.createServer(async (req, res) => {
 // Periodic snapshot push.
 const snapshotInterval = setInterval(async () => { try { broadcast('worktrees', await snapshot()); } catch { /* ignore */ } }, 4000);
 server.on('close', () => clearInterval(snapshotInterval));
+
+// Startup prune: expired landing-ledger entries + their safety refs, once per repo.
+snapshot().then((snap) => { for (const r of snap.repos) pruneLandings(r.repoPath).catch(() => {}); }).catch(() => {});
 
 server.listen(config.port, '127.0.0.1', () => {
   console.log(`Forest on http://127.0.0.1:${config.port}`);

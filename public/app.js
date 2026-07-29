@@ -79,6 +79,7 @@ function rowHtml(w, repo) {
       <button title="Quick task" data-act="task" data-path="${enc}">⚡</button>
       <button title="Launch Claude" data-act="launch" data-path="${enc}">▶</button>
       <button title="Open in Cursor" data-act="open-cursor" data-path="${enc}">⤓</button>
+      ${w.isPrimary ? '' : `<button data-act="finish" data-path="${enc}" title="Finish: land this worktree's branch in the main checkout">✓</button>`}
       ${pruneable ? `<button title="Prune" data-act="remove" data-path="${enc}" data-repo="${encodeURIComponent(w.repoPath)}" data-primary="${w.isPrimary}">🧹</button>` : ''}
     </div>
   </div>`;
@@ -198,15 +199,33 @@ async function openDrawer(path) {
        </div>`
     : '';
   const removeHtml = w.isPrimary ? ''
-    : `<div class="drawer-danger"><button id="wt-remove" class="btn-danger">Remove worktree</button></div>`;
+    : `<div class="drawer-danger"><button id="drawer-finish" class="btn-accent">Finish worktree</button> <button id="wt-remove" class="btn-danger">Remove worktree</button></div>`;
+  const repoRec = state.snapshot.repos.find((r) => r.repoPath === w.repoPath);
+  const landed = (repoRec && repoRec.landed) || [];
+  const lastLanding = landed[landed.length - 1];
+  const ejectHtml = (w.isPrimary && landed.length > 0)
+    ? `<div class="drawer-eject"><button id="eject-go" class="btn-accent">↩ Eject last landing: ${esc(lastLanding.branch)}</button></div>`
+    : '';
   d.innerHTML = `<button id="drawer-close" class="drawer-close">Close ✕</button>
     <h3>${esc(w.branch) || '(detached)'}</h3>
     <p class="meta-line">${esc(w.repo)} · ${esc(w.owner)} · ${ageCell(w)} · ${sizeCell(w)}</p>
     ${applyHtml}
     <div id="task-panel"></div>
     <h4>Diff</h4><div id="diff" class="diffview">loading…</div>
-    ${removeHtml}`;
+    ${removeHtml}
+    ${ejectHtml}`;
   $('#drawer-close').onclick = () => d.classList.add('hidden');
+  const finishBtn = $('#drawer-finish');
+  if (finishBtn) finishBtn.onclick = () => openFinish(w.path);
+  const ejectBtn = $('#eject-go');
+  if (ejectBtn) ejectBtn.onclick = async () => {
+    if (!confirm('Recreate the worktree and switch the main checkout back?')) return;
+    ejectBtn.disabled = true;
+    const r = await api('/api/worktree/eject', { repoPath: w.repoPath, mode: state.mode });
+    ejectBtn.disabled = false;
+    if (r.error) { toast(`Error: ${r.error}`); return; }
+    toast(state.mode === 'guided' ? 'Eject sequence sent to terminal' : `Ejected ${r.branch} — worktree restored`);
+  };
   const rmBtn = $('#wt-remove');
   if (rmBtn) rmBtn.onclick = async () => {
     rmBtn.disabled = true;
@@ -256,7 +275,9 @@ async function doAction(act, ds) {
   if (act === 'remove') {
     const w = findWorktree(path);
     if (w) await removeWorktree(w);
+    return;
   }
+  if (act === 'finish') { openFinish(path); return; }
 }
 
 // Shared remove flow — used by the row prune button and the drawer.
@@ -268,6 +289,55 @@ async function removeWorktree(w) {
   const r = await api('/api/worktree/remove', { repoPath: w.repoPath, path: w.path, force: w.status.dirty, isPrimary: w.isPrimary, mode: state.mode });
   toast(r.error ? `Error: ${r.error}` : state.mode === 'guided' ? 'Sent to terminal' : 'Removed');
   return r;
+}
+
+let finishCtx = null; // { w, preview }
+
+async function openFinish(path) {
+  const w = findWorktree(path);
+  if (!w || w.isPrimary) { toast('Cannot finish the primary worktree'); return; }
+  const preview = await api('/api/worktree/finish-preview', { repoPath: w.repoPath, path: w.path });
+  if (preview.error) { toast(`Error: ${preview.error}`); return; }
+  if (preview.mergeInProgress) { toast('Main checkout has a merge in progress — resolve it first'); return; }
+  if (!preview.targetBranch && !preview.nameMismatch) { toast('Cannot resolve a target branch for this worktree'); return; }
+  finishCtx = { w, preview };
+  $('#fw-summary').textContent =
+    `${preview.worktreeName} → ${preview.relanding ? 'merge into' : 'land as'} ${preview.targetBranch ?? preview.candidates[0]}` +
+    ` · ${preview.dirtyCount} uncommitted file(s) will carry over · ↑${w.ahead} ↓${w.behind} vs ${w.baseBranch}`;
+  $('#fw-namechoice').classList.toggle('hidden', !preview.nameMismatch);
+  if (preview.nameMismatch) {
+    $('#fw-name-branch-label').textContent = `Land as "${preview.candidates[0]}" (the branch's name)`;
+    $('#fw-name-wt-label').textContent = `Land as "${preview.candidates[1]}" (the worktree's name)`;
+    $('#fw-name-branch').checked = true;
+  }
+  $('#fw-remove').checked = true;
+  $('#finishwt').classList.remove('hidden');
+}
+
+async function submitFinish() {
+  const w = findWorktree(finishCtx.w.path);
+  if (!w) { toast('Worktree is gone — refresh'); $('#finishwt').classList.add('hidden'); finishCtx = null; return; }
+  const fresh = await api('/api/worktree/finish-preview', { repoPath: w.repoPath, path: w.path });
+  if (fresh.error) { toast(`Error: ${fresh.error}`); return; }
+  if (fresh.mergeInProgress) { toast('Main checkout has a merge in progress — resolve it first'); $('#finishwt').classList.add('hidden'); finishCtx = null; return; }
+  if (fresh.targetBranch !== finishCtx.preview.targetBranch || fresh.nameMismatch !== finishCtx.preview.nameMismatch) {
+    toast('Worktree state changed — review again');
+    openFinish(w.path);
+    return;
+  }
+  const targetBranch = fresh.nameMismatch
+    ? ($('#fw-name-wt').checked ? fresh.candidates[1] : fresh.candidates[0])
+    : fresh.targetBranch;
+  $('#finishwt').classList.add('hidden');
+  const r = await api('/api/worktree/finish', {
+    repoPath: w.repoPath, path: w.path, targetBranch,
+    remove: $('#fw-remove').checked, isPrimary: w.isPrimary, mode: state.mode,
+  });
+  finishCtx = null;
+  if (r.error) { toast(`Error: ${r.error}`); return; }
+  if (state.mode === 'guided') { toast('Finish sequence sent to terminal'); return; }
+  if (r.conflict) { toast('Merge conflict — resolve in your IDE, then press Finish again'); return; }
+  toast(`Landed ${r.targetBranch}${r.removed ? ', worktree removed' : ''}${r.stashConflict ? ' — stash pop conflicted, stash kept' : ''}`);
 }
 
 function openNewWorktree(repoPath) {
@@ -289,8 +359,12 @@ async function submitNewWorktree() {
   const base = $('#nw-base').value.trim() || undefined;
   const btn = $('#nw-create');
   btn.disabled = true;
-  const r = await api('/api/worktree/create', { repoPath, branch, newBranch, base, mode: state.mode });
-  btn.disabled = false;
+  let r;
+  try {
+    r = await api('/api/worktree/create', { repoPath, branch, newBranch, base, mode: state.mode });
+  } finally {
+    btn.disabled = false;
+  }
   if (r && r.error) { toast(`Error: ${r.error}`); return; }
   closeNewWorktree();
   toast(state.mode === 'guided' ? 'Create sent to terminal' : 'Worktree created');
@@ -392,11 +466,14 @@ function wireEvents() {
   $('#mode-toggle').onclick = () => setMode(state.mode === 'auto' ? 'guided' : 'auto');
   $('#theme-toggle').onclick = toggleTheme;
   $('#journal-toggle').onclick = () => setJournalCollapsed(!$('#journal').classList.contains('collapsed'));
-  $('#new-wt').onclick = openNewWorktree;
+  $('#new-wt').onclick = () => openNewWorktree();
   $('#nw-cancel').onclick = closeNewWorktree;
   $('#nw-create').onclick = submitNewWorktree;
   $('#newwt').addEventListener('click', (e) => { if (e.target.id === 'newwt') closeNewWorktree(); });
   $('#nw-branch').addEventListener('keydown', (e) => { if (e.key === 'Enter') submitNewWorktree(); });
+  $('#fw-go').onclick = submitFinish;
+  $('#fw-cancel').onclick = () => $('#finishwt').classList.add('hidden');
+  $('#finishwt').addEventListener('click', (e) => { if (e.target.id === 'finishwt') $('#finishwt').classList.add('hidden'); });
   $('#pk-cancel').onclick = closePicker;
   $('#pk-start').onclick = startSession;
   $('#picker').addEventListener('click', (e) => { if (e.target.id === 'picker') closePicker(); });
@@ -422,7 +499,7 @@ function wireEvents() {
 
   document.addEventListener('keydown', (e) => {
     if ((e.metaKey || e.ctrlKey) && e.key === 'k') { e.preventDefault(); togglePalette(); }
-    if (e.key === 'Escape') { $('#palette').classList.add('hidden'); $('#drawer').classList.add('hidden'); $('#newwt').classList.add('hidden'); $('#picker').classList.add('hidden'); }
+    if (e.key === 'Escape') { $('#palette').classList.add('hidden'); $('#drawer').classList.add('hidden'); $('#newwt').classList.add('hidden'); $('#picker').classList.add('hidden'); $('#finishwt').classList.add('hidden'); }
   });
 }
 
