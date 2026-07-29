@@ -7,6 +7,7 @@
 set -uo pipefail
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 RERUN="$HERE/../rerun.sh"
+TESTDIR="$HERE"   # Save test directory path before sourcing (rerun.sh overwrites HERE)
 TMP="$(mktemp -d)"; trap 'rm -rf "$TMP"' EXIT
 pass=0; fail=0
 ok()  { pass=$((pass+1)); }
@@ -88,6 +89,14 @@ printf 'TestU > testF() PASSED\n' > "$TMP/single.log"
 RES6="$(build_result "$TMP/single.log" 1)"
 [ "$(echo "$RES6" | jf '.["TestU.testF"] | has("insufficient")')" = "false" ] && ok || bad "single-log (N=1) mode: a test reporting once is NOT insufficient"
 [ "$(echo "$RES6" | jf '.["TestU.testF"].confidence')" = "1" ] && ok || bad "single-log (N=1) mode: genuinely green result preserved"
+
+# --- env overrides win over config.json (HEKTOR_FK_JAVA_HOME precedent) ---
+DRY_OUT="$(HEKTOR_FK_DATA_CENTER=zz RERUN_DRY=1 bash "$TESTDIR/../rerun.sh" com.x.AaTest 161 2>/dev/null)"
+case "$DRY_OUT" in *"-Denv.data.center=zz"*) ok ;; *) bad "HEKTOR_FK_DATA_CENTER must override run.data_center" ;; esac
+DRY_OUT="$(HEKTOR_FK_CHROME_VERSION=131 RERUN_DRY=1 bash "$TESTDIR/../rerun.sh" com.x.AaTest 161 2>/dev/null)"
+case "$DRY_OUT" in *"-Dchrome.version=131"*) ok ;; *) bad "HEKTOR_FK_CHROME_VERSION must inject the pin without editing config" ;; esac
+DRY_OUT="$(HEKTOR_FK_CHROME_VERSION='1;rm -rf /' RERUN_DRY=1 bash "$TESTDIR/../rerun.sh" com.x.AaTest 161 2>&1)"
+case "$DRY_OUT" in *"I1"*) ok ;; *) bad "a malformed HEKTOR_FK_CHROME_VERSION must be I1-rejected, not passed through" ;; esac
 
 echo "rerun-test: $pass passed, $fail failed"
 [ "$fail" -eq 0 ]

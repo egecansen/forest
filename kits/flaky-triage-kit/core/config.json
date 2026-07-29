@@ -1,6 +1,6 @@
 {
   "_doc": "config seam — the ONLY sahibinden-specific part (kernel.md §10). core/ MUST validate before use (P3): es.host in host_allowlist; source_roots resolve under repo; recipes are data, never eval'd. NO SECRETS here (P5).",
-  "_portability": "To share: (1) run.java_home is a LOCAL toolchain path — override per-machine via env HEKTOR_FK_JAVA_HOME (else falls back to $JAVA_HOME; toolchain needs JDK 17). (2) es.host/jira.host/qagent.endpoint are internal — point at your org by editing them HERE; es.host MUST also be added to es.host_allowlist (the SSRF seam, deliberately NOT env-overridable).",
+  "_portability": "To share: (1) run.java_home is a LOCAL toolchain path — override per-machine via env HEKTOR_FK_JAVA_HOME (else falls back to $JAVA_HOME; toolchain needs JDK 17). (2) es.host/jira.host/qagent.endpoint are internal — point at your org by editing them HERE; es.host MUST also be added to es.host_allowlist (the SSRF seam, deliberately NOT env-overridable). (3) run.data_center and run.chrome_version are per-run operational knobs, overridable via HEKTOR_FK_DATA_CENTER / HEKTOR_FK_CHROME_VERSION so a hardened (root-owned) kit never needs unlocking for routine work. The SECURITY fields — es.host, es.host_allowlist, jira.host, qagent.endpoint, source_roots — are deliberately NOT env-overridable and are protected by the lock.",
   "es": {
     "host": "https://report-with-elastic-data.apps.ocptbox.tzla.sahibindenlocal.net",
     "index": "web-report",

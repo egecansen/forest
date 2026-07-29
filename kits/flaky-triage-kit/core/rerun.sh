@@ -84,7 +84,7 @@ WD="$(jq -r '.run.workdir' "$CFG")"
 JH="${HEKTOR_FK_JAVA_HOME:-$(jq -r '.run.java_home // empty' "$CFG")}"; JH="${JH:-${JAVA_HOME:-}}"
 { [ -n "$JH" ] && [ -d "$JH" ]; } || echo "rerun: WARN JAVA_HOME unresolved ('$JH') — set HEKTOR_FK_JAVA_HOME or run.java_home (toolchain needs JDK 17)" >&2
 PROF="$(jq -r '.run.profile' "$CFG")"; LP="$(jq -r '.run.launchpad' "$CFG")"
-DC="$(jq -r '.run.data_center' "$CFG")"; BR="$(jq -r '.run.browser' "$CFG")"
+DC="${HEKTOR_FK_DATA_CENTER:-$(jq -r '.run.data_center' "$CFG")}"; BR="$(jq -r '.run.browser' "$CFG")"
 SEL="$(jq -r '.run.select_flag' "$CFG")"; N="${RERUN_N:-$(jq -r '.run.flaky_confidence_runs' "$CFG")}"   # RERUN_N overrides config (e.g. fast single-pass cross-box check)
 
 base_cmd=(env "JAVA_HOME=$JH" "$REPO/$WD/gradlew" -p "$REPO/$WD" test --rerun-tasks --no-build-cache
@@ -95,7 +95,7 @@ base_cmd=(env "JAVA_HOME=$JH" "$REPO/$WD/gradlew" -p "$REPO/$WD" test --rerun-ta
 # version. Validated like every other externally-supplied value (I1) — a version is digits and
 # dots, nothing else — even though base_cmd is an ARRAY (no word-splitting, no eval), because the
 # value still reaches gradle as a -D and a junk pin fails every run in a confusing way.
-CV="$(jq -r '.run.chrome_version // ""' "$CFG")"
+CV="${HEKTOR_FK_CHROME_VERSION:-$(jq -r '.run.chrome_version // ""' "$CFG")}"
 if [ -n "$CV" ]; then
   strict_match "$CV" '[0-9]+(\.[0-9]+)*' || { echo "I1: bad run.chrome_version rejected: $CV" >&2; exit 77; }
   base_cmd+=("-Dchrome.version=$CV")
