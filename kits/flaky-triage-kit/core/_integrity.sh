@@ -61,14 +61,20 @@ integrity_tier() {
   return 0
 }
 
-# integrity_guard <kit_root> -> 0 to proceed, 76 to refuse. Prints to stderr, never stdout, so it
-# can never contaminate a script whose stdout is a JSON contract (rerun, gate, ledger, summary).
-# INTEGRITY_FAKE_UID exists ONLY for the test suite — the real uid cannot be forced to root without
-# a password, and a decision function that cannot be exercised is a decision function nobody trusts.
-integrity_guard() {
-  local kit="$1" uid tier
-  uid="${INTEGRITY_FAKE_UID:-$(integrity_owner_uid "$kit/core")}"
-  tier="$(integrity_tier "$uid" "$(integrity_state "$kit")")"
+# integrity_report <tier> -> 0 to proceed, 76 to refuse. Prints to stderr, never stdout, so it can
+# never contaminate a script whose stdout is a JSON contract (rerun, gate, ledger, summary).
+#
+# Split out from integrity_guard so the messaging/decision half is a PURE function of the tier
+# string and can be driven directly by the test suite. An earlier draft kept them fused and let the
+# tests inject a fake uid through an environment-variable override — which handed anyone able to
+# set that variable a silent bypass of this very check: forcing the fake uid to root turned a
+# `mismatch` tree into `hardened` and the guard returned 0 without printing a word. A one-variable
+# skeleton key to a control whose entire premise is that bypassing costs a password is not a test
+# seam, it is a hole. The seam now runs through the function boundary instead of through the
+# environment, so nothing in production reads an override at all — the test suite greps this file
+# to make sure that variable never reappears here.
+integrity_report() {
+  local tier="${1:-}"
   case "$tier" in
     hardened) return 0 ;;
     stale)
@@ -87,4 +93,14 @@ integrity_guard() {
       return 76 ;;
   esac
   return 0
+}
+
+# integrity_guard <kit_root> -> 0 to proceed, 76 to refuse.
+# The trivial composition: real uid + recorded state -> tier -> report. It reads NO environment
+# override — the tier always comes from the filesystem. Each half is tested on its own
+# (integrity_tier with synthetic uids, integrity_report with synthetic tiers), which is the same
+# split already used elsewhere in this file, so nothing here needs a back door to be exercised.
+integrity_guard() {
+  local kit="${1:-}"
+  integrity_report "$(integrity_tier "$(integrity_owner_uid "$kit/core")" "$(integrity_state "$kit")")"
 }

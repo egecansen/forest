@@ -57,20 +57,31 @@ printf '{"history":[{"tier":"unlocked"},{"tier":"hardened"}]}\n' > "$RT/core/.lo
 printf '{"history":[{"tier":"unlocked"},\n{"tier":"hardened"}]}\n' > "$RT/core/.lock-state"
 [ "$(integrity_state "$RT")" = unlocked ] && ok || bad "two tier keys across TWO lines must resolve first-wins, same as one line"
 
-# --- integrity_guard: behaviour per state ---
-GTMP="$(mktemp -d)"; mkdir -p "$GTMP/core"
-guard_out() { printf '%s' "$1" > "$GTMP/core/.lock-state"; INTEGRITY_FAKE_UID="$2" integrity_guard "$GTMP" 2>&1; }
-guard_rc()  { printf '%s' "$1" > "$GTMP/core/.lock-state"; INTEGRITY_FAKE_UID="$2" integrity_guard "$GTMP" >/dev/null 2>&1; echo $?; }
+# --- integrity_report: the message + decision for each tier -----------------------
+# Driven DIRECTLY with tier strings. The earlier draft went through integrity_guard and injected a
+# fake uid via INTEGRITY_FAKE_UID; that override then existed in production code, where setting one
+# environment variable silenced the guard entirely. The seam belongs at the function boundary, not
+# in the environment — so the reporting half is tested here and the uid half is already covered by
+# the integrity_tier cases above.
+rep_out() { integrity_report "$1" 2>&1; }
+rep_rc()  { integrity_report "$1" >/dev/null 2>&1; echo $?; }
 
-[ -z "$(guard_out '{"tier":"hardened"}' 0)" ] && ok || bad "hardened must be silent"
-[ "$(guard_rc '{"tier":"hardened"}' 0)" = 0 ] && ok || bad "hardened must return 0"
-case "$(guard_out '{"tier":"unlocked"}' 501)" in *"maintenance"*) ok ;; *) bad "unlocked must remind the user to re-lock" ;; esac
-[ "$(guard_rc '{"tier":"unlocked"}' 501)" = 0 ] && ok || bad "unlocked must not block the run"
-case "$(guard_out '{"tier":"degraded"}' 501)" in *DEGRADED*) ok ;; *) bad "degraded must emit a one-line notice" ;; esac
-[ "$(guard_rc '{"tier":"degraded"}' 501)" = 0 ] && ok || bad "degraded must not block the run"
-case "$(guard_out '{"tier":"hardened"}' 501)" in *MISMATCH*) ok ;; *) bad "mismatch must be loud" ;; esac
-[ "$(guard_rc '{"tier":"hardened"}' 501)" = 76 ] && ok || bad "mismatch must return 76 so callers refuse"
-rm -rf "$GTMP"
+[ -z "$(rep_out hardened)" ] && ok || bad "hardened must be silent"
+[ "$(rep_rc hardened)" = 0 ] && ok || bad "hardened must return 0"
+case "$(rep_out stale)" in *"treating as hardened"*) ok ;; *) bad "stale must say it is treating the tree as hardened and ask for a refresh" ;; esac
+[ "$(rep_rc stale)" = 0 ] && ok || bad "stale must not block the run"
+case "$(rep_out unlocked)" in *"maintenance"*) ok ;; *) bad "unlocked must remind the user to re-lock" ;; esac
+[ "$(rep_rc unlocked)" = 0 ] && ok || bad "unlocked must not block the run"
+case "$(rep_out degraded)" in *DEGRADED*) ok ;; *) bad "degraded must emit a one-line notice" ;; esac
+[ "$(rep_rc degraded)" = 0 ] && ok || bad "degraded must not block the run"
+case "$(rep_out mismatch)" in *MISMATCH*) ok ;; *) bad "mismatch must be loud" ;; esac
+[ "$(rep_rc mismatch)" = 76 ] && ok || bad "mismatch must return 76 so callers refuse"
+# Nothing may reach stdout: four entrypoints emit a machine-read contract there.
+for t in hardened stale unlocked degraded mismatch; do
+  [ -z "$(integrity_report "$t" 2>/dev/null)" ] || bad "integrity_report must never write to stdout (tier: $t)"
+done; ok
+# The production path must carry no environment override.
+grep -q 'INTEGRITY_FAKE_UID' "$HERE/../_integrity.sh" && bad "no environment override may remain in _integrity.sh — it silences the guard for anyone who can set a variable" || ok
 
 echo "integrity-test: $pass passed, $fail failed"
 [ "$fail" -eq 0 ]
