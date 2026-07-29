@@ -1050,10 +1050,26 @@ git commit -m "kit: installer refuses to overwrite a hardened kit, prompts to ha
 The spec exists because `lock-kit.sh` claimed a wall it did not have. Leaving that text in place would reproduce the problem.
 
 **Files:**
-- Modify: `kits/flaky-triage-kit/core/lock-kit.sh:1-30` (header)
+- Modify: `kits/flaky-triage-kit/core/lock-kit.sh` — the header **and** the unlock-refusal message
+- Modify: **`kits/flaky-triage-kit/adapters/cursor/flaky-kit-self-protection-gate.sh`** — it still calls
+  `HEKTOR_FLAKYKIT_UNLOCK` "the human-consent flag", which is the exact phrase this whole plan retracts
 - Modify: `kits/flaky-triage-kit/core/README.md` (module table + status)
 - Modify: `kits/flaky-triage-kit/kernel.md` (P4 row, §12 register)
 - Create: `docs/superpowers/plans/2026-07-29-flaky-kit-lock-manual-acceptance.md`
+
+**Two live overclaims that a header-only edit misses.** Both were found by reading claims that were
+not in any diff, which is this task's characteristic failure mode:
+
+1. **The retraction must reach both harnesses.** `adapters/cursor/…:133` describes the env var as
+   "the same human-consent flag as the Claude gate + lock-kit.sh". Correcting only the Claude side
+   leaves the retracted claim shipping to Cursor users — the same one-harness asymmetry Task 6 had to
+   fix for shadow detection.
+2. **`lock-kit.sh` claims its own unlock is audited, and it is not.** The header and the refusal
+   message at the `exit 77` both say the marker is "recorded in the audit log", but `hektor_audit`
+   is called **zero** times in that file. The audit happens only when the *gate* intercepts an
+   agent's Bash call; a human running `unlock` in a terminal is never recorded. State the condition
+   or drop the claim — an unconditional sentence about auditing, inside the file being corrected for
+   unconditional sentences, is the original mistake in miniature.
 
 - [ ] **Step 1: Rewrite the `lock-kit.sh` header**
 
