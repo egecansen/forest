@@ -7,7 +7,6 @@
 # line, but it is policy: it only bites where the CLI honors a `deny`, and a Bash redirect is
 # matched only heuristically. A filesystem read-only bit is enforced by the OS for EVERY writer —
 # Edit/Write tool, Bash `>`/`sed -i`, an injected script — so it is the wall the gate is not.
-# It is keyed to human consent: `unlock` requires HEKTOR_FLAKYKIT_UNLOCK=1, the same flag the gate uses.
 #
 # Round2 (dirs, not just files): `chmod a-w` on FILES alone left a hole — deleting or renaming a
 # file, and creating a brand-new one, are governed by the PARENT DIRECTORY's write bit, not the
@@ -15,11 +14,39 @@
 # succeeded on a "locked" kit for exactly this reason. Fixed by ALSO `chmod a-w`-ing every directory
 # under core/ + hooks/ (recursively — nested dirs like core/tests/, core/capture-res/** need the
 # same wall, not just the top-level core/) plus the kit root itself (so `core`/`hooks`/`SKILL.md`
-# can't be renamed/deleted/shadowed out from under the lock either). This is still
-# defense-in-depth, not an impregnable wall: a shell-capable agent with a way to re-exec as the
-# file owner, or a tool that ignores POSIX permissions entirely, is out of scope — the goal is to
-# close the NATURAL, single-command, accidental/self-defeating bypass, not to stop a determined
-# privileged attacker.
+# can't be renamed/deleted/shadowed out from under the lock either).
+#
+# TIERS. `lock` establishes the strongest tier it can:
+#   hardened — core/** is owned by ROOT. chmod requires OWNERSHIP, so the agent (running as you)
+#              cannot reverse it; reopening needs sudo, which needs a password only a human at the
+#              keyboard can supply. THIS is human consent. HEKTOR_FLAKYKIT_UNLOCK is not consent —
+#              it is an intent marker recorded in the audit log.
+#   degraded — chmod a-w only, because sudo was unavailable or the escalation was refused. Honest
+#              name: the surface IS read-only, but the same user — and therefore an agent running
+#              as them — can chmod it back. Friction, not a wall.
+#   unprotected — `lock` never ran here. Nothing is read-only; the surface is plainly writable. Do
+#              NOT describe this state as "degraded": collapsing the two told fresh installs they
+#              were protected when they were not — this file's own kind of mistake, pointed the
+#              other way.
+#
+# The earlier version of this header called the chmod tier "a REAL wall" and its env-var unlock
+# "keyed to human consent", and declared a shell-capable agent running as the file owner "out of
+# scope". That agent is precisely what this kit constrains, and it defeated the lock with one
+# documented command. Both claims are corrected rather than deleted, so the mistake stays legible.
+#
+# STILL NOT COVERED — the full list, because a partial one is how the last overclaim happened:
+#   1. Shadowing. `mv` the kit dir aside and replace it. rename() is governed by the PARENT
+#      directory, and $KIT's parent must stay user-writable so other skills can install there.
+#      DETECTED via the gate's out-of-tree record, not prevented.
+#   2. That record is itself deletable. Its directory stays user-owned (the pack installer writes
+#      its own hooks there without sudo), so the same actor who renames the kit can erase the
+#      expectation in the same breath. Chowning that directory WOULD close this; the decision not
+#      to rests on the standing cost of routing every future pack-hook update through sudo, NOT on
+#      any claim that it would not help. It would.
+#   3. Social engineering a human into running the unlock.
+#   4. Anything after the password is typed — keep the maintenance window short.
+#   5. shell-guard.py honours HEKTOR_FK_SURFACE, which REPLACES its surface pattern wholesale; a
+#      value matching nothing narrows the surface to nothing. Pre-existing, not introduced here.
 #
 # Reversible + git-clean: this toggles only the WRITE bit (`a-w` / `u+w`); it keeps the execute bit
 # (dirs need it to stay traversable, scripts need it to stay runnable), so git sees no

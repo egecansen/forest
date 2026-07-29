@@ -248,5 +248,18 @@ CURSOR_OUT="$(printf '{"command":"echo hi","cwd":"%s"}' "$PROJ" \
        | "$CURSOR_GATE" 2>&1)"
 case "$CURSOR_OUT" in *SHADOW*|*"no longer present"*) ok ;; *) bad "cursor gate must notice the kit tree vanished while the expectation says hardened" ;; esac
 
+echo "== Task 8: _ROOT git-toplevel fallback (CLAUDE_PROJECT_DIR unset, cwd a SUBDIRECTORY) ==" >&2
+# Regression for a silent-failure bug: _ROOT used to fall back to $CWD (the tool call's reported
+# cwd), which is wrong whenever that cwd is a subdirectory of the project — .flaky-kit-expect then
+# gets looked up under the WRONG path and the shadow check silently never fires. Reuses the
+# already-shadowed fixture above ($SKILL still removed, .flaky-kit-expect still says hardened);
+# invokes the gate with the process's REAL cwd inside a nested subdirectory and CLAUDE_PROJECT_DIR
+# unset, so only the git-toplevel fallback (not $CWD) can find the project root.
+NESTED="$PROJ/some/nested/dir"
+mkdir -p "$NESTED"
+NESTED_OUT="$(cd "$NESTED" && printf '{"tool_name":"Bash","cwd":"%s","tool_input":{"command":"echo hi"}}' "$NESTED" \
+       | "$PROJ/.claude/hooks/flaky-kit-self-protection-gate.sh" 2>&1)"
+case "$NESTED_OUT" in *SHADOW*|*"no longer present"*) ok ;; *) bad "claude gate must resolve the project root via the git-toplevel fallback when CLAUDE_PROJECT_DIR is unset and cwd is a subdirectory — got: $NESTED_OUT" ;; esac
+
 echo "self-protection-test: $pass passed, $fail failed"
 [ "$fail" -eq 0 ]

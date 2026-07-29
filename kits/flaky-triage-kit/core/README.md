@@ -21,6 +21,8 @@ and calls these; it MUST NOT mutate state except through them (kernel P2).
 | `hedge-scan` | fixer's own summary text → clean (0) / HEDGED + matched phrases (2) | cheap deterministic pre-screen: self-reported uncertainty ("should work", "only ran once") is not a green — catch it before spending a reviewer call |
 | `apply` | a fix patch → applied in the working tree (git-tracked, clean-tree check) + diff | **I3** confined to `source_roots`, git-reversible, kit never commits · **I10** rev-pin |
 | `ledger` | read/write run state via validated subcommands (v2: cluster-upsert / cluster-state / event / validate · cluster-vrt) | **I5** re-derive "applied" from source, never trust ledger for safety · **I11** `validate --final` gates session end |
+| `_integrity` *(sourced)* | kit root → `hardened`/`unlocked`/`degraded`/`unprotected`/`mismatch`/`stale` | **P4** the lock tier is asserted at every entrypoint, not assumed; refuses (76) when protection is weaker than recorded |
+| `lock-kit` | `lock`/`unlock`/`status` → OS-level tier on the safety surface | **P4** hardened = root-owned safety surface **including the kit root** (reopen needs a password); degrades to chmod-only and names the tier it actually reached |
 | `summary` | ledger → convergence report | **I7** allowlist emitted fields (no raw stackTrace / PII / tokens) |
 
 ## Invariant → module index (for review)
@@ -45,4 +47,9 @@ otherwise) and the gate now also matches **Bash** writes (redirect/`sed -i`/`cp`
 **2026-06-30 correction:** PreToolUse `deny` **is** enforced by the current CLI (observed live — a
 sibling gate blocked a `settings.json` edit), so the gate is a real wall when locked, not just an
 audit signal (kernel §14 META). For an OS-level wall independent of the CLI, `core/lock-kit.sh
-lock` flips the surface read-only (consent-gated unlock via the same flag).
+lock` reaches for the **hardened** tier: `core/**`, `hooks/**`, and the kit root itself chowned to
+root, so reopening needs a password, not just `HEKTOR_FLAKYKIT_UNLOCK=1` (that flag is an audit
+intent-marker, not consent — the password is). Without `sudo` it **degrades** to the old
+chmod-a-w-only behaviour, which the same user can reverse. `core/_integrity.sh` asserts the tier
+that's actually there at every entrypoint (2026-07-29), so a silent slip from hardened to degraded
+can't pass as still-protected.

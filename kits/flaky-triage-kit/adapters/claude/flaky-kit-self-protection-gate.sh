@@ -86,7 +86,15 @@ CWD=$(echo "$INPUT" | "$JQ" -r '.cwd // empty' 2>/dev/null || echo "")
 # kit tree aside can also delete this file — the record is not tamper-proof. What it still buys: a
 # silent single `mv` becomes a two-step act, and a forgotten/incomplete cleanup (the common
 # accidental case) still gets caught. Detection, not prevention.
-_ROOT="${CLAUDE_PROJECT_DIR:-$CWD}"
+#
+# Root resolution: falls back to git-toplevel CLIMBED FROM $CWD, same idea as _LIB/GUARD below but
+# anchored on the reported tool-call cwd rather than this script's own process cwd — $CWD is
+# frequently a SUBDIRECTORY of the project when CLAUDE_PROJECT_DIR is unset, and using it AS the
+# root (the old behavior) put _EXPECT under the wrong directory, so `[ -r "$_EXPECT" ]` failed and
+# this check silently never warned. `git -C "$CWD" rev-parse --show-toplevel` climbs from that
+# subdirectory to the true top level, mirroring the Cursor gate's cc_repo_root() (which climbs from
+# the same JSON-reported cwd) so the two gates agree instead of one silently missing the shadow.
+_ROOT="${CLAUDE_PROJECT_DIR:-$(git -C "$CWD" rev-parse --show-toplevel 2>/dev/null)}"
 _EXPECT="$_ROOT/.claude/hooks/.flaky-kit-expect"
 if [ -r "$_EXPECT" ] && [ "$(cat "$_EXPECT" 2>/dev/null)" = "hardened" ] \
    && [ ! -d "$_ROOT/.claude/skills/hektor-flaky-triage/core" ]; then
