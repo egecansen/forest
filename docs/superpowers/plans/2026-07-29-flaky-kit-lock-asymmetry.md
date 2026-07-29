@@ -1065,17 +1065,32 @@ Replace the "WHY" block's consent claim. The two sentences that must go: `It is 
 #              cannot reverse it; reopening needs sudo, which needs a password only a human at the
 #              keyboard can supply. THIS is human consent. HEKTOR_FLAKYKIT_UNLOCK is not consent —
 #              it is an intent marker recorded in the audit log.
-#   degraded — chmod a-w only, because sudo was unavailable. Honest name: the same user, and
-#              therefore an agent running as them, can chmod it back. This is friction, not a wall.
+#   degraded — chmod a-w only, because sudo was unavailable or the escalation was refused. Honest
+#              name: the surface IS read-only, but the same user — and therefore an agent running
+#              as them — can chmod it back. Friction, not a wall.
+#   unprotected — `lock` never ran here. Nothing is read-only; the surface is plainly writable. Do
+#              NOT describe this state as "degraded": collapsing the two told fresh installs they
+#              were protected when they were not — this file's own kind of mistake, pointed the
+#              other way.
 #
 # The earlier version of this header called the chmod tier "a REAL wall" and its env-var unlock
 # "keyed to human consent", and declared a shell-capable agent running as the file owner "out of
 # scope". That agent is precisely what this kit constrains, and it defeated the lock with one
 # documented command. Both claims are corrected rather than deleted, so the mistake stays legible.
 #
-# STILL NOT COVERED (do not re-claim these): shadowing — `mv` the kit dir aside and replace it,
-# which touches no root-owned file because rename() is governed by the PARENT directory; social
-# engineering a human into running the unlock; anything after the password is typed.
+# STILL NOT COVERED — the full list, because a partial one is how the last overclaim happened:
+#   1. Shadowing. `mv` the kit dir aside and replace it. rename() is governed by the PARENT
+#      directory, and $KIT's parent must stay user-writable so other skills can install there.
+#      DETECTED via the gate's out-of-tree record, not prevented.
+#   2. That record is itself deletable. Its directory stays user-owned (the pack installer writes
+#      its own hooks there without sudo), so the same actor who renames the kit can erase the
+#      expectation in the same breath. Chowning that directory WOULD close this; the decision not
+#      to rests on the standing cost of routing every future pack-hook update through sudo, NOT on
+#      any claim that it would not help. It would.
+#   3. Social engineering a human into running the unlock.
+#   4. Anything after the password is typed — keep the maintenance window short.
+#   5. shell-guard.py honours HEKTOR_FK_SURFACE, which REPLACES its surface pattern wholesale; a
+#      value matching nothing narrows the surface to nothing. Pre-existing, not introduced here.
 ```
 
 - [ ] **Step 2: Add the new modules to `core/README.md`**
@@ -1083,8 +1098,8 @@ Replace the "WHY" block's consent claim. The two sentences that must go: `It is 
 Add to the module table, after the `ledger` row:
 
 ```
-| `_integrity` *(sourced)* | kit root → `hardened`/`unlocked`/`degraded`/`mismatch`/`stale` | **P4** the lock tier is asserted at every entrypoint, not assumed; refuses (76) when protection is weaker than recorded |
-| `lock-kit` | `lock`/`unlock`/`status` → OS-level tier on the safety surface | **P4** hardened = root-owned core/ (reopen needs a password); degrades to chmod-only and says so |
+| `_integrity` *(sourced)* | kit root → `hardened`/`unlocked`/`degraded`/`unprotected`/`mismatch`/`stale` | **P4** the lock tier is asserted at every entrypoint, not assumed; refuses (76) when protection is weaker than recorded |
+| `lock-kit` | `lock`/`unlock`/`status` → OS-level tier on the safety surface | **P4** hardened = root-owned safety surface **including the kit root** (reopen needs a password); degrades to chmod-only and names the tier it actually reached |
 ```
 
 - [ ] **Step 3: Update the kernel P4 row**
