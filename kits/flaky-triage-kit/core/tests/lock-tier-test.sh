@@ -31,5 +31,12 @@ HEKTOR_FLAKYKIT_UNLOCK=1 HEKTOR_FK_NO_SUDO=1 "$KIT/core/lock-kit.sh" unlock >/de
 [ -w "$KIT/core/config.json" ] && ok || bad "unlock with the intent marker must restore writability"
 grep -q '"tier"[[:space:]]*:[[:space:]]*"unlocked"' "$KIT/core/.lock-state" && ok || bad "state must record unlocked"
 
+# _integrity.sh missing: lock-kit.sh must refuse loud (exit 69), not silently run with undefined
+# tier functions — a safety tool that half-loads is the exact failure mode this project targets.
+KIT2="$TMP/kit-no-integrity"; mkdir -p "$KIT2/core"
+cp "$LOCK" "$KIT2/core/lock-kit.sh"; chmod +x "$KIT2/core/lock-kit.sh"
+HEKTOR_FK_NO_SUDO=1 "$KIT2/core/lock-kit.sh" status >/dev/null 2>&1
+[ "$?" -eq 69 ] && ok || bad "lock-kit.sh must refuse to run (exit 69) when _integrity.sh is missing"
+
 echo "lock-tier-test: $pass passed, $fail failed"
 [ "$fail" -eq 0 ]

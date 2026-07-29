@@ -33,6 +33,11 @@ HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"     # .../hektor-flaky-tria
 KIT="$(cd "$HERE/.." && pwd)"                            # .../hektor-flaky-triage
 CMD="${1:-}"
 
+# A safety tool that half-loads is worse than one that refuses: without this, a missing
+# _integrity.sh leaves integrity_owner_uid/integrity_state/integrity_tier undefined and every call
+# site below silently degrades to blank/empty output instead of failing loud. Refuse instead.
+[ -r "$HERE/_integrity.sh" ] \
+  || { echo "lock-kit: refusing to run — $HERE/_integrity.sh is missing; the tier logic (owner/state checks) cannot work without it" >&2; exit 69; }
 . "$HERE/_integrity.sh"
 STATE="$KIT/core/.lock-state"
 ME="$(id -un 2>/dev/null)"

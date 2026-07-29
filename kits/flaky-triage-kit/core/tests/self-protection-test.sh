@@ -55,6 +55,7 @@ git -C "$PROJ" config user.name self-protection-test
 
 cp "$CORE/shell-guard.py" "$SKILL/core/shell-guard.py"
 cp "$CORE/lock-kit.sh"    "$SKILL/core/lock-kit.sh"
+cp "$CORE/_integrity.sh"  "$SKILL/core/_integrity.sh"   # lock-kit.sh sources this; must ship alongside it
 cp "$KITSRC/adapters/claude/flaky-kit-self-protection-gate.sh" "$SKILL/hooks/flaky-kit-self-protection-gate.sh"
 cp "$KITSRC/adapters/_lib/audit.sh"                             "$PROJ/.claude/hooks/lib/audit.sh"
 cp "$KITSRC/adapters/cursor/flaky-kit-self-protection-gate.sh"  "$PROJ/.cursor/hooks/flaky-kit-self-protection-gate.sh"
@@ -154,12 +155,15 @@ grep -q "cwd unavailable" "$ERR_NOCWD" && ok || bad "stderr note printed when HE
 grep -q "cwd unavailable" "$ERR_CWD"   && bad "no stderr note expected when HEKTOR_FK_CWD IS set" || ok
 
 echo "== Locked-kit operation intact (Round2 lock-kit.sh, unaffected by this round) ==" >&2
-"$SKILL/core/lock-kit.sh" lock >/dev/null 2>&1
+# HEKTOR_FK_NO_SUDO=1 forces the degraded (chmod-only) tier: this fixture is a /tmp throwaway that
+# lock-kit.sh's tier logic (Task 3) would otherwise try to `chown -R root` if sudo has a cached
+# credential on the developer's machine — this test must never attempt a privileged operation.
+HEKTOR_FK_NO_SUDO=1 "$SKILL/core/lock-kit.sh" lock >/dev/null 2>&1
 assert_claude_bash_deny "(cd core && sed -i '' config.json)"   # gate still reads/decides fine while locked
 LOCK_STATUS="$("$SKILL/core/lock-kit.sh" status 2>/dev/null)"  # captured first: `status | grep -q` on the
 printf '%s\n' "$LOCK_STATUS" | grep -q 'r-  core/config.json' \
   && ok || bad "locked kit: status shows core/config.json read-only"
-HEKTOR_FLAKYKIT_UNLOCK=1 "$SKILL/core/lock-kit.sh" unlock >/dev/null 2>&1
+HEKTOR_FLAKYKIT_UNLOCK=1 HEKTOR_FK_NO_SUDO=1 "$SKILL/core/lock-kit.sh" unlock >/dev/null 2>&1
 
 # --- helpers: build N-deep nested parens / mixed $(...)/(...) around an inner command ---
 nest_parens() {  # $1=depth $2=inner -> ((...(inner)...))
