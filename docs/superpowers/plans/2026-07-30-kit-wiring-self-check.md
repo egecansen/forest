@@ -735,10 +735,14 @@ rather than by path:
 # installed into. `test(...)` on the gate filename, not on a whole command string, because we are
 # asking whether the REGISTRATION exists — not whether some text happens to appear.
 #
-# Survival is measured PER SLOT, not as a count over a flattened list. The four slots are Claude's
-# `Write|Edit` and `Bash` matchers and Cursor's `beforeShellExecution` and `preToolUse` events.
-# `_reg_slots <file>` returns the set of slots whose registered command names the gate; the change is
-# a survival only when every slot registered today is still registered afterwards.
+# Survival is measured per slot by the TOOLS A SLOT COVERS, not as a count over a flattened list and
+# not by the matcher's literal spelling. A slot is an event plus the set of tools its matcher names:
+# split the matcher on `|`, and treat `*` as covering everything. The change is a survival only when
+# every tool covered by a registered slot today is still covered by some registered slot afterwards.
+#
+# Keying on the matcher STRING would deny an edit that widens `Write|Edit` to `Write|Edit|MultiEdit` —
+# a change that leaves the registration strictly better than it found it. That is the same
+# over-denial the branch forbids, arriving through string identity instead of a path match.
 #
 # An earlier draft asked `… | length > 0` over every command in the file, and it contradicted this
 # task's own test payload: removing only the `"matcher":"Bash"` element leaves the `Write|Edit` arm
@@ -760,14 +764,19 @@ case "$(canon_path "$TARGET")" in
     else
       OLD=$(echo "$INPUT" | "$JQ" -r '.tool_input.old_string // ""')
       NEW=$(echo "$INPUT" | "$JQ" -r '.tool_input.new_string // ""')
-      python3 - "$TARGET" "$OLD" "$NEW" > "$_prop" <<'PY' || cp "$TARGET" "$_prop"
+      # `replace_all` is a first-class Edit parameter. Reconstructing with a single replacement while
+      # the tool replaces every occurrence means judging a document that is not the one being
+      # written — and a decoy mention of the gate filename, plantable by an edit this gate allows,
+      # turns that gap into a two-step removal of both registrations.
+      ALL=$(echo "$INPUT" | "$JQ" -r '.tool_input.replace_all // false')
+      python3 - "$TARGET" "$OLD" "$NEW" "$ALL" > "$_prop" <<'PY' || cp "$TARGET" "$_prop"
 import sys
-src, old, new = open(sys.argv[1]).read(), sys.argv[2], sys.argv[3]
-sys.stdout.write(src.replace(old, new, 1) if old else src)
+src, old, new, all_ = open(sys.argv[1]).read(), sys.argv[2], sys.argv[3], sys.argv[4] == "true"
+sys.stdout.write(src if not old else src.replace(old, new) if all_ else src.replace(old, new, 1))
 PY
     fi
     if "$JQ" -e . "$_prop" >/dev/null 2>&1; then
-      # Survives only if no slot registered today has gone missing. A slot the change ADDS is fine.
+      # Survives only if every tool covered today is still covered. Added coverage is fine.
       if _slots_kept "$_before" "$(_reg_slots "$_prop")"; then rm -f "$_prop"; exit 0; fi
       SURFACE="harness settings — this change would leave the kit's gate unregistered"
     else

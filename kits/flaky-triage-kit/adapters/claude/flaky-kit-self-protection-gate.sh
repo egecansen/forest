@@ -269,26 +269,61 @@ match_surface() {  # $1 = a path -> sets SURFACE and returns 0, or returns 1
   esac
 }
 
-# _reg_slots <json-file> -> one sorted line per harness slot the kit's gate is registered under, e.g.
-# "PreToolUse:Bash" / "beforeShellExecution". Silent and empty for an unreadable or unparseable file.
+# _reg_slots <json-file> -> one sorted "<event>:<tool>" line per TOOL the kit's gate is registered to
+# cover, e.g. "PreToolUse:Bash" / "preToolUse:Write" / "beforeShellExecution:*". Silent and empty for
+# an unreadable or unparseable file.
 #
 # Kept BYTE-IDENTICAL with the OTHER harness's gate (asserted by core/tests/self-protection-test.sh);
 # only the I/O boundary that feeds it differs between the two harnesses.
 #
 # `test(...)` on the gate FILENAME, not on a whole command string, because we are asking whether the
-# REGISTRATION exists — not whether some text happens to appear. And SLOTS, not a count of mentions:
-# core/_integrity.sh already rules that a harness's two slots are both required ("half a registration
-# is half the gate" — it answers `partial`, not `wired`, when one is missing), so "at least one
-# command still names the gate" would call deleting the whole Bash arm a survival and silently unwire
-# the entire Bash branch. Compare the SET before against the SET after; adding slots is fine.
+# REGISTRATION exists — not whether some text happens to appear.
+#
+# Survival is measured per slot by the TOOLS THE SLOT COVERS, not as a count over a flattened list and
+# not by the matcher's literal spelling:
+#   - A count (`… | length > 0`) asks "does some command mention the gate?" — the Task 1 defect's
+#     shape. It reads deleting the whole `Bash` matcher as a survival, because the `Write|Edit` arm
+#     still names the gate, and that unwires exactly the branch the Bash surface work closed.
+#     core/_integrity.sh already calls half a registration `partial`; a count here would have the kit
+#     calling one state broken on one axis and fine on the other.
+#   - The matcher STRING would deny an edit that widens `Write|Edit` to `Write|Edit|MultiEdit` — a
+#     change that leaves the registration strictly better than it found it. That is the same
+#     over-denial this branch forbids, arriving through string identity instead of a path match.
+# So: split the matcher on `|`, one line per tool, and treat `*` (or an absent matcher) as covering
+# everything. Cursor's `preToolUse` entries carry a `matcher` exactly as Claude's `PreToolUse` ones
+# do and are keyed the same way — keying them by event alone would let a Cursor matcher be retargeted
+# to an inert tool and read as a survival while the identical Claude-side change is caught.
+# `beforeShellExecution` is the one event with no matcher concept in either harness: it fires for
+# every shell execution, so it covers `*` by construction rather than by omission.
 _reg_slots() {
   "$JQ" -r '
     def gate: select((.command // "") | test("flaky-kit-self-protection-gate\\.sh"));
-    [ (.hooks.PreToolUse // [])[]? | (.matcher // "") as $m | (.hooks // [])[]? | gate | "PreToolUse:\($m)" ]
-    + [ (.hooks.beforeShellExecution // [])[]? | gate | "beforeShellExecution" ]
-    + [ (.hooks.preToolUse // [])[]? | gate | "preToolUse" ]
+    def tools($m): (if ($m // "") == "" then "*" else $m end) | split("|") | .[];
+    [ (.hooks.PreToolUse // [])[]? | .matcher as $m | (.hooks // [])[]? | gate | "PreToolUse:\(tools($m))" ]
+    + [ (.hooks.preToolUse // [])[]? | .matcher as $m | gate | "preToolUse:\(tools($m))" ]
+    + [ (.hooks.beforeShellExecution // [])[]? | gate | "beforeShellExecution:*" ]
     | unique | .[]
   ' "$1" 2>/dev/null
+}
+
+# _slots_kept <before> <after> -> 0 when every tool covered by a registered slot today is still
+# covered by some registered slot afterwards. Added coverage is fine; only a LOSS denies. An
+# "<event>:*" line in <after> covers every tool of that event, which is what makes collapsing two
+# matchers into one wildcard a survival rather than a loss.
+#
+# Kept BYTE-IDENTICAL with the OTHER harness's gate (asserted by core/tests/self-protection-test.sh).
+_slots_kept() {
+  local s ev
+  while IFS= read -r s; do
+    [ -n "$s" ] || continue
+    printf '%s\n' "$2" | grep -qxF "$s" && continue
+    ev="${s%%:*}"
+    printf '%s\n' "$2" | grep -qxF "$ev:*" && continue
+    return 1
+  done <<SLOTS
+$1
+SLOTS
+  return 0
 }
 
 case "$TOOL_NAME" in
@@ -302,37 +337,45 @@ case "$TOOL_NAME" in
     # no settings arm and this arm sits in front of it.
     case "$(canon_path "$TARGET")" in
       */.claude/settings.json|*/.claude/settings.local.json|*/.cursor/hooks.json)
-        [ -r "$TARGET" ] || exit 0                   # nothing registered yet -> nothing to lose
-        _was="$(mktemp)"; _reg_slots "$TARGET" > "$_was"
+        [ -r "$TARGET" ] || exit 0                     # nothing registered yet -> nothing to lose
+        _before="$(_reg_slots "$TARGET")"
         # NOT "must always end registered": a project that never installed this kit must not be frozen
         # out of its own settings file, malformed content included.
-        [ -s "$_was" ] || { rm -f "$_was"; exit 0; }  # not currently registered -> nothing to lose
+        [ -n "$_before" ] || exit 0                    # not currently registered -> nothing to lose
         _prop="$(mktemp)"
         if [ "$TOOL_NAME" = Write ]; then
           echo "$INPUT" | "$JQ" -r '.tool_input.content // ""' > "$_prop"
         else
           OLD=$(echo "$INPUT" | "$JQ" -r '.tool_input.old_string // ""')
           NEW=$(echo "$INPUT" | "$JQ" -r '.tool_input.new_string // ""')
-          # Literal (never regex) first-occurrence replace, matching the Edit tool's own semantics —
-          # same lesson as hooks/run-status-write-gate.sh, whose awk sub() reconstruction failed OPEN
-          # on a metacharacter in old_string. No python3 -> reconstruct as "unchanged", which is the
+          # `replace_all` is a first-class Edit parameter. Reconstructing with a single replacement
+          # while the tool replaces every occurrence means judging a document that is not the one
+          # being written — and a decoy mention of the gate filename, plantable by an edit this gate
+          # allows, turns that gap into a two-step removal of both registrations.
+          ALL=$(echo "$INPUT" | "$JQ" -r '.tool_input.replace_all // false')
+          # Literal (never regex) replace, matching the Edit tool's own semantics — same lesson as
+          # hooks/run-status-write-gate.sh, whose awk sub() reconstruction failed OPEN on a
+          # metacharacter in old_string. No python3 -> reconstruct as "unchanged", which is the
           # fail-open floor: this gate must never wedge every tool call.
-          python3 - "$TARGET" "$OLD" "$NEW" > "$_prop" <<'PY' || cp "$TARGET" "$_prop"
+          #
+          # Not byte-faithful in one respect, stated so nobody reuses it where that matters: OLD/NEW
+          # come through command substitution, which strips trailing newlines, so a multi-line
+          # old_string ending in one reconstructs slightly short. Harmless here because _reg_slots
+          # reads JSON structure, which is whitespace-insensitive.
+          python3 - "$TARGET" "$OLD" "$NEW" "$ALL" > "$_prop" <<'PY' || cp "$TARGET" "$_prop"
 import sys
-src, old, new = open(sys.argv[1]).read(), sys.argv[2], sys.argv[3]
-sys.stdout.write(src.replace(old, new, 1) if old else src)
+src, old, new, all_ = open(sys.argv[1]).read(), sys.argv[2], sys.argv[3], sys.argv[4] == "true"
+sys.stdout.write(src if not old else src.replace(old, new) if all_ else src.replace(old, new, 1))
 PY
         fi
         if "$JQ" -e . "$_prop" >/dev/null 2>&1; then
-          _now="$(mktemp)"; _reg_slots "$_prop" > "$_now"
-          _lost="$(grep -Fxv -f "$_now" "$_was" | tr '\n' ' ' | sed 's/ *$//')"
-          rm -f "$_now"
-          if [ -z "$_lost" ]; then rm -f "$_was" "$_prop"; exit 0; fi   # every slot survives -> allow
-          SURFACE="harness settings — this change would leave the kit's gate unregistered for: ${_lost}"
+          # Survives only if every tool covered today is still covered. Added coverage is fine.
+          if _slots_kept "$_before" "$(_reg_slots "$_prop")"; then rm -f "$_prop"; exit 0; fi
+          SURFACE="harness settings — this change would leave the kit's gate unregistered"
         else
           SURFACE="harness settings — the proposed content is not parseable JSON, so the registration's survival cannot be verified"
         fi
-        rm -f "$_was" "$_prop" ;;
+        rm -f "$_prop" ;;
       *)
         # Check the CANONICAL form first (closes ./ ../ symlink/cwd-relative bypasses); fall back to the
         # raw TARGET so an already-literal path still matches even if canon_path degraded to a no-op.

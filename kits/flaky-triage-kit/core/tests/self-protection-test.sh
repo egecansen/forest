@@ -90,7 +90,9 @@ edit_json()        { jq -n --arg c "$1" --arg f "$2" '{tool_name:"Edit", cwd:$c,
 # below name the outcome. One builder serves both harnesses: cursor-compat's cc_content /
 # cc_old_string / cc_new_string read the same `.tool_input.*` keys.
 write_json()       { jq -n --arg c "$1" --arg f "$2" --arg t "$3" '{tool_name:"Write", cwd:$c, tool_input:{file_path:$f, content:$t}}'; }
-edit_str_json()    { jq -n --arg c "$1" --arg f "$2" --arg o "$3" --arg n "$4" '{tool_name:"Edit", cwd:$c, tool_input:{file_path:$f, old_string:$o, new_string:$n}}'; }
+# $5 = replace_all (default false). It is a first-class Edit parameter, so a reconstruction that
+# ignores it models a different edit than the one that will be written.
+edit_str_json()    { jq -n --arg c "$1" --arg f "$2" --arg o "$3" --arg n "$4" --argjson a "${5:-false}" '{tool_name:"Edit", cwd:$c, tool_input:{file_path:$f, old_string:$o, new_string:$n, replace_all:$a}}'; }
 
 assert_claude_bash_deny()  { claude_denied "$(bash_json "$SKILL" "$1")"        && ok || bad "claude DENY Bash: $1"; }
 assert_claude_bash_allow() { claude_denied "$(bash_json "$SKILL" "$1")"        && bad "claude should ALLOW Bash: $1" || ok; }
@@ -112,6 +114,12 @@ assert_claude_edit_str_deny()  { claude_denied "$(edit_str_json "$PROJ" "$1" "$2
 assert_claude_edit_str_allow() { claude_denied "$(edit_str_json "$PROJ" "$1" "$2" "$3")" && bad "claude should ALLOW Edit: $4 ($1)" || ok; }
 assert_cursor_edit_str_deny()  { cursor_denied "$(edit_str_json "$PROJ" "$1" "$2" "$3")" && ok || bad "cursor DENY Edit: $4 ($1)"; }
 assert_cursor_edit_str_allow() { cursor_denied "$(edit_str_json "$PROJ" "$1" "$2" "$3")" && bad "cursor should ALLOW Edit: $4 ($1)" || ok; }
+# ...and the same with an explicit replace_all ($4 = true|false), so the two spellings of one edit can
+# be asserted against each other.
+assert_claude_edit_all_deny()  { claude_denied "$(edit_str_json "$PROJ" "$1" "$2" "$3" "$4")" && ok || bad "claude DENY Edit(replace_all=$4): $5 ($1)"; }
+assert_claude_edit_all_allow() { claude_denied "$(edit_str_json "$PROJ" "$1" "$2" "$3" "$4")" && bad "claude should ALLOW Edit(replace_all=$4): $5 ($1)" || ok; }
+assert_cursor_edit_all_deny()  { cursor_denied "$(edit_str_json "$PROJ" "$1" "$2" "$3" "$4")" && ok || bad "cursor DENY Edit(replace_all=$4): $5 ($1)"; }
+assert_cursor_edit_all_allow() { cursor_denied "$(edit_str_json "$PROJ" "$1" "$2" "$3" "$4")" && bad "cursor should ALLOW Edit(replace_all=$4): $5 ($1)" || ok; }
 
 echo "== Fix 1: subshell / command-substitution cd-tracking (must DENY, both gates) ==" >&2
 for cmd in \
@@ -295,6 +303,58 @@ assert_claude_edit_str_allow "$SJ" '"hooks"' '"hooks"' \
   "a no-op Edit that preserves the registration must be allowed"
 assert_cursor_edit_str_allow "$SJ" '"hooks"' '"hooks"' \
   "a no-op Edit that preserves the registration must be allowed"
+
+echo "== Task 4: slot identity is the TOOLS a matcher covers, not the matcher's spelling ==" >&2
+# Keying on the string would deny a user who HARDENS their registration by widening the matcher — a
+# false deny on a change that leaves the registration strictly better than it found it, i.e. the same
+# over-denial this branch forbids, arriving through string identity instead of a path match.
+assert_claude_write_allow "$SJ" "$(printf '%s' "$REG" | jq -c '.hooks.PreToolUse[0].matcher = "Write|Edit|MultiEdit"')" \
+  "widening Write|Edit to Write|Edit|MultiEdit must be allowed"
+assert_cursor_write_allow "$SJ" "$(printf '%s' "$REG" | jq -c '.hooks.PreToolUse[0].matcher = "Write|Edit|MultiEdit"')" \
+  "widening Write|Edit to Write|Edit|MultiEdit must be allowed"
+# `*` covers everything, so collapsing both matchers into one wildcard slot loses no coverage.
+assert_claude_write_allow "$SJ" "$(printf '%s' "$REG" | jq -c '.hooks.PreToolUse[0].matcher = "*" | del(.hooks.PreToolUse[1])')" \
+  "a single \"*\" matcher covers every tool the two matchers covered, so it must be allowed"
+assert_cursor_write_allow "$SJ" "$(printf '%s' "$REG" | jq -c '.hooks.PreToolUse[0].matcher = "*" | del(.hooks.PreToolUse[1])')" \
+  "a single \"*\" matcher covers every tool the two matchers covered, so it must be allowed"
+# NARROWING is a real loss and must still be caught — this is what stops "tools, not strings" from
+# collapsing into "any matcher will do".
+assert_claude_write_deny "$SJ" "$(printf '%s' "$REG" | jq -c '.hooks.PreToolUse[0].matcher = "Write"')" \
+  "narrowing Write|Edit to Write drops Edit coverage and must be denied"
+assert_cursor_write_deny "$SJ" "$(printf '%s' "$REG" | jq -c '.hooks.PreToolUse[0].matcher = "Write"')" \
+  "narrowing Write|Edit to Write drops Edit coverage and must be denied"
+
+echo "== Task 4: replace_all is a first-class Edit parameter — reconstructing with ONE replacement" >&2
+echo "   while the tool replaces EVERY occurrence judges a document that is not the one being written ==" >&2
+# The decoy is the case that separates a real fix from a cosmetic one: a mention of the gate filename
+# that is NOT a registration, planted AHEAD of the two real ones by a prior Write this gate allows.
+# With replace_all the write unregisters both; a single-replacement reconstruction only rewrites the
+# decoy, still sees two registrations, and reads the change as a survival.
+DECOY="$(jq -nc --arg c '"$CLAUDE_PROJECT_DIR/.claude/hooks/flaky-kit-self-protection-gate.sh"' '{
+  env:{HEKTOR_NOTE:"flaky-kit-self-protection-gate.sh"},
+  hooks:{PreToolUse:[
+    {matcher:"Write|Edit", hooks:[{type:"command", command:$c}]},
+    {matcher:"Bash",       hooks:[{type:"command", command:$c}]}]}}')"
+printf '%s\n' "$DECOY" > "$SJ"
+assert_claude_edit_all_deny "$SJ" 'flaky-kit-self-protection-gate.sh' 'x.sh' true \
+  "an Edit whose replace_all rewrites every mention of the gate must be denied"
+assert_cursor_edit_all_deny "$SJ" 'flaky-kit-self-protection-gate.sh' 'x.sh' true \
+  "an Edit whose replace_all rewrites every mention of the gate must be denied"
+# The SAME old/new with replace_all FALSE rewrites only the decoy and must be ALLOWED. This pair is
+# the whole evidence that the branch reads the parameter rather than ignoring it: a gate that always
+# replaced once, or always replaced all, gets one of these two wrong.
+assert_claude_edit_all_allow "$SJ" 'flaky-kit-self-protection-gate.sh' 'x.sh' false \
+  "the same edit without replace_all rewrites only the decoy, so both registrations survive"
+assert_cursor_edit_all_allow "$SJ" 'flaky-kit-self-protection-gate.sh' 'x.sh' false \
+  "the same edit without replace_all rewrites only the decoy, so both registrations survive"
+printf '%s\n' "$REG" > "$SJ"
+# A legitimate replace_all that touches every registration without unregistering anything -> ALLOW,
+# so replace_all is not simply treated as hostile.
+assert_claude_edit_all_allow "$SJ" '"type":"command"' '"type":"command"' true \
+  "a replace_all edit that preserves every registration must be allowed"
+assert_cursor_edit_all_allow "$SJ" '"type":"command"' '"type":"command"' true \
+  "a replace_all edit that preserves every registration must be allowed"
+
 # When the file is NOT currently registered, the gate has nothing to protect -> ALLOW
 printf '{"hooks":{"PreToolUse":[]}}\n' > "$SJ"
 assert_claude_write_allow "$SJ" '{"hooks":{"PreToolUse":[]}}' \
@@ -337,6 +397,14 @@ assert_claude_write_deny "$CH" "$(printf '%s' "$CREG" | jq -c 'del(.hooks.preToo
   "a Write that drops the Cursor preToolUse registration must be denied"
 assert_cursor_write_deny "$CH" "$(printf '%s' "$CREG" | jq -c 'del(.hooks.preToolUse)')" \
   "a Write that drops the Cursor preToolUse registration must be denied"
+# Cursor's preToolUse entries carry a `matcher` exactly as Claude's do, so neutering one has to cost
+# the same. Keying Cursor slots by event ALONE would read this as a survival while the identical
+# mutation on the Claude side is caught — an asymmetry with nothing behind it but the shape of the
+# first draft's jq.
+assert_claude_write_deny "$CH" "$(printf '%s' "$CREG" | jq -c '.hooks.preToolUse[0].matcher = "Task"')" \
+  "retargeting the Cursor preToolUse matcher to an inert tool must be denied"
+assert_cursor_write_deny "$CH" "$(printf '%s' "$CREG" | jq -c '.hooks.preToolUse[0].matcher = "Task"')" \
+  "retargeting the Cursor preToolUse matcher to an inert tool must be denied"
 printf '{"version":1,"hooks":{}}\n' > "$CH"   # restore the fixture's original shape
 
 echo "== Fix 2: SURF_RE stays byte-identical between the two gate scripts (parity) ==" >&2
@@ -346,9 +414,11 @@ CURSOR_SURF="$(grep -m1 '^SURF_RE=' "$CURSOR_GATE")"
 # Same reasoning for Task 4's registration reader: the gates are two files by necessity, not by design,
 # and a divergence here is something a later reader "fixes" in the wrong direction. Only the I/O
 # boundary (which accessor produces the payload) may differ between them.
-CLAUDE_REG="$(sed -n '/^_reg_slots() {/,/^}/p' "$CLAUDE_GATE")"
-CURSOR_REG="$(sed -n '/^_reg_slots() {/,/^}/p' "$CURSOR_GATE")"
-[ -n "$CLAUDE_REG" ] && [ "$CLAUDE_REG" = "$CURSOR_REG" ] && ok || bad "_reg_slots() identical across both gate scripts"
+for fn in _reg_slots _slots_kept; do
+  CLAUDE_FN="$(sed -n "/^$fn() {/,/^}/p" "$CLAUDE_GATE")"
+  CURSOR_FN="$(sed -n "/^$fn() {/,/^}/p" "$CURSOR_GATE")"
+  [ -n "$CLAUDE_FN" ] && [ "$CLAUDE_FN" = "$CURSOR_FN" ] && ok || bad "$fn() identical across both gate scripts"
+done
 
 echo "== SURF DRIFT: the bash-ERE fallback and shell-guard.py's SURF must classify the same paths ==" >&2
 # There are two surface patterns in two languages, "kept in sync" by comment only — and the review that
