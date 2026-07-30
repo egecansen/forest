@@ -734,18 +734,26 @@ rather than by path:
 # denying would make this kit block unrelated permission/env/model edits in every project it is
 # installed into. `test(...)` on the gate filename, not on a whole command string, because we are
 # asking whether the REGISTRATION exists — not whether some text happens to appear.
-_reg_present() {  # $1 = a JSON document on stdin-file -> 0 if the kit's gate is registered
-  "$JQ" -e '
-    [ (.hooks.PreToolUse // [])[]? | (.hooks // [])[]? | (.command // "") ]
-    + [ (.hooks.beforeShellExecution // [])[]? | (.command // "") ]
-    + [ (.hooks.preToolUse // [])[]? | (.command // "") ]
-    | map(select(test("flaky-kit-self-protection-gate\\.sh"))) | length > 0
-  ' "$1" >/dev/null 2>&1
-}
+#
+# Survival is measured PER SLOT, not as a count over a flattened list. The four slots are Claude's
+# `Write|Edit` and `Bash` matchers and Cursor's `beforeShellExecution` and `preToolUse` events.
+# `_reg_slots <file>` returns the set of slots whose registered command names the gate; the change is
+# a survival only when every slot registered today is still registered afterwards.
+#
+# An earlier draft asked `… | length > 0` over every command in the file, and it contradicted this
+# task's own test payload: removing only the `"matcher":"Bash"` element leaves the `Write|Edit` arm
+# still naming the gate, so the count stays positive and the change reads as a survival — while the
+# assertion above requires it denied, and rightly, since that payload unwires exactly the branch
+# Task 3 closed. It is also the Task 1 defect's shape: `length > 0` asks "does some command mention
+# the gate?", which is a proxy for the property rather than the property. And `integrity_wiring`
+# already calls half a registration `partial` and treats it as a defect, so a count here would have
+# the kit calling one state broken on one axis and fine on the other.
+_reg_slots() {  # $1 = a JSON document -> the slots whose registered command names the kit's gate
 case "$(canon_path "$TARGET")" in
   */.claude/settings.json|*/.claude/settings.local.json|*/.cursor/hooks.json)
     [ -r "$TARGET" ] || exit 0                     # nothing registered yet -> nothing to lose
-    _reg_present "$TARGET" || exit 0               # not currently registered -> nothing to lose
+    _before="$(_reg_slots "$TARGET")"
+    [ -n "$_before" ] || exit 0                    # not currently registered -> nothing to lose
     _prop="$(mktemp)"
     if [ "$TOOL_NAME" = Write ]; then
       echo "$INPUT" | "$JQ" -r '.tool_input.content // ""' > "$_prop"
@@ -759,7 +767,8 @@ sys.stdout.write(src.replace(old, new, 1) if old else src)
 PY
     fi
     if "$JQ" -e . "$_prop" >/dev/null 2>&1; then
-      if _reg_present "$_prop"; then rm -f "$_prop"; exit 0; fi   # survives -> allow
+      # Survives only if no slot registered today has gone missing. A slot the change ADDS is fine.
+      if _slots_kept "$_before" "$(_reg_slots "$_prop")"; then rm -f "$_prop"; exit 0; fi
       SURFACE="harness settings — this change would leave the kit's gate unregistered"
     else
       SURFACE="harness settings — the proposed content is not parseable JSON, so the registration's survival cannot be verified"
@@ -777,8 +786,14 @@ Expected: PASS.
 
 - [ ] **Step 5: Prove the allow-path is not just a hole**
 
-Mutate a scratch copy so `_reg_present` always returns 0 (always "survives"), and confirm the
-`drops the registration` assertion fails. If it does not, the assertion is not testing survival.
+Mutate a scratch copy so the survival test always passes — `_slots_kept` returning 0 unconditionally,
+and separately `_reg_slots` returning the full slot set for any input — and confirm the
+`drops the registration` assertions fail in each case. If they do not, they are not testing survival.
+
+An allow that would pass no matter what the payload said is indistinguishable from no check at all,
+so this step is the one that decides whether this task shipped a control or a decoration. Also
+confirm each `.cursor/hooks.json` slot is reachable by some assertion: an arm no test can enter is a
+claim nothing checks.
 
 - [ ] **Step 6: Run the whole suite and commit**
 
