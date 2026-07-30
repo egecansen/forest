@@ -291,9 +291,12 @@ assert_cursor_write_deny "$SJ" '{"hooks":' \
 # An Edit whose old_string carries the registration away -> DENY. Note WHICH registration: only the
 # Bash arm. `_reg_slots` (not "does the gate's filename still appear somewhere") is what makes this a
 # DENY — the Write|Edit arm survives this edit untouched, so a "one mention is enough" test would call
-# it a survival and ALLOW the Bash branch Task 3 just closed being unwired. core/_integrity.sh already
-# rules on this: both matchers are required, "half a registration is half the gate" (it reports
-# `partial`, not `wired`, when one is missing).
+# it a survival and ALLOW the Bash branch Task 3 just closed being unwired. core/_integrity.sh's
+# wiring axis rules the same way, on the same slot model: it asks whether a registered slot covers
+# Write, Edit AND Bash, and reports `partial` when the Bash coverage is gone. (The earlier wording
+# here appealed to "both matchers are required" — but _integrity.sh ruled on the matcher STRING, not
+# on the tool set, so the two halves cited each other while disagreeing; the slot-parity assertion
+# below is what now makes the agreement checkable instead of asserted.)
 assert_claude_edit_str_deny "$SJ" \
   '"matcher":"Bash","hooks":[{"type":"command","command":"\"$CLAUDE_PROJECT_DIR/.claude/hooks/flaky-kit-self-protection-gate.sh\""}]' '' \
   "an Edit that removes the Bash registration must be denied"
@@ -421,6 +424,47 @@ for fn in _reg_slots _slots_kept; do
   CURSOR_FN="$(sed -n "/^$fn() {/,/^}/p" "$CURSOR_GATE")"
   [ -n "$CLAUDE_FN" ] && [ "$CLAUDE_FN" = "$CURSOR_FN" ] && ok || bad "$fn() identical across both gate scripts"
 done
+
+echo "== CROSS-AXIS SLOT PARITY: the gate (does this edit keep the registration?) and core/_integrity.sh" >&2
+echo "   (will the gate actually run?) must derive the SAME slots from the same document ==" >&2
+# The two axes disagreeing is not a cosmetic split: the gate deliberately ALLOWs a widened matcher and
+# a collapse of both matchers into one `*`, while _integrity.sh's matcher-STRING comparison read those
+# same documents as `partial` and `unregistered` -> 76 at hardened/stale -> all thirteen entrypoints
+# refuse, with a printed repair the installer itself rejects on a root-owned tree. A kit wedged by a
+# change its own gate had just approved.
+#
+# Byte-identity is the wrong instrument here (the wiring side must also return the COMMAND per slot,
+# so the two functions cannot be the same text), and a comment saying "kept in sync" is what the SURF
+# DRIFT test above already exists to distrust. Compare DECISIONS: for each document, the set of
+# "<event>:<tool>" keys must match exactly. Any divergence is drift between the two axes.
+JQ="$(command -v jq)"
+eval "$(sed -n '/^_reg_slots() {/,/^}/p' "$CLAUDE_GATE")"
+. "$CORE/_integrity.sh"
+PARITY_DOC_DIR="$WORK/slot-parity"; mkdir -p "$PARITY_DOC_DIR"
+SLOT_DRIFT=0; n=0
+gate_c='"$CLAUDE_PROJECT_DIR/.claude/hooks/flaky-kit-self-protection-gate.sh"'
+for doc in \
+  "$(jq -nc --arg c "$gate_c" '{hooks:{PreToolUse:[{matcher:"Write|Edit",hooks:[{type:"command",command:$c}]},{matcher:"Bash",hooks:[{type:"command",command:$c}]}]}}')" \
+  "$(jq -nc --arg c "$gate_c" '{hooks:{PreToolUse:[{matcher:"Write|Edit|MultiEdit",hooks:[{type:"command",command:$c}]},{matcher:"Bash",hooks:[{type:"command",command:$c}]}]}}')" \
+  "$(jq -nc --arg c "$gate_c" '{hooks:{PreToolUse:[{matcher:"*",hooks:[{type:"command",command:$c}]}]}}')" \
+  "$(jq -nc --arg c "$gate_c" '{hooks:{PreToolUse:[{hooks:[{type:"command",command:$c}]}]}}')" \
+  "$(jq -nc --arg c "$gate_c" '{hooks:{PreToolUse:[{matcher:"Write",hooks:[{type:"command",command:$c}]}]}}')" \
+  "$(jq -nc --arg c "$CGATE_CMD" '{version:1,hooks:{beforeShellExecution:[{command:$c}],preToolUse:[{command:$c,matcher:"Write|Edit"}]}}')" \
+  "$(jq -nc --arg c "$CGATE_CMD" '{version:1,hooks:{preToolUse:[{command:$c,matcher:"Task"}]}}')" \
+  "$(jq -nc --arg c "$CGATE_CMD" '{version:1,hooks:{preToolUse:[{command:$c,matcher:"*"}]}}')" \
+  '{"hooks":{"PreToolUse":[]}}' \
+  '{"hooks":{"PreToolUse":[{"matcher":"Write|Edit","hooks":[{"type":"command","command":"/some/other/hook.sh"}]}]}}'
+do
+  n=$((n+1)); PD="$PARITY_DOC_DIR/doc$n.json"; printf '%s\n' "$doc" > "$PD"
+  GATE_SLOTS="$(_reg_slots "$PD" | sort)"
+  WIRE_SLOTS="$(_wiring_slots "$PD" | sed 's/	.*//' | sort -u)"
+  [ "$GATE_SLOTS" = "$WIRE_SLOTS" ] || { SLOT_DRIFT=1; echo "   SLOT DRIFT on doc$n: gate=[$GATE_SLOTS] wiring=[$WIRE_SLOTS]" >&2; }
+done
+[ "$SLOT_DRIFT" -eq 0 ] && ok || bad "the gate's _reg_slots and core/_integrity.sh's _wiring_slots disagree about at least one document — the two integrity axes have drifted apart again"
+# ...and the control that keeps the comparison from being vacuous: the documents above must actually
+# produce slots, or two empty sets would match for every one of them.
+[ -n "$(_reg_slots "$PARITY_DOC_DIR/doc1.json")" ] && [ -n "$(_wiring_slots "$PARITY_DOC_DIR/doc1.json")" ] \
+  && ok || bad "CONTROL: the slot-parity documents must produce non-empty slot sets on both axes, or the comparison above is vacuous"
 
 echo "== SURF DRIFT: the bash-ERE fallback and shell-guard.py's SURF must classify the same paths ==" >&2
 # There are two surface patterns in two languages, "kept in sync" by comment only — and the review that

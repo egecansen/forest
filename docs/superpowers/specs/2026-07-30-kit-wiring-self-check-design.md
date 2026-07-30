@@ -46,12 +46,26 @@ So a second function with its own values, and `integrity_guard` evaluates both.
 
 | Value | Meaning |
 |---|---|
-| `wired` | registered, the file exists, root-owned at the hardened tier, both matchers present |
-| `unregistered` | a settings file exists but carries no registration for the kit's gate |
+| `wired` | every required tool is covered by a registered slot, the file exists, and it is root-owned where the tree is |
+| `unregistered` | a required settings file carries no registration for the kit's gate — or cannot be read or parsed, which a harness cannot load hooks from either |
 | `dangling` | registered, but the file it points at is absent — **the observed case** |
-| `foreign` | the file exists but is not root-owned at the hardened tier, so it cannot be the kit's gate |
-| `partial` | one matcher registered, the other not — half the protection is silently off |
+| `foreign` | the file exists but is not root-owned while the tree is, so it cannot be the kit's gate |
+| `partial` | some required tools are covered and some are not — part of the protection is silently off |
 | `absent` | no harness is required here — not an installed layout, no `jq`, or a record naming none. **Not a defect and not a warning** |
+
+**One slot model, both axes.** *What counts as a valid registration* is asked once and answered the
+same way on both: split the matcher on `|`, treat `*` — and an absent matcher — as covering
+everything, emit one entry per tool, then ask whether a registered slot covers `Write`, `Edit` and
+`Bash`. The gate's `_reg_slots` already worked this way; the wiring axis compared the matcher STRING
+against the literals `Write|Edit` and `Bash`, so the two edits the gate deliberately ALLOWs as
+strictly-better registrations — widening `Write|Edit` to `Write|Edit|MultiEdit`, and collapsing both
+matchers into a single `*` — were read on this axis as `partial` and `unregistered`, i.e. a **76 from
+all thirteen entrypoints** for a change the kit's own gate had just approved. The tool set is the
+property; the matcher's spelling was a proxy for it. Cursor's `preToolUse` is keyed by matcher on both
+axes for the same reason; `beforeShellExecution` has no matcher concept in either harness, so it
+covers `*` by construction rather than by omission. A cross-axis parity assertion compares the two
+slot sets document by document, because "kept in sync by comment" is what the `SURF` drift check
+already exists to distrust.
 
 `absent` is separate on purpose. The kit claims to run standalone from a terminal, so "no gate" and
 "a gate that should be there and isn't" are different facts. Merging them would print a meaningless
@@ -91,8 +105,8 @@ proxy that happens to be right; checking the shape is the property itself.
 
 | Harness | File | Looked for |
 |---|---|---|
-| Claude | `<proj>/.claude/settings.json`, `settings.local.json` | the gate command under `PreToolUse`, in **both** the `Write\|Edit` and `Bash` matchers |
-| Cursor | `<proj>/.cursor/hooks.json` | `beforeShellExecution` and `preToolUse` registrations |
+| Claude | `<proj>/.claude/settings.json`, `settings.local.json` | slots under `PreToolUse` covering **all three** of `Write`, `Edit` and `Bash` |
+| Cursor | `<proj>/.cursor/hooks.json` | a `beforeShellExecution` registration, plus `preToolUse` slots covering `Write` and `Edit` |
 
 **Which harnesses are required comes from the install-time record, not from inference.** `--harness`
 was a flag that vanished after the run, so the only available proxy was "a settings file exists" —
@@ -110,15 +124,24 @@ wired — requiring both would fail every project that uses only one.
 not the path this kit would have installed. Asking "does some command string mention the gate?" and
 then stat-ing the canonical path are two different questions: a `settings.json` copied between
 machines answers the first yes while the gate never runs, and reporting `wired` there is precisely
-the false assurance this axis exists to remove. Ownership at the hardened tier is tested on the same
-resolved path.
+the false assurance this axis exists to remove. Ownership — at `hardened` **and** `stale`, i.e.
+wherever the tree is actually root-owned — is tested on the same resolved path.
 
 **When both harnesses are required, the worse value wins.** A project whose Claude gate is `wired`
 and whose Cursor gate is `dangling` reports `dangling`. Taking the better value would let a broken
 half hide behind a working half, which is the one-harness asymmetry Tasks 5 and 6 each had to fix;
 taking the worse one is also what the tier axis already does when protection and record disagree.
 The returned value does not name which harness produced it, and the message does not either — it
-directs the reader to re-run the installer, which repairs both.
+directs the reader at the repair, which fixes both.
+
+**The remedy has to be one the reader can execute.** `install.sh` exits 75 whenever the target's
+`core/` is root-owned — which is true at exactly the two tiers where a bad wiring value *refuses*. So
+"re-run the kit installer against this project to repair it" is correct advice at the warning tiers
+and impossible advice at `hardened`/`stale`, where the repair genuinely costs the password:
+`HEKTOR_FLAKYKIT_UNLOCK=1 core/lock-kit.sh unlock`, re-run the installer, `core/lock-kit.sh lock`.
+`integrity_report` prints whichever of the two applies. Printing an instruction that cannot be
+carried out is how a wedged kit stays wedged — and `dangling` is the defect this whole axis was
+written to catch, so its repair path is not a detail.
 
 **Cost, and the cache that was rejected.** One `jq` invocation per settings file present (at most
 three: the Claude pair and Cursor's) plus one or two `stat` calls per entrypoint — roughly double to
@@ -164,8 +187,19 @@ by hand does trip it, which is the intended asymmetry.
 |---|---|
 | `jq` unavailable | The gate already exits 0 at its top without `jq`; `_integrity.sh` likewise stays silent. A broken check must not wedge the kit |
 | Proposed JSON unparseable | **Deny** — the registration's survival cannot be verified, and writing malformed settings is itself a defect (the pack's `run-status-write-gate` sets this precedent) |
-| Settings file unreadable | Treat as `absent`, silent. Not knowing is not the same as broken |
+| Settings file unreadable or unparseable, and `core/.harness` says that harness is **required** | `unregistered` — same as a deleted settings file, and therefore a refusal at `hardened`/`stale` |
+| Settings file missing with no record and no other settings file | `absent`, silent — nothing was ever asked for here |
 | Installed shape does not hold | `absent`, silent |
+
+**Why unreadable is not `absent`.** This row read "Treat as `absent`, silent. Not knowing is not the
+same as broken" while the implementation reported `unregistered`, and the implementation is right.
+Once `core/.harness` records that a harness is *required*, an unreadable or malformed settings file
+is not failing to know — it is knowing the gate will **not** run as registered, because a harness
+cannot load hooks from a file it cannot open or parse. The `absent`-and-silent rule was written when
+file absence was the only signal available, before the record existed; with the record present,
+silence there is a false all-clear on a `chmod` or a truncation an agent can perform. `absent` is
+kept for the cases where the check genuinely cannot run at all: no `jq`, no record and no settings
+files, or a layout that is not an installed kit.
 
 ## 5. Testing
 

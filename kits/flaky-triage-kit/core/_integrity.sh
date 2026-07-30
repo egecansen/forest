@@ -76,28 +76,63 @@ _wiring_want() {
   return 0
 }
 
-# _wiring_gate_claude <settings-file> <matcher> -> the command string registered for that matcher, or
-# empty. Returns the COMMAND, not a yes/no: the harness runs whatever path that string names, so the
-# existence check must land on it. Asking "does some command mention the gate?" and then stat-ing the
-# path this kit would have installed are two different questions, and a settings.json copied between
-# machines answers the first yes while the gate never runs.
-_wiring_gate_claude() {
-  jq -r --arg m "$2" '
-    (.hooks.PreToolUse // [])
-    | map(select(.matcher == $m))
-    | map((.hooks // []) | map(.command // "")) | flatten
-    | map(select(test("flaky-kit-self-protection-gate\\.sh")))
-    | first // ""
+# _wiring_slots <settings-file> -> one "<event>:<tool><TAB><command>" line per TOOL that a registered
+# slot covers, e.g. "PreToolUse:Bash", "preToolUse:Write", "beforeShellExecution:*". Silent and empty
+# for an unreadable or unparseable file.
+#
+# ONE slot model, shared with the gate's own `_reg_slots`
+# (adapters/*/flaky-kit-self-protection-gate.sh, whose comment states the same rule): split the
+# matcher on `|`, treat `*` — and an absent matcher — as covering everything, emit one entry per tool.
+# The two integrity axes have to ask the same question or they contradict each other, and they did:
+# this function used to compare the matcher STRING against the literals `Write|Edit` and `Bash`, so
+# the two edits the gate deliberately ALLOWs as strictly-better registrations (widening `Write|Edit`
+# to `Write|Edit|MultiEdit`; collapsing both matchers into a single `*`) were read here as `partial`
+# and `unregistered` — a REFUSAL at the hardened and stale tiers, i.e. a kit wedged by a change its
+# own gate had just approved, whose printed repair (re-run the installer) install.sh itself refuses
+# on a root-owned tree. The tool set is the property; the matcher's spelling was a proxy for it, and
+# a proxy standing in for a property has now caused four separate defects in this kit.
+#
+# It returns the COMMAND alongside each slot, not a yes/no: the harness runs whatever path that string
+# names, so the existence check must land on it. Asking "does some command mention the gate?" and then
+# stat-ing the path this kit would have installed are two different questions, and a settings.json
+# copied between machines answers the first yes while the gate never runs.
+#
+# Cursor's `preToolUse` entries carry a `matcher` exactly as Claude's `PreToolUse` ones do, and are
+# keyed the same way here. Keying them by event alone — which this file used to do — would let a
+# Cursor matcher be retargeted to an inert tool and read as a survival while the identical Claude-side
+# change is caught, and the gate DENIES the edit that produces it, so one branch of one feature was
+# enforcing a rule the other silently waived. `beforeShellExecution` is the one event with no matcher
+# concept in either harness: it fires for every shell execution, so it covers `*` by construction
+# rather than by omission — the same reasoning the gate's `_reg_slots` records, not a new rule.
+_wiring_slots() {
+  jq -r '
+    def gate: select((.command // "") | test("flaky-kit-self-protection-gate\\.sh"));
+    def tools($m): (if ($m // "") == "" then "*" else $m end) | split("|") | .[];
+    [ (.hooks.PreToolUse // [])[]? | .matcher as $m | (.hooks // [])[]? | gate | "PreToolUse:\(tools($m))\t\(.command)" ]
+    + [ (.hooks.preToolUse // [])[]? | .matcher as $m | gate | "preToolUse:\(tools($m))\t\(.command)" ]
+    + [ (.hooks.beforeShellExecution // [])[]? | gate | "beforeShellExecution:*\t\(.command)" ]
+    | unique | .[]
   ' "$1" 2>/dev/null
 }
 
-# _wiring_gate_cursor <hooks-file> <event> -> the command string registered for that event, or empty.
-_wiring_gate_cursor() {
-  jq -r --arg e "$2" '
-    ((.hooks[$e]) // []) | map(.command // "")
-    | map(select(test("flaky-kit-self-protection-gate\\.sh")))
-    | first // ""
-  ' "$1" 2>/dev/null
+# _wiring_cover <slots> <event> <tool> -> the command registered for that event/tool, or empty.
+#
+# An "<event>:*" slot covers every tool of that event, which is what makes a collapsed wildcard
+# registration a covering one rather than a missing one — the same rule as the gate's `_slots_kept`,
+# stated once and applied on both axes.
+_wiring_cover() {
+  local slots="${1:-}" ev="${2:-}" tool="${3:-}" line key
+  while IFS= read -r line; do
+    [ -n "$line" ] || continue
+    key="${line%%$'\t'*}"
+    if [ "$key" = "$ev:$tool" ] || [ "$key" = "$ev:*" ]; then
+      printf '%s' "${line#*$'\t'}"
+      return 0
+    fi
+  done <<SLOTS
+$slots
+SLOTS
+  return 0
 }
 
 # _wiring_resolve <command-string> <project_root> -> an absolute path, or empty.
@@ -175,46 +210,69 @@ _wiring_worse() {
 # a never-locked one can be wired perfectly; folding them into one vocabulary would repeat the
 # collapse that once reported a plainly-writable fresh install as "degraded — read-only".
 #
-# Every failure mode resolves to `absent` and prints nothing: no jq, unreadable settings, or a
-# layout that is not an installed kit. Not knowing is not the same as broken, and a check that
-# cannot run must not wedge the caller.
+# THREE things resolve to `absent` and print nothing, because in each of them the check genuinely
+# cannot run: no `jq`; a layout that is not an installed kit; and no `core/.harness` record combined
+# with no harness settings file at all (nothing was ever asked for here — the kit runs standalone
+# from a terminal). A check that cannot run must not wedge the caller.
+#
+# A settings file that is UNREADABLE or UNPARSEABLE while the record says that harness is REQUIRED is
+# deliberately NOT one of them: it reports `unregistered`, exactly as a deleted settings file does.
+# That is not failing to know — it is knowing the gate will not run as registered, because a harness
+# cannot load hooks from a file it cannot open or parse. The "every failure mode is `absent` and
+# silent, not knowing is not the same as broken" rule that stood here was written when file ABSENCE
+# was the only signal available, before `core/.harness` existed to say a harness is required; with
+# the record present, silence there is a false all-clear on a chmod or a truncation an agent can
+# perform. Pinned by fixture for all three record-present cases (deleted / unreadable / malformed),
+# because the distinction is load-bearing at the refusing tiers.
 integrity_wiring() {
-  local kit="${1:-}" tier="${2:-}" root f m e cmd g gate got want out=absent wc wu
+  local kit="${1:-}" tier="${2:-}" root f p t s slots cmd g gate got want out=absent wc wu
   root="$(integrity_project_root "$kit")"
   [ -n "$root" ] || { echo absent; return 0; }
   command -v jq >/dev/null 2>&1 || { echo absent; return 0; }
 
-  # Which harnesses this kit was installed for. Every loop variable is declared local above: this
-  # file is sourced by ten entrypoints and `m` and `e` are already globals in core/rerun.sh, so an
+  # Which harnesses this kit was installed for. EVERY variable is declared local above, loop
+  # variables included: this file is sourced by thirteen entrypoints, and `t`, `p`, `cmd` and `out`
+  # are already globals in core/apply.sh, core/_lock.sh, core/compile.sh and core/cluster.sh, so an
   # undeclared one is a collision waiting for someone to reorder two lines.
   set -- $(_wiring_want "$kit" "$root")
   wc="${1:-0}"; wu="${2:-0}"
 
-  # Claude: a registration in EITHER settings file counts — requiring both would fail every project
-  # that uses only one. Both matchers are required, because half a registration is half the gate.
+  # Claude: slots from EITHER settings file count — Claude Code merges hook config from both, and
+  # requiring both would fail every project that uses only one. All three tools must be covered by
+  # some registered slot, because a tool the gate is not registered for is a tool the gate cannot see:
+  # Write and Edit are the payload branch, Bash is the branch that closed the settings/shell vector.
   if [ "$wc" = 1 ]; then
-    got=0; want=2; gate=''
-    for m in 'Write|Edit' 'Bash'; do
-      for f in "$root/.claude/settings.json" "$root/.claude/settings.local.json"; do
-        [ -r "$f" ] || continue
-        cmd="$(_wiring_gate_claude "$f" "$m")"
-        [ -n "$cmd" ] || continue
-        got=$((got+1))
-        g="$(_wiring_resolve "$cmd" "$root")"
-        # Prefer a path that is missing. If either matcher points somewhere that does not exist, the
-        # gate does not run for that tool call, and `dangling` is the honest answer for the pair.
-        if [ ! -f "$g" ] || [ -z "$gate" ]; then gate="$g"; fi
-        break
-      done
+    slots=''
+    for f in "$root/.claude/settings.json" "$root/.claude/settings.local.json"; do
+      if [ -r "$f" ]; then
+        s="$(_wiring_slots "$f")"
+        if [ -n "$s" ]; then slots="$slots$s
+"; fi
+      fi
+    done
+    got=0; want=3; gate=''
+    for t in Write Edit Bash; do
+      cmd="$(_wiring_cover "$slots" PreToolUse "$t")"
+      [ -n "$cmd" ] || continue
+      got=$((got+1))
+      g="$(_wiring_resolve "$cmd" "$root")"
+      # Prefer a path that is missing. If any covered tool points somewhere that does not exist, the
+      # gate does not run for that tool call, and `dangling` is the honest answer for the set.
+      if [ ! -f "$g" ] || [ -z "$gate" ]; then gate="$g"; fi
     done
     out="$(_wiring_worse "$out" "$(_wiring_one "$gate" "$tier" "$got" "$want")")"
   fi
 
-  # Cursor: one file, two events.
+  # Cursor: one file, the same three slots in that harness's spelling. `beforeShellExecution` is where
+  # the shell vector lands (no matcher concept, so it covers `*`), and `preToolUse` carries a matcher
+  # exactly as Claude's `PreToolUse` does — so it is asked about Write and Edit by name, not by event.
   if [ "$wu" = 1 ]; then
-    got=0; want=2; gate=''
-    for e in beforeShellExecution preToolUse; do
-      cmd="$(_wiring_gate_cursor "$root/.cursor/hooks.json" "$e")"
+    slots=''
+    f="$root/.cursor/hooks.json"
+    if [ -r "$f" ]; then slots="$(_wiring_slots "$f")"; fi
+    got=0; want=3; gate=''
+    for p in 'beforeShellExecution:*' 'preToolUse:Write' 'preToolUse:Edit'; do
+      cmd="$(_wiring_cover "$slots" "${p%%:*}" "${p#*:}")"
       [ -n "$cmd" ] || continue
       got=$((got+1))
       g="$(_wiring_resolve "$cmd" "$root")"
@@ -310,15 +368,23 @@ integrity_report() {
       echo "integrity: WIRING $wiring — the kit's self-protection gate is not going to run as registered." >&2
       case "$wiring" in
         dangling)     echo "integrity: a harness registration points at a gate file that does not exist (a pre-relocation path, or the file was removed)." >&2 ;;
-        unregistered) echo "integrity: a harness settings file exists but carries no registration for the kit's gate." >&2 ;;
-        partial)      echo "integrity: only one of the two required registrations is present, so half the surface is unguarded." >&2 ;;
-        foreign)      echo "integrity: the registered gate file is not root-owned at the hardened tier, so it is not the file this kit installed." >&2 ;;
+        unregistered) echo "integrity: a harness settings file is required here but carries no registration for the kit's gate — or cannot be read or parsed, which the harness cannot load hooks from either." >&2 ;;
+        partial)      echo "integrity: the gate is registered for some of the tools it must cover but not all of them, so part of the surface is unguarded." >&2 ;;
+        foreign)      echo "integrity: the registered gate file is not root-owned while this tree is, so it is not the file this kit installed." >&2 ;;
       esac
-      echo "integrity: re-run the kit installer against this project to repair it." >&2
+      # The remedy has to be one the reader can actually execute. install.sh REFUSES with 75 whenever
+      # $SKILL_DIR/core is root-owned — true at exactly the two tiers that refuse below — so "re-run
+      # the installer" is correct advice at the warning tiers and impossible advice at the refusing
+      # ones, where the repair genuinely costs the password. Printing an instruction that cannot be
+      # carried out is how a wedged kit stays wedged, and `dangling` is the defect this axis exists
+      # to catch.
       case "$tier" in
         hardened|stale)
           echo "integrity: refusing — the tree is root-owned, and the gate also carries the out-of-tree shadow record, so losing it means losing the only detector for a replaced kit tree. That is weaker than the protection actually in place." >&2
+          echo "integrity: to repair, unlock FIRST — the installer refuses to overwrite a root-owned tree: HEKTOR_FLAKYKIT_UNLOCK=1 core/lock-kit.sh unlock, then re-run the kit installer against this project, then core/lock-kit.sh lock." >&2
           rc=76 ;;
+        *)
+          echo "integrity: re-run the kit installer against this project to repair it." >&2 ;;
       esac ;;
   esac
   return "$rc"

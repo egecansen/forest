@@ -68,6 +68,28 @@ the tree can't take the detector with it. It denies agent writes to any of that 
 `HEKTOR_FLAKYKIT_UNLOCK=1` — real denials, honored by the CLI, but a heuristic string match all the
 same: friction and an audit trail, not a wall.
 
+**The harness settings files are on that surface too** — `.claude/settings.json`,
+`.claude/settings.local.json` and `.cursor/hooks.json` — because unregistering the gate is cheaper
+than editing it, and everything above is downstream of that one registration existing. The two tool
+branches ask different questions about them, deliberately:
+
+- **Bash — any mutation is denied**, whether or not it would actually change the registration. No
+  file content is available there, so the rule is a path-plus-verb match. Expect these to be denied
+  even though they look harmless: `cp .claude/settings.json /tmp/x` (a *copy out* still names a
+  mutating verb), and `rm -f .claude/settings.json.bak` (the pattern has no end-of-token boundary, so
+  any path merely *beginning* with a settings path matches — a known imprecision, erring toward
+  flagging). Reads pass: `cat` / `jq .` on those files are untouched.
+- **Write/Edit — decided by outcome.** The payload is available, so the gate asks whether the kit's
+  registration survives the change and denies only when it would not. Editing permissions, env or
+  model is allowed; so is *widening* the registration (`Write|Edit` → `Write|Edit|MultiEdit`, or both
+  matchers collapsed into one `*`). Narrowing it, dropping a matcher, or proposing unparseable JSON is
+  denied. A settings file that carries no registration today is not this kit's business at all.
+
+`core/_integrity.sh` asks the second question — *will the gate actually run?* — from the same slot
+model, so the two never disagree about what a valid registration is. At the **hardened** and **stale**
+tiers a broken registration is a refusal (exit 76) from every entrypoint, and repairing it means
+unlocking first: the installer refuses to overwrite a root-owned tree.
+
 The wall, where there is one, is underneath: `lock-kit.sh` reaches for an OS-level tier. **hardened** —
 `core/**`, `SKILL.md`, the gate scripts, the vendored libs and the kit root itself chown'd to root, so
 reopening needs a password — holds in every harness, because the kernel enforces it rather than a hook.
@@ -75,9 +97,18 @@ Without `sudo` it **degrades** to a chmod-only read-only bit the same user (and 
 running as them) can reverse — friction, not a wall. `lock-kit.sh status` names the tier actually in
 effect and prints the OWNER of every surface path, which is the only way to spot a `chown` that applied
 to some paths and not others. **Read `core/lock-kit.sh`'s header before calling a kit protected:** it
-lists, in full, what the hardened tier does not cover — shadowing (detected, not prevented), out-of-tree
-files that can be replaced via their user-owned parents, the sudo credential window, and partial
-hardening.
+is the authoritative list of what the hardened tier does not cover, and it currently has nine entries.
+All nine, so this page does not under-describe the tier the way it used to:
+
+1. **Shadowing** — `mv` the kit dir aside and replace it. Detected via the out-of-tree record, not prevented.
+2. **That record is itself deletable** — its directory must stay user-owned, so the same actor can erase the expectation.
+3. **Every out-of-tree surface path** (both gate scripts, the vendored libs) is protected against *edit*, not against *replacement*: their parents stay user-owned.
+4. **Social engineering** a human into running the unlock.
+5. **Anything after the password is typed** — `lock`/`unlock` end with `sudo -k`, but the window between the prompt and the end of the privileged section remains.
+6. **Partial hardening** — a `chown` can succeed on some operands and fail on others; the tier is sampled from `core/` alone. Announced and diagnosable, not prevented.
+7. **The harness settings files are not chown'd at any tier**, hardened included — the harness keeps editing them for its own reasons. Their only protection is the PreToolUse gate described above: a heuristic policy layer with no ownership floor under it.
+8. **The wiring check reads the same settings files an agent can write.** It proves a registration is present and, where the tree is root-owned, that it points at a file this kit still owns. It cannot prove the harness will *honour* that registration at any tier.
+9. **A bare `.claude` operand matches no surface pattern**, so `rm -rf .claude` is allowed — and at the hardened tier it unlinks the root-owned gate, the audit lib, `.flaky-kit-expect` and the registration itself. Pre-existing and scheduled as separate work: widening the pattern to a bare `.claude` changes the surface from "the kit's files" to "the harness's entire configuration tree" and needs its own design round.
 ```bash
 core/lock-kit.sh lock        # hardens (chown to root) when sudo is available; degrades to a
                               # chmod-only read-only bit otherwise. Ends with `sudo -k`, so the

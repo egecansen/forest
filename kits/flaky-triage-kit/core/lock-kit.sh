@@ -110,6 +110,16 @@
 #      cannot prove the harness itself will honour that registration, at any tier. A harness setting
 #      that disables hooks entirely, or a harness bug that silently ignores one, is outside anything
 #      this file or `_integrity.sh` can see.
+#   9. A BARE `.claude` operand matches no surface pattern the gates carry — every alternative names
+#      something INSIDE it (`.claude/hooks`, `.claude/skills/hektor-flaky-triage`,
+#      `.claude/settings.json`), so `rm -rf .claude` is an ALLOW at every tier. At the hardened tier
+#      it still unlinks the root-owned gate script, the vendored audit lib and `.flaky-kit-expect`
+#      (item 3's parent-directory problem, one level higher), and now also the registration item 8's
+#      wiring check exists to verify — so the one detector that would notice goes with the thing it
+#      detects. Deliberately NOT fixed here and scheduled as separate work: widening the pattern to a
+#      bare `.claude` changes the surface from "the kit's files" to "the harness's entire
+#      configuration tree", which is a different promise with its own false-positive cost, and it
+#      needs its own design round rather than a line appended to a fix wave.
 #
 # Closed since this list was first written, recorded here so the change stays legible instead of
 # quietly vanishing: `core/shell-guard.py` honoured `HEKTOR_FK_SURFACE` by REPLACING its surface
