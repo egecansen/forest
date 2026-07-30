@@ -94,6 +94,21 @@
 #      printed whenever it said anything at all, and the banner derives its kit-root clause from the
 #      kit root's ACTUAL owner) and DIAGNOSABLE (`status` prints an owner per path). It is not
 #      prevented; re-running `lock` is the fix.
+#   7. The harness settings files (`.claude/settings.json`, `.claude/settings.local.json`,
+#      `.cursor/hooks.json`) are not on this surface at all — they stay user-writable at every tier,
+#      including hardened, because the harness itself keeps editing them for reasons that have
+#      nothing to do with this kit. Their only protection is the PreToolUse gate: Bash denies any
+#      command naming one of them alongside a mutating verb, and Write/Edit denies only an edit that
+#      would drop the kit's registration. That is a heuristic policy layer, not an ownership wall —
+#      there is no chown floor under it the way core/** has one, and it shares the same escape
+#      classes already named for the Bash gate (`base64 … | bash`, `eval`, process substitution, a
+#      compiled writer, or any construct that is not a literal, parseable command naming a
+#      recognized verb).
+#   8. The wiring check (`core/_integrity.sh`'s `integrity_wiring`) reads the same settings files an
+#      agent can also write. It proves a registration is present and, at the hardened tier, that it
+#      points at a file this kit still owns — it cannot prove the harness itself will honour that
+#      registration. A harness setting that disables hooks entirely, or a harness bug that silently
+#      ignores one, is outside anything this file or `_integrity.sh` can see.
 #
 # Closed since this list was first written, recorded here so the change stays legible instead of
 # quietly vanishing: `core/shell-guard.py` honoured `HEKTOR_FK_SURFACE` by REPLACING its surface

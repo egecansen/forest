@@ -21,7 +21,7 @@ and calls these; it MUST NOT mutate state except through them (kernel P2).
 | `hedge-scan` | fixer's own summary text → clean (0) / HEDGED + matched phrases (2) | cheap deterministic pre-screen: self-reported uncertainty ("should work", "only ran once") is not a green — catch it before spending a reviewer call |
 | `apply` | a fix patch → applied in the working tree (git-tracked, clean-tree check) + diff | **I3** confined to `source_roots`, git-reversible, kit never commits · **I10** rev-pin |
 | `ledger` | read/write run state via validated subcommands (v2: cluster-upsert / cluster-state / event / validate · cluster-vrt) | **I5** re-derive "applied" from source, never trust ledger for safety · **I11** `validate --final` gates session end |
-| `_integrity` *(sourced)* | kit root → `hardened`/`unlocked`/`degraded`/`unprotected`/`mismatch`/`stale` | **P4** the lock tier is asserted at every entrypoint, not assumed; refuses (76) when protection is weaker than recorded |
+| `_integrity` *(sourced)* | kit root → tier (`hardened`/`unlocked`/`degraded`/`unprotected`/`mismatch`/`stale`) **and** wiring (`wired`/`unregistered`/`dangling`/`foreign`/`partial`/`absent`) | **P4** both are asserted at every entrypoint, not assumed. Refuses (76) when protection is weaker than recorded — a tier mismatch, or a hardened tier whose gate registration no longer resolves |
 | `lock-kit` | `lock`/`unlock`/`status` → OS-level tier on the safety surface | **P4** hardened = root-owned safety surface **including the kit root** (reopen needs a password); degrades to chmod-only and names the tier it actually reached |
 | `summary` | ledger → convergence report | **I7** allowlist emitted fields (no raw stackTrace / PII / tokens) |
 

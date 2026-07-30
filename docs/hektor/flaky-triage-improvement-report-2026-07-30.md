@@ -1,7 +1,7 @@
 # Flaky-Triage Kit — Improvement Report
 
 **Date:** 2026-07-30 · **Scope:** `kits/flaky-triage-kit` · **Branch:** `worktree-kit-wiring-self-check`
-**Status:** Tasks 1–3 merged into the branch and reviewed clean; Task 4 in its final re-review; Task 5 not started.
+**Status:** Tasks 1–4 merged into the branch and reviewed clean; Task 5 (this document, plus the residual sweep) in progress.
 
 ## What this covers
 
@@ -131,8 +131,10 @@ leave the whole suite green when reverted, meaning the ruling behind it had no t
 Stated rather than implied, because a control that overclaims is worse than one that is honest about
 its edge:
 
-1. The settings files are protected against **edits**, but their parent directories stay user-owned,
-   so a settings file can be replaced wholesale rather than edited.
+1. The settings files carry no chown protection at all — unlike core/**, they must stay
+   user-writable for the harness's own unrelated edits — so this gate (Bash mutation-deny, Write/Edit
+   outcome-check) is their only defense, at every tier including hardened, and it shares the same
+   heuristic-bypass limits already named for the rest of this gate.
 2. The wiring check proves the registration is present and points at a file this kit owns. It cannot
    prove the harness will honour it — a harness-level disable is outside anything the kit can see.
 3. A registered gate path containing spaces resolves to its first token.

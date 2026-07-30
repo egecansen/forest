@@ -248,9 +248,11 @@ proj_bash_deny "printf '{}' > .claude/settings.json"
 
 echo "== Task 3: shell-guard.py's SURF verified DIRECTLY, not only through the gate pipeline above —" >&2
 echo "   both gates prefer shell-guard.py whenever python3 is present, so a deny/allow assertion" >&2
-echo "   through a gate cannot by itself prove the BASH-ONLY SURF_RE fallback was updated too; a prior" >&2
-echo "   round shipped exactly that gap (gates' patterns updated, primary engine blind). stdin piped" >&2
-echo "   directly, no jq/gate wrapper in between. ==" >&2
+echo "   through a gate exercises whichever engine it actually dispatched to, never shell-guard.py's" >&2
+echo "   SURF in isolation from that choice; a prior round shipped exactly that gap (gates' patterns" >&2
+echo "   updated, primary engine blind, nothing ran the two independently). stdin piped directly here," >&2
+echo "   no jq/gate wrapper in between, is what isolates shell-guard.py's own pattern — the gate's" >&2
+echo "   separate bash-only SURF_RE fallback is checked on its own in the SURF DRIFT test below. ==" >&2
 for s in ".claude/settings.json" ".claude/settings.local.json" ".cursor/hooks.json"; do
   printf '%s' "sed -i '' $s" | HEKTOR_FK_CWD="$PROJ" python3 "$SKILL/core/shell-guard.py" >/dev/null 2>&1 \
     && ok || bad "shell-guard.py SURF must directly DENY a Bash mutation of $s: sed -i '' $s"
