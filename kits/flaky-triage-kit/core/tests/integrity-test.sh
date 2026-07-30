@@ -158,5 +158,87 @@ done
 [ -z "$UNGUARDED" ] && ok \
   || bad "core/*.sh file(s) missing the integrity_guard call and not in NON_ENTRYPOINTS:$UNGUARDED — add the guard, or add the file to NON_ENTRYPOINTS with a stated reason"
 
+# --- integrity_project_root: verify the SHAPE, never a level count -------------------
+# `pwd -P` immediately after mktemp, same reason as lock-tier-test.sh and install-guard-test.sh:
+# on macOS mktemp -d hands back a /var/folders/... path whose /var is a symlink to /private/var, and
+# integrity_project_root resolves the PHYSICAL path via `cd ... && pwd -P`. Comparing that against
+# the un-resolved $PR would fail on a correct implementation for no real reason.
+PR="$(mktemp -d)"; PR="$(cd "$PR" && pwd -P)"
+mkdir -p "$PR/proj/.claude/skills/hektor-flaky-triage/core"
+[ "$(integrity_project_root "$PR/proj/.claude/skills/hektor-flaky-triage")" = "$PR/proj" ] \
+  && ok || bad "project root must be derived from an installed layout"
+mkdir -p "$PR/wrong/skills/hektor-flaky-triage"
+[ -z "$(integrity_project_root "$PR/wrong/skills/hektor-flaky-triage")" ] \
+  && ok || bad "a layout whose grandparent is not .claude must yield no project root"
+mkdir -p "$PR/nope/.claude/plugins/hektor-flaky-triage"
+[ -z "$(integrity_project_root "$PR/nope/.claude/plugins/hektor-flaky-triage")" ] \
+  && ok || bad "a layout whose parent is not skills must yield no project root"
+[ -z "$(integrity_project_root "$PR/proj/.claude/skills")" ] \
+  && ok || bad "a directory not named hektor-flaky-triage must yield no project root"
+[ -z "$(integrity_project_root)" ] && ok || bad "no argument must yield no project root, not an error"
+
+# --- integrity_wiring: one fixture builder, six outcomes ----------------------------
+# wire_fixture <dir> — an installed layout with both harnesses correctly registered.
+wire_fixture() {
+  local d="$1" k="$1/.claude/skills/hektor-flaky-triage"
+  mkdir -p "$k/core" "$d/.claude/hooks" "$d/.cursor/hooks"
+  printf 'x\n' > "$d/.claude/hooks/flaky-kit-self-protection-gate.sh"
+  printf 'x\n' > "$d/.cursor/hooks/flaky-kit-self-protection-gate.sh"
+  cat > "$d/.claude/settings.json" <<'JSON'
+{"hooks":{"PreToolUse":[
+  {"matcher":"Write|Edit","hooks":[{"type":"command","command":"\"$CLAUDE_PROJECT_DIR/.claude/hooks/flaky-kit-self-protection-gate.sh\""}]},
+  {"matcher":"Bash","hooks":[{"type":"command","command":"\"$CLAUDE_PROJECT_DIR/.claude/hooks/flaky-kit-self-protection-gate.sh\""}]}
+]}}
+JSON
+  cat > "$d/.cursor/hooks.json" <<'JSON'
+{"version":1,"hooks":{
+  "beforeShellExecution":[{"command":".cursor/hooks/flaky-kit-self-protection-gate.sh"}],
+  "preToolUse":[{"command":".cursor/hooks/flaky-kit-self-protection-gate.sh","matcher":"Write|Edit"}]
+}}
+JSON
+  echo "$k"
+}
+W="$(mktemp -d)"; K1="$(wire_fixture "$W/a")"
+
+# CONTROL, required: prove the fixture actually reaches a non-absent state. `absent` silences every
+# assertion below, so a fixture that quietly fails to reproduce the installed layout would make them all vacuously
+# pass — which is exactly how C1's "the fixture was too kind" defect survived a full review.
+[ "$(integrity_wiring "$K1" degraded)" != absent ] \
+  && ok || bad "CONTROL: the fixture must reach a non-absent wiring state, or every assertion below is vacuous"
+[ "$(integrity_wiring "$K1" degraded)" = wired ] && ok || bad "a correctly registered fixture must be wired"
+
+# dangling: registered, file gone — the case observed live in a web-test worktree
+K2="$(wire_fixture "$W/b")"; rm -f "$W/b/.claude/hooks/flaky-kit-self-protection-gate.sh"
+[ "$(integrity_wiring "$K2" degraded)" = dangling ] && ok || bad "a registration pointing at a missing file must be dangling"
+
+# unregistered: settings present, no registration for the kit's gate
+K3="$(wire_fixture "$W/c")"; printf '{"hooks":{"PreToolUse":[]}}\n' > "$W/c/.claude/settings.json"
+printf '{"version":1,"hooks":{}}\n' > "$W/c/.cursor/hooks.json"
+[ "$(integrity_wiring "$K3" degraded)" = unregistered ] && ok || bad "settings with no kit registration must be unregistered"
+
+# partial: one matcher registered, the other dropped
+K4="$(wire_fixture "$W/d")"
+jq '.hooks.PreToolUse |= map(select(.matcher != "Bash"))' "$W/d/.claude/settings.json" > "$W/d/s" && mv "$W/d/s" "$W/d/.claude/settings.json"
+rm -f "$W/d/.cursor/hooks.json"
+[ "$(integrity_wiring "$K4" degraded)" = partial ] && ok || bad "one matcher registered and one missing must be partial"
+
+# absent: an installed layout with no harness settings at all — terminal-only use, NOT a defect
+K5="$(wire_fixture "$W/e")"; rm -f "$W/e/.claude/settings.json" "$W/e/.cursor/hooks.json"
+[ "$(integrity_wiring "$K5" degraded)" = absent ] && ok || bad "no harness settings at all must be absent, not a defect"
+
+# foreign: hardened tier, gate file present but NOT root-owned — it cannot be the kit's gate.
+# Below hardened the same tree is `wired`, because ownership proves nothing there.
+K6="$(wire_fixture "$W/f")"
+[ "$(integrity_wiring "$K6" hardened)" = foreign ] && ok || bad "at hardened, a non-root-owned gate file must be foreign"
+[ "$(integrity_wiring "$K6" degraded)" = wired ] && ok || bad "below hardened, ownership proves nothing — the same tree is wired"
+
+# worse-value-wins across harnesses: a working half must not hide a broken half
+K7="$(wire_fixture "$W/g")"; rm -f "$W/g/.cursor/hooks/flaky-kit-self-protection-gate.sh"
+[ "$(integrity_wiring "$K7" degraded)" = dangling ] && ok || bad "a dangling Cursor gate must not be masked by a wired Claude gate"
+
+# not an installed layout -> absent, silent. Running the suite from the source tree must not warn.
+[ "$(integrity_wiring "$W" degraded)" = absent ] && ok || bad "a non-installed layout must be absent"
+rm -rf "$PR" "$W"
+
 echo "integrity-test: $pass passed, $fail failed"
 [ "$fail" -eq 0 ]

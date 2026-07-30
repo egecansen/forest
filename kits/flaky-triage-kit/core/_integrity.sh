@@ -32,6 +32,110 @@ integrity_owner_uid() {
   return 0
 }
 
+# integrity_project_root <kit_root> -> the project root, or empty when this is not an installed kit.
+#
+# Verifies the SHAPE of the installed layout — <proj>/.claude/skills/hektor-flaky-triage — rather
+# than counting three levels up. Counting is a proxy that happens to be right for one layout; the
+# shape is the property being asked about. It also means running the suite from the source tree
+# (kits/flaky-triage-kit) yields nothing and the wiring check stays silent there, instead of
+# accidentally resolving to some unrelated directory.
+integrity_project_root() {
+  local kit="${1:-}" k s c
+  [ -n "$kit" ] || return 0
+  k="$(cd "$kit" 2>/dev/null && pwd -P)" || return 0
+  [ -n "$k" ] || return 0
+  [ "$(basename "$k")" = "hektor-flaky-triage" ] || return 0
+  s="$(dirname "$k")"; [ "$(basename "$s")" = "skills" ] || return 0
+  c="$(dirname "$s")"; [ "$(basename "$c")" = ".claude" ] || return 0
+  dirname "$c"
+  return 0
+}
+
+# _wiring_reg_claude <settings-file> <matcher> -> 0 if the kit's gate is registered for that matcher.
+_wiring_reg_claude() {
+  jq -e --arg m "$2" '
+    (.hooks.PreToolUse // [])
+    | map(select(.matcher == $m))
+    | map((.hooks // []) | map(.command // "")
+          | map(select(test("flaky-kit-self-protection-gate\\.sh"))) | length)
+    | (add // 0) > 0
+  ' "$1" >/dev/null 2>&1
+}
+
+# _wiring_reg_cursor <hooks-file> <event> -> 0 if the kit's gate is registered for that event.
+_wiring_reg_cursor() {
+  jq -e --arg e "$2" '
+    ((.hooks[$e]) // []) | map(.command // "")
+    | map(select(test("flaky-kit-self-protection-gate\\.sh"))) | length > 0
+  ' "$1" >/dev/null 2>&1
+}
+
+# _wiring_one <gate-file> <tier> <registered-count> <expected-count> -> a wiring value for one harness
+_wiring_one() {
+  local gate="$1" tier="$2" got="$3" want="$4"
+  [ "$got" -eq 0 ] && { echo unregistered; return 0; }
+  [ "$got" -lt "$want" ] && { echo partial; return 0; }
+  [ -f "$gate" ] || { echo dangling; return 0; }
+  # Identity comes free from the tier: harden_targets chowns the gate, and a replacement cannot be
+  # root-owned without the password. Below hardened, ownership proves nothing, so existence is all
+  # there is to check — claiming more there would be the overclaim this kit keeps retracting.
+  if [ "$tier" = hardened ] && [ "$(integrity_owner_uid "$gate")" != "0" ]; then echo foreign; return 0; fi
+  echo wired
+  return 0
+}
+
+# _wiring_rank <value> -> a severity rank. Higher is worse. `absent` is NOT ranked: it means "this
+# harness is not configured", so it must never drag down a harness that is.
+_wiring_rank() {
+  case "${1:-}" in
+    wired) echo 1 ;; partial) echo 2 ;; dangling) echo 3 ;;
+    unregistered) echo 4 ;; foreign) echo 5 ;; *) echo 0 ;;
+  esac
+}
+
+# integrity_wiring <kit_root> <tier> -> wired|unregistered|dangling|foreign|partial|absent
+#
+# The SECOND axis, deliberately separate from integrity_tier. A hardened install can be miswired and
+# a never-locked one can be wired perfectly; folding them into one vocabulary would repeat the
+# collapse that once reported a plainly-writable fresh install as "degraded — read-only".
+#
+# Every failure mode resolves to `absent` and prints nothing: no jq, unreadable settings, or a
+# layout that is not an installed kit. Not knowing is not the same as broken, and a check that
+# cannot run must not wedge the caller.
+integrity_wiring() {
+  local kit="${1:-}" tier="${2:-}" root f got want v best=0 out=absent
+  root="$(integrity_project_root "$kit")"
+  [ -n "$root" ] || { echo absent; return 0; }
+  command -v jq >/dev/null 2>&1 || { echo absent; return 0; }
+
+  # Claude: a registration in EITHER settings file counts — requiring both would fail every project
+  # that uses only one. Both matchers are required, because half a registration is half the gate.
+  if [ -r "$root/.claude/settings.json" ] || [ -r "$root/.claude/settings.local.json" ]; then
+    got=0; want=2
+    for m in 'Write|Edit' 'Bash'; do
+      for f in "$root/.claude/settings.json" "$root/.claude/settings.local.json"; do
+        [ -r "$f" ] || continue
+        if _wiring_reg_claude "$f" "$m"; then got=$((got+1)); break; fi
+      done
+    done
+    v="$(_wiring_one "$root/.claude/hooks/flaky-kit-self-protection-gate.sh" "$tier" "$got" "$want")"
+    if [ "$(_wiring_rank "$v")" -gt "$best" ]; then best="$(_wiring_rank "$v")"; out="$v"; fi
+  fi
+
+  # Cursor: one file, two events.
+  if [ -r "$root/.cursor/hooks.json" ]; then
+    got=0; want=2
+    for e in beforeShellExecution preToolUse; do
+      _wiring_reg_cursor "$root/.cursor/hooks.json" "$e" && got=$((got+1))
+    done
+    v="$(_wiring_one "$root/.cursor/hooks/flaky-kit-self-protection-gate.sh" "$tier" "$got" "$want")"
+    if [ "$(_wiring_rank "$v")" -gt "$best" ]; then best="$(_wiring_rank "$v")"; out="$v"; fi
+  fi
+
+  echo "$out"
+  return 0
+}
+
 # integrity_state <kit_root> -> the recorded tier, or empty when absent/unreadable.
 integrity_state() {
   local f="${1:-}/core/.lock-state"
