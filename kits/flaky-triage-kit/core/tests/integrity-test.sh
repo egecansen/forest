@@ -238,6 +238,86 @@ K7="$(wire_fixture "$W/g")"; rm -f "$W/g/.cursor/hooks/flaky-kit-self-protection
 
 # not an installed layout -> absent, silent. Running the suite from the source tree must not warn.
 [ "$(integrity_wiring "$W" degraded)" = absent ] && ok || bad "a non-installed layout must be absent"
+
+# --- review round 2, Finding 2: loop variables must not leak into the sourcing shell ------------
+# core/_integrity.sh is sourced by ten entrypoints, and `m`/`e` are already globals in core/rerun.sh
+# (rerun.sh:58 `m="${t##*.}"`, rerun.sh:147 `for e in "${ENT[@]}"`). Nothing broke before this round
+# only because the guard call happened to sit above those lines — ordering luck, not isolation, in a
+# file whose header promises never to wedge a caller. The probe runs in a SUBSHELL so a leak there
+# cannot contaminate this test file's own variables; only the subshell's pass/fail exit status
+# crosses back out, and `ok`/`bad` (which touch this file's pass/fail counters) are called out here
+# in the main shell, not inside the subshell where their effect would be lost when it exits.
+( unset m e
+  . "$HERE/../_integrity.sh"
+  integrity_wiring "$K1" degraded >/dev/null
+  [ -z "${m:-}" ] && [ -z "${e:-}" ]
+) 2>/dev/null && ok || bad "integrity_wiring must not leak its loop variables (m/e) into the sourcing shell"
+
+# --- review round 2, Finding 1: dangling/wired must be decided on the RESOLVED registered path, not
+# --- a hardcoded canonical one. A settings.json shared across machines (or hand-edited) can carry a
+# --- registration to any path; the harness runs THAT path, not the one this kit would have installed.
+# A registration resolved to an EXISTING non-canonical path must be wired, even with the canonical
+# path gone — proves the check follows the registration instead of stat-ing a guess.
+K8="$(wire_fixture "$W/h")"
+mkdir -p "$W/h/elsewhere"; printf 'x\n' > "$W/h/elsewhere/flaky-kit-self-protection-gate.sh"
+rm -f "$W/h/.claude/hooks/flaky-kit-self-protection-gate.sh"
+jq --arg c "$W/h/elsewhere/flaky-kit-self-protection-gate.sh" \
+   '.hooks.PreToolUse |= map(.hooks |= map(.command = $c))' \
+   "$W/h/.claude/settings.json" > "$W/h/s" && mv "$W/h/s" "$W/h/.claude/settings.json"
+[ "$(integrity_wiring "$K8" degraded)" = wired ] \
+  && ok || bad "a registration resolved to an EXISTING non-canonical path must be wired even though the canonical path is gone"
+
+# The inverse and the actual exploit named in review: a registration resolved to a path that does
+# NOT exist must be dangling even though the canonical path is still sitting right there — reporting
+# `wired` here (because some OTHER, unregistered file happens to exist at the canonical location) is
+# the false assurance a security self-check must not give.
+K9="$(wire_fixture "$W/i")"
+jq --arg c "/nonexistent-foreign-machine-path/flaky-kit-self-protection-gate.sh" \
+   '.hooks.PreToolUse |= map(.hooks |= map(.command = $c))' \
+   "$W/i/.claude/settings.json" > "$W/i/s" && mv "$W/i/s" "$W/i/.claude/settings.json"
+[ "$(integrity_wiring "$K9" degraded)" = dangling ] \
+  && ok || bad "a registration resolved to a path that does not exist must be dangling even though an unrelated canonical-path file still exists"
+
+# --- review round 2, Finding 3: pin the most common real deployment (one harness, correctly wired,
+# --- the other simply not present) to `wired` -- the property mutation 4 was supposed to prove and,
+# --- before this round, could not: _wiring_rank's `absent` arm was unreachable dead code because
+# --- nothing ever fed `absent` through it. _wiring_worse seeds the merge with `absent` and compares
+# --- it against the first harness result, so the arm is now on the live path.
+K10="$(wire_fixture "$W/j")"; rm -rf "$W/j/.cursor"
+[ "$(integrity_wiring "$K10" degraded)" = wired ] \
+  && ok || bad "Claude fully wired with no Cursor config at all (not merely broken) must be wired, not masked by the absent seed"
+K11="$(wire_fixture "$W/k")"; rm -f "$W/k/.claude/settings.json"
+[ "$(integrity_wiring "$K11" degraded)" = wired ] \
+  && ok || bad "the Cursor-only mirror: Cursor fully wired with no Claude settings at all must be wired"
+
+# --- new scope, review round 2: core/.harness pins which harnesses are REQUIRED, so the check no
+# --- longer infers a requirement from "a settings file exists" -- that flagged a project carrying a
+# --- .cursor/hooks.json left by some unrelated tool even though the kit was installed for Claude alone.
+# A claude-only record must not be dragged down by a stray/broken Cursor config: Cursor's gate file is
+# removed here (which would read as `dangling` if examined), and the record says Cursor was never
+# required, so it must not be examined at all.
+K12="$(wire_fixture "$W/l")"
+printf 'claude\n' > "$K12/core/.harness"
+rm -f "$W/l/.cursor/hooks/flaky-kit-self-protection-gate.sh"
+[ "$(integrity_wiring "$K12" degraded)" = wired ] \
+  && ok || bad "a claude-only .harness record must not be dragged down by a stray/broken .cursor config"
+
+# A record REQUIRING a harness whose settings file is missing entirely must be `unregistered`, not
+# `absent` -- absent means nothing was ever asked for; a record saying Claude was installed but no
+# settings file exists at all is a real defect (an agent could have deleted it), and silence there
+# would be exactly the false all-clear this round exists to close.
+K13="$(wire_fixture "$W/m")"
+printf 'claude\n' > "$K13/core/.harness"
+rm -f "$W/m/.claude/settings.json"
+[ "$(integrity_wiring "$K13" degraded)" = unregistered ] \
+  && ok || bad "a .harness record requiring claude with no settings.json at all must be unregistered, not absent"
+
+# No .harness record at all must still reproduce the pre-existing file-presence inference, unchanged
+# -- every K1..K11 fixture above already proves this implicitly (none of them writes .harness), and
+# this line names the property directly for anyone reading only this section.
+[ ! -f "$K1/core/.harness" ] && [ "$(integrity_wiring "$K1" degraded)" = wired ] \
+  && ok || bad "with no .harness record at all, the pre-existing file-presence inference must still apply"
+
 rm -rf "$PR" "$W"
 
 echo "integrity-test: $pass passed, $fail failed"

@@ -51,23 +51,76 @@ integrity_project_root() {
   return 0
 }
 
-# _wiring_reg_claude <settings-file> <matcher> -> 0 if the kit's gate is registered for that matcher.
-_wiring_reg_claude() {
-  jq -e --arg m "$2" '
-    (.hooks.PreToolUse // [])
-    | map(select(.matcher == $m))
-    | map((.hooks // []) | map(.command // "")
-          | map(select(test("flaky-kit-self-protection-gate\\.sh"))) | length)
-    | (add // 0) > 0
-  ' "$1" >/dev/null 2>&1
+# _wiring_want <kit_root> <project_root> -> "<claude> <cursor>", each 1 if that harness is required.
+#
+# The install-time record decides. `--harness` was previously a flag that vanished after the run, so
+# the check had to infer a requirement from "a settings file exists" — which flags a project that
+# carries a .cursor/hooks.json from some unrelated tool while the kit was only ever installed for
+# Claude. The record is written into core/, which harden_targets already chowns, so at the hardened
+# tier an agent cannot rewrite it to require nothing.
+#
+# No record means the kit predates this file: fall back to the old inference rather than silently
+# requiring nothing, which would turn every existing install into a green "wired".
+_wiring_want() {
+  local kit="${1:-}" root="${2:-}" h c=0 u=0
+  h="$(cat "$kit/core/.harness" 2>/dev/null)"
+  case "$h" in
+    all|both) echo "1 1"; return 0 ;;
+    claude)   echo "1 0"; return 0 ;;
+    cursor)   echo "0 1"; return 0 ;;
+    agents)   echo "0 0"; return 0 ;;
+  esac
+  { [ -r "$root/.claude/settings.json" ] || [ -r "$root/.claude/settings.local.json" ]; } && c=1
+  [ -r "$root/.cursor/hooks.json" ] && u=1
+  echo "$c $u"
+  return 0
 }
 
-# _wiring_reg_cursor <hooks-file> <event> -> 0 if the kit's gate is registered for that event.
-_wiring_reg_cursor() {
-  jq -e --arg e "$2" '
+# _wiring_gate_claude <settings-file> <matcher> -> the command string registered for that matcher, or
+# empty. Returns the COMMAND, not a yes/no: the harness runs whatever path that string names, so the
+# existence check must land on it. Asking "does some command mention the gate?" and then stat-ing the
+# path this kit would have installed are two different questions, and a settings.json copied between
+# machines answers the first yes while the gate never runs.
+_wiring_gate_claude() {
+  jq -r --arg m "$2" '
+    (.hooks.PreToolUse // [])
+    | map(select(.matcher == $m))
+    | map((.hooks // []) | map(.command // "")) | flatten
+    | map(select(test("flaky-kit-self-protection-gate\\.sh")))
+    | first // ""
+  ' "$1" 2>/dev/null
+}
+
+# _wiring_gate_cursor <hooks-file> <event> -> the command string registered for that event, or empty.
+_wiring_gate_cursor() {
+  jq -r --arg e "$2" '
     ((.hooks[$e]) // []) | map(.command // "")
-    | map(select(test("flaky-kit-self-protection-gate\\.sh"))) | length > 0
-  ' "$1" >/dev/null 2>&1
+    | map(select(test("flaky-kit-self-protection-gate\\.sh")))
+    | first // ""
+  ' "$1" 2>/dev/null
+}
+
+# _wiring_resolve <command-string> <project_root> -> an absolute path, or empty.
+#
+# Read `install.sh` for the exact strings both harnesses are registered with — that file is the
+# authority on the format, not this comment — and handle at minimum: surrounding quotes, a
+# $CLAUDE_PROJECT_DIR or ${CLAUDE_PROJECT_DIR} prefix, an absolute path, and a path relative to the
+# project root. Trailing arguments after the script path are dropped.
+#
+# Known limitation, to be stated rather than hidden: a registered path containing spaces resolves to
+# its first token.
+_wiring_resolve() {
+  local cmd="${1:-}" root="${2:-}" p
+  [ -n "$cmd" ] || return 0
+  p="$(printf '%s' "$cmd" | tr -d '"'\''')"
+  p="${p%%[[:space:]]*}"
+  p="$(printf '%s' "$p" | sed -e "s|\${CLAUDE_PROJECT_DIR}|$root|g" -e "s|\$CLAUDE_PROJECT_DIR|$root|g")"
+  case "$p" in
+    '') : ;;
+    /*) printf '%s' "$p" ;;
+    *)  printf '%s' "$root/$p" ;;
+  esac
+  return 0
 }
 
 # _wiring_one <gate-file> <tier> <registered-count> <expected-count> -> a wiring value for one harness
@@ -84,13 +137,21 @@ _wiring_one() {
   return 0
 }
 
-# _wiring_rank <value> -> a severity rank. Higher is worse. `absent` is NOT ranked: it means "this
-# harness is not configured", so it must never drag down a harness that is.
+# _wiring_rank <value> -> a severity rank. Higher is worse. `absent` ranks 0 — it means "nothing is
+# configured here", so it loses to every real value and never drags down a harness that is wired.
 _wiring_rank() {
   case "${1:-}" in
     wired) echo 1 ;; partial) echo 2 ;; dangling) echo 3 ;;
     unregistered) echo 4 ;; foreign) echo 5 ;; *) echo 0 ;;
   esac
+}
+
+# _wiring_worse <a> <b> -> whichever of the two is worse. The seed is `absent`, so the `absent` arm of
+# _wiring_rank is on the live path and a mutation to it changes a public answer — which is the point:
+# a rank branch no call can reach is a claim no test can check.
+_wiring_worse() {
+  if [ "$(_wiring_rank "${2:-}")" -gt "$(_wiring_rank "${1:-}")" ]; then echo "${2:-}"; else echo "${1:-}"; fi
+  return 0
 }
 
 # integrity_wiring <kit_root> <tier> -> wired|unregistered|dangling|foreign|partial|absent
@@ -103,33 +164,48 @@ _wiring_rank() {
 # layout that is not an installed kit. Not knowing is not the same as broken, and a check that
 # cannot run must not wedge the caller.
 integrity_wiring() {
-  local kit="${1:-}" tier="${2:-}" root f got want v best=0 out=absent
+  local kit="${1:-}" tier="${2:-}" root f m e cmd g gate got want out=absent wc wu
   root="$(integrity_project_root "$kit")"
   [ -n "$root" ] || { echo absent; return 0; }
   command -v jq >/dev/null 2>&1 || { echo absent; return 0; }
 
+  # Which harnesses this kit was installed for. Every loop variable is declared local above: this
+  # file is sourced by ten entrypoints and `m` and `e` are already globals in core/rerun.sh, so an
+  # undeclared one is a collision waiting for someone to reorder two lines.
+  set -- $(_wiring_want "$kit" "$root")
+  wc="${1:-0}"; wu="${2:-0}"
+
   # Claude: a registration in EITHER settings file counts — requiring both would fail every project
   # that uses only one. Both matchers are required, because half a registration is half the gate.
-  if [ -r "$root/.claude/settings.json" ] || [ -r "$root/.claude/settings.local.json" ]; then
-    got=0; want=2
+  if [ "$wc" = 1 ]; then
+    got=0; want=2; gate=''
     for m in 'Write|Edit' 'Bash'; do
       for f in "$root/.claude/settings.json" "$root/.claude/settings.local.json"; do
         [ -r "$f" ] || continue
-        if _wiring_reg_claude "$f" "$m"; then got=$((got+1)); break; fi
+        cmd="$(_wiring_gate_claude "$f" "$m")"
+        [ -n "$cmd" ] || continue
+        got=$((got+1))
+        g="$(_wiring_resolve "$cmd" "$root")"
+        # Prefer a path that is missing. If either matcher points somewhere that does not exist, the
+        # gate does not run for that tool call, and `dangling` is the honest answer for the pair.
+        if [ ! -f "$g" ] || [ -z "$gate" ]; then gate="$g"; fi
+        break
       done
     done
-    v="$(_wiring_one "$root/.claude/hooks/flaky-kit-self-protection-gate.sh" "$tier" "$got" "$want")"
-    if [ "$(_wiring_rank "$v")" -gt "$best" ]; then best="$(_wiring_rank "$v")"; out="$v"; fi
+    out="$(_wiring_worse "$out" "$(_wiring_one "$gate" "$tier" "$got" "$want")")"
   fi
 
   # Cursor: one file, two events.
-  if [ -r "$root/.cursor/hooks.json" ]; then
-    got=0; want=2
+  if [ "$wu" = 1 ]; then
+    got=0; want=2; gate=''
     for e in beforeShellExecution preToolUse; do
-      _wiring_reg_cursor "$root/.cursor/hooks.json" "$e" && got=$((got+1))
+      cmd="$(_wiring_gate_cursor "$root/.cursor/hooks.json" "$e")"
+      [ -n "$cmd" ] || continue
+      got=$((got+1))
+      g="$(_wiring_resolve "$cmd" "$root")"
+      if [ ! -f "$g" ] || [ -z "$gate" ]; then gate="$g"; fi
     done
-    v="$(_wiring_one "$root/.cursor/hooks/flaky-kit-self-protection-gate.sh" "$tier" "$got" "$want")"
-    if [ "$(_wiring_rank "$v")" -gt "$best" ]; then best="$(_wiring_rank "$v")"; out="$v"; fi
+    out="$(_wiring_worse "$out" "$(_wiring_one "$gate" "$tier" "$got" "$want")")"
   fi
 
   echo "$out"

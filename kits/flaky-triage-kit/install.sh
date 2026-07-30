@@ -78,6 +78,11 @@ cp "$HERE/adapters/claude/SKILL.md" "$SKILL_DIR/SKILL.md"
 chmod +x "$SKILL_DIR"/core/*.sh "$SKILL_DIR"/core/*.py 2>/dev/null || true
 echo "install: engine + SKILL.md -> $KIT/"
 
+# The wiring check must require exactly the harnesses this kit was installed for. Written under
+# core/, which harden_targets already chowns, so at the hardened tier an agent cannot rewrite it to
+# require nothing.
+printf '%s\n' "$HARNESS" > "$SKILL_DIR/core/.harness"
+
 # UPGRADE PATH. Before the relocation, the gate installed INSIDE the kit tree at
 # $SKILL_DIR/hooks/flaky-kit-self-protection-gate.sh. Nothing removed it, so upgrading an existing
 # install left the project with TWO gates: the new one plus a stale in-tree copy that predates the
