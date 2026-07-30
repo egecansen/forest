@@ -33,7 +33,8 @@
 #              cannot reverse it; reopening needs sudo, which needs a password only a human at the
 #              keyboard can supply. THAT password is the human consent — provided no cached sudo
 #              credential short-circuits the prompt, which is why both privileged sections below end
-#              with `sudo -k` (item 5). HEKTOR_FLAKYKIT_UNLOCK is not consent —
+#              with `sudo -k` (item 5) WHENEVER they attempt escalation at all, regardless of which
+#              tier the attempt actually lands on. HEKTOR_FLAKYKIT_UNLOCK is not consent —
 #              it is an intent marker, and only sometimes a recorded one: the PreToolUse gate logs
 #              its use when IT intercepts an agent's surface-mutating call, but running this script
 #              directly — as `lock`/`unlock` always are — is not recorded anywhere by this file
@@ -81,6 +82,12 @@
 #      `sudo -n true`. So "reopening needs a password" was not unconditional: the lock itself opened
 #      the hole. Residual after `sudo -k`: the window between the password prompt and the end of the
 #      privileged section, plus any other `sudo` the user runs afterwards for their own reasons.
+#      Corrected: an earlier version ran `sudo -k` only when the escalation reached its BEST-CASE
+#      outcome (`lock`: `$TIER = hardened`; `unlock`: never past an early `exit 77`) — so a `chown`
+#      that authenticated and cached a credential, then failed on some or all operands, left the
+#      credential live for the full window with nothing in this file's own words to say so. `lock`
+#      now keys the drop to whether escalation was ATTEMPTED; `unlock` additionally drops it on both
+#      of its `exit 77` bailouts, not only on normal completion.
 #   6. Partial hardening. A `chown` over several operands can succeed on some and fail on others,
 #      and the tier is sampled from core/ alone — so core/ root-owned with $KIT (or a gate script)
 #      still user-owned is reported as `hardened`. That case is now ANNOUNCED (sudo's own words are
@@ -137,7 +144,8 @@ ME="$(id -un 2>/dev/null)"
 # constrains, which can probe for the window with the very same `sudo -n true` and reopen the kit
 # inside it with no prompt at all. Treating "we already have the credential" as a reason to skip the
 # prompt would therefore hand the agent the asymmetry the hardened tier exists to create. Hence both
-# privileged sections below end with `sudo -k` (header item 5).
+# privileged sections below end with `sudo -k` whenever they attempt escalation at all — keyed to the
+# ATTEMPT, not to whether it fully succeeded (header item 5).
 have_sudo() { [ "${HEKTOR_FK_NO_SUDO:-0}" = "1" ] && return 1; command -v sudo >/dev/null 2>&1; }
 write_state() { printf '{"tier":"%s","at":"%s"}\n' "$1" "$(date -u +%FT%TZ 2>/dev/null || echo '?')" > "$STATE" 2>/dev/null; }
 
@@ -280,7 +288,15 @@ case "$CMD" in
     #    not-in-sudoers user all produce the same silent non-zero, and reporting all three as
     #    "sudo unavailable" is exactly the dishonest degradation this kit exists to stop.
     TIER=degraded
+    # Tracks whether we ATTEMPTED escalation (entered the `sudo chown` calls below), not whether it
+    # landed. The two are different: `sudo chown` caches its credential the moment it authenticates,
+    # regardless of whether the chown itself then succeeds on every operand, some, or none. Gating
+    # the `sudo -k` below on this instead of on $TIER is the fix for the defect where the cache was
+    # left live in exactly the states where a chown had authenticated but not fully — see the notes
+    # at the `sudo -k` call itself and header item 5.
+    escalated=0
     if have_sudo; then
+      escalated=1
       # Two calls, not one: `-R` for the surface, plain for the kit root. See harden_root() for why
       # putting $KIT in the recursive call is destructive in the source checkout.
       sudo_err="$(harden_targets | tr '\n' '\0' | xargs -0 sudo chown -R root 2>&1 >/dev/null)"
@@ -317,7 +333,14 @@ case "$CMD" in
     # 4. Drop the credential this run just cached — the privileged section is over. Header item 5:
     #    without this, sudo's default timestamp_timeout leaves a ~5-minute no-prompt reopen window
     #    that THIS command created, detectable by the agent with `sudo -n true`.
-    [ "$TIER" = hardened ] && { sudo -k 2>/dev/null || true; }
+    #    Gated on $escalated (did we run `sudo chown` at all), NOT on `$TIER = hardened` (did it
+    #    land everywhere): an earlier version used the latter, which skips `sudo -k` in precisely the
+    #    two states where the credential is most dangerous to leave cached — an UNEVEN escalation
+    #    (some surface paths rooted, core/ not, so TIER lands on degraded) and a chown that
+    #    authenticates but then fails on every operand (TIER never leaves degraded either). Both
+    #    still cache a credential; both are covered by keying on "did we try", not "did it fully
+    #    succeed".
+    [ "$escalated" = "1" ] && { sudo -k 2>/dev/null || true; }
     if [ "$TIER" = hardened ]; then
       # The kit-root clause is DERIVED from the kit root's real owner, never assumed: a chown that
       # rooted core/ and failed on $KIT lands here too, and printing "including the kit root" then
@@ -363,10 +386,17 @@ case "$CMD" in
     done < <({ harden_targets; harden_root; })
     if [ "$hardened_any" = "1" ]; then
       # Same split as `lock`, for the same reason (harden_root(): -R applies to every operand).
+      # Both abort branches below drop the credential (`sudo -k`) BEFORE exiting: a `chown` can
+      # authenticate successfully and still fail here (a stale operand, a lingering immutable flag),
+      # which used to `exit 77` before ever reaching the single `sudo -k` at the tail of this
+      # command — leaving a cached credential live for the same ~5-minute window header item 5
+      # exists to close, on the one path where a human just typed a password. Mirrors lock's fix:
+      # key the drop to whether escalation was ATTEMPTED (we are inside this `if`), not to whether
+      # it fully succeeded.
       harden_targets | tr '\n' '\0' | xargs -0 sudo chown -R "$ME" \
-        || { echo "lock-kit: unlock aborted — chown back to $ME failed; the kit stays hardened" >&2; exit 77; }
+        || { echo "lock-kit: unlock aborted — chown back to $ME failed; the kit stays hardened" >&2; sudo -k 2>/dev/null || true; exit 77; }
       sudo chown "$ME" "$(harden_root)" \
-        || { echo "lock-kit: unlock aborted — chown of the kit root back to $ME failed; the kit stays hardened" >&2; exit 77; }
+        || { echo "lock-kit: unlock aborted — chown of the kit root back to $ME failed; the kit stays hardened" >&2; sudo -k 2>/dev/null || true; exit 77; }
     fi
     d=0; while IFS= read -r p; do chmod u+w "$p" && d=$((d+1)); done < <(surface_dirs)
     n=0; while IFS= read -r f; do chmod u+w "$f" && n=$((n+1)); done < <(surface_files)
@@ -377,7 +407,9 @@ case "$CMD" in
     # maintenance window looks like, so leaving the record at `hardened` would make every legitimate
     # unlock indistinguishable from a shadowed kit. See write_expect().
     write_expect unlocked
-    # The privileged section is over — drop the credential (header item 5).
+    # The privileged section is over — drop the credential (header item 5). This covers the normal
+    # completion path; the two `exit 77` bailouts above already dropped it on their way out, since
+    # neither of them reaches this line.
     [ "$hardened_any" = "1" ] && { sudo -k 2>/dev/null || true; }
     echo "lock-kit: UNLOCKED $n files + $d dirs for $ME. Re-lock when done:  $0 lock" >&2 ;;
   status)

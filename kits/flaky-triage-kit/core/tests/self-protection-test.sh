@@ -375,6 +375,45 @@ CURSOR_OUT="$(printf '{"command":"echo hi","cwd":"%s"}' "$PROJ" | "$CURSOR_GATE"
 case "$CURSOR_OUT" in *SHADOW*) bad "cursor gate must stay silent while the record says 'unlocked'" ;; *) ok ;; esac
 printf 'hardened\n' > "$PROJ/.claude/hooks/.flaky-kit-expect"
 
+echo "== R1 Shadow SILENCE control: core/ genuinely root-owned must produce NO warning ==" >&2
+# The suite above proves the gate WARNS on a rename-and-replace and on a vanished tree — testing
+# PROTECTION, not merely PRESENCE. But nothing yet proves the gate STAYS SILENT when the recorded
+# tier is hardened AND core/ genuinely IS root-owned — the one state a correctly hardened, normally
+# operating kit is in essentially all the time. The only existing silence control (the maintenance-
+# window one just above) pins the RECORD comparison (record=unlocked), not the ownership branch —
+# it never exercises the `_owner_uid "$_CORE" != "0"` line at all. Mutation-verified below: replacing
+# that comparison with `true` in BOTH gates left the whole suite green before this control existed.
+#
+# No privilege needed: a PATH-shimmed `stat` (same technique as core/tests/lock-tier-test.sh's
+# STAT_TARGETS and core/tests/install-guard-test.sh) reports uid 0 for exactly $SKILL/core when
+# asked for the numeric owner (`%u`), and falls through to the real `stat` for every other query
+# (including `status`'s `%Su` name lookup, and anything unrelated to this one path) so it cannot
+# accidentally widen into a general "everything is root" stub.
+#
+# Two spellings are matched, not one: the Cursor gate resolves its root via `git rev-parse
+# --show-toplevel` (cc_repo_root), which on macOS answers with the PHYSICAL path, while $SKILL
+# itself is spelled through mktemp's un-resolved /var/folders/... symlink form (same /var ->
+# /private/var wrinkle noted in core/tests/lock-tier-test.sh) — so the Cursor gate's `_CORE` and
+# this fixture's `$SKILL/core` are two different strings for the same directory. Resolving
+# $SKILL/core's own physical form with `pwd -P` and matching either spelling closes that gap; the
+# Claude gate is unaffected (it takes CLAUDE_PROJECT_DIR directly, no git resolution) but is matched
+# the same way for uniformity.
+PHYS_CORE="$(cd "$SKILL/core" && pwd -P)"
+OWNSHIM="$WORK/ownshim"; mkdir -p "$OWNSHIM"
+cat > "$OWNSHIM/stat" <<STATSH
+#!/bin/bash
+case " \$* " in *" %u "*) ;; *) exec /usr/bin/stat "\$@" ;; esac
+for a in "\$@"; do
+  case "\$a" in "$SKILL/core"|"$PHYS_CORE") echo 0; exit 0 ;; esac
+done
+exec /usr/bin/stat "\$@"
+STATSH
+chmod +x "$OWNSHIM/stat"
+SILENT_OUT="$(cd "$PROJ" && printf "$REPL_JSON" "$PROJ" | PATH="$OWNSHIM:$PATH" CLAUDE_PROJECT_DIR="$PROJ" "$CLAUDE_GATE" 2>&1)"
+case "$SILENT_OUT" in *SHADOW*) bad "claude gate must stay SILENT when core/ genuinely reports root-owned (record says hardened, ownership agrees) — got: $SILENT_OUT" ;; *) ok ;; esac
+SILENT_CURSOR="$(cd "$PROJ" && printf '{"command":"echo hi","cwd":"%s"}' "$PROJ" | PATH="$OWNSHIM:$PATH" "$CURSOR_GATE" 2>&1)"
+case "$SILENT_CURSOR" in *SHADOW*) bad "cursor gate must stay SILENT when core/ genuinely reports root-owned (record says hardened, ownership agrees) — got: $SILENT_CURSOR" ;; *) ok ;; esac
+
 echo "== Shadow case B: renamed aside with NOTHING in its place ==" >&2
 rm -rf "$SKILL"                                   # simulate the kit dir being renamed away
 OUT="$(printf '{"tool_name":"Bash","cwd":"%s","tool_input":{"command":"echo hi"}}' "$PROJ" \

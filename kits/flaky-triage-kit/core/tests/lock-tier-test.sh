@@ -58,8 +58,13 @@ grep -q '"tier"[[:space:]]*:[[:space:]]*"unlocked"' "$KIT/core/.lock-state" && o
 # SET, and the counters, which is where the defects actually live.
 #
 # SUDO_CHOWN_FAIL makes one chosen operand fail the way a real refusal does (stderr + non-zero), so
-# the PARTIAL-hardening path — core/ rooted, something else not — is reachable too. `-k` is answered
-# without exec'ing, because `sudo -k` is a sudo builtin, not a command to run.
+# the PARTIAL-hardening path — core/ rooted, something else not — is reachable too. SUDO_CHOWN_FAIL_ALL
+# fails EVERY chown operand (simulating an authenticated password whose chown then fails across the
+# board — e.g. an immutable flag or a read-only mount), rather than just one named operand: it models
+# "the credential was cached but nothing landed", not "the credential was cached and most of it
+# landed". `-k` is answered without exec'ing, because `sudo -k` is a sudo builtin, not a command to run
+# — and it is logged regardless of any FAIL flag, since the whole point of the fixtures below is
+# proving `-k` still runs when the chown(s) it follows failed.
 SHIM="$TMP/bin"; mkdir -p "$SHIM"
 cat > "$SHIM/sudo" <<'SH'
 #!/bin/bash
@@ -67,6 +72,10 @@ echo "$@" >> "$SUDO_LOG"
 case "$1" in
   -k) exit 0 ;;
   chown)
+    if [ -n "${SUDO_CHOWN_FAIL_ALL:-}" ]; then
+      echo "chown: Operation not permitted" >&2
+      exit 1
+    fi
     if [ -n "${SUDO_CHOWN_FAIL:-}" ]; then
       for a in "$@"; do
         [ "$a" = "$SUDO_CHOWN_FAIL" ] && { echo "chown: $a: Operation not permitted" >&2; exit 1; }
@@ -188,6 +197,26 @@ UOUT="$(PATH="$SHIM:$PATH" "$KITU/core/lock-kit.sh" lock 2>&1)"
 case "$UOUT" in *DEGRADED*) ok ;; *) bad "with core/ not root-owned the tier must be DEGRADED — got: $UOUT" ;; esac
 case "$UOUT" in *"UNEVENLY"*) ok ;; *) bad "a degraded lock with SOME surface paths root-owned must say the escalation applied unevenly, not claim the whole surface is still user-owned — got: $UOUT" ;; esac
 case "$UOUT" in *"the surface is still owned by"*) bad "the degraded banner must not make a blanket ownership claim over the whole surface — core/ is what the tier is sampled from" ;; *) ok ;; esac
+# R2: this UNEVEN case is exactly one of the two states measured to SKIP `sudo -k` when it was gated
+# on `$TIER = hardened` — SKILL.md authenticated and got chowned, core/ did not, so TIER lands on
+# degraded even though a real password was just typed and cached. `sudo -k` must still run: the
+# credential exists because `sudo chown` ran, not because the tier it produced was hardened.
+grep -qxF -- "-k" "$SUDO_LOG" && ok \
+  || bad "an UNEVEN lock (SKILL.md rooted, core/ not — TIER=degraded) must still end with 'sudo -k': the credential authenticated on SKILL.md even though the tier came out degraded"
+
+# The other state measured to skip it: a chown that AUTHENTICATES but then fails on EVERY operand
+# (immutable flag, read-only mount, ...) also lands on TIER=degraded — same bug, pointed the other
+# way. Distinguishes "escalation attempted" from "escalation landed anywhere": both are degraded, but
+# only the credential's existence (not its success) should gate the drop.
+: > "$SUDO_LOG"
+KITF="$TMP/kit-fail-all"; mkdir -p "$KITF/core"
+cp "$LOCK" "$KITF/core/lock-kit.sh"; cp "$HERE/../_integrity.sh" "$KITF/core/_integrity.sh"
+printf '{}\n' > "$KITF/core/config.json"; chmod +x "$KITF/core/lock-kit.sh"
+unset STAT_TARGETS                                      # nothing reports root-owned: chown "fails" everywhere
+FOUT="$(SUDO_CHOWN_FAIL_ALL=1 PATH="$SHIM:$PATH" "$KITF/core/lock-kit.sh" lock 2>&1)"
+case "$FOUT" in *DEGRADED*) ok ;; *) bad "a chown that fails on EVERY operand must still land on DEGRADED — got: $FOUT" ;; esac
+grep -qxF -- "-k" "$SUDO_LOG" && ok \
+  || bad "a lock whose chown authenticated but failed on EVERY operand must still end with 'sudo -k' — the credential was cached the moment sudo ran, before any of the chowns failed"
 
 # --- a realistic install layout: both harnesses' gates + libs, and the out-of-tree record ----------
 # harden_targets() covered core/, [hooks/], SKILL.md, the CLAUDE gate and the kit root. It did NOT
@@ -254,6 +283,21 @@ export STAT_TARGETS="$KIT5"               # ONLY the kit root looks root-owned
 HEKTOR_FLAKYKIT_UNLOCK=1 PATH="$SHIM:$PATH" "$KIT5/core/lock-kit.sh" unlock >/dev/null 2>&1
 grep -qxF "chown $(id -un) $KIT5" "$SUDO_LOG" && ok \
   || bad "unlock must chown back when ANY surface path is root-owned (here: the kit root but not core/), or a partially hardened tree has no supported way to reopen"
+
+# R2: unlock's own exit-77 bailouts must not skip the credential drop either. The old code's single
+# `sudo -k` sat at the TAIL of the unlock command, past both `exit 77` bailouts in the chown-back
+# block above — so a `sudo chown -R $ME` that AUTHENTICATES (the password is typed, sudo caches it)
+# and then fails (SUDO_CHOWN_FAIL_ALL models a stale operand / lingering immutable flag / read-only
+# mount) took that early exit and left the just-cached credential live for the rest of sudo's
+# ~5-minute timestamp_timeout — the same class of bug as `lock`'s, just reached via early exit
+# instead of via a false gating variable. Reuses KIT5 (already hardened-shaped); STAT_TARGETS makes
+# core/ look root-owned so hardened_any=1 and the chown-back is actually attempted.
+: > "$SUDO_LOG"
+export STAT_TARGETS="$KIT5/core"
+EOUT="$(SUDO_CHOWN_FAIL_ALL=1 HEKTOR_FLAKYKIT_UNLOCK=1 PATH="$SHIM:$PATH" "$KIT5/core/lock-kit.sh" unlock 2>&1)"; ERC=$?
+[ "$ERC" -eq 77 ] && ok || bad "unlock must abort with 77 when the chown-back authenticates but then fails on every operand — got rc=$ERC, out: $EOUT"
+grep -qxF -- "-k" "$SUDO_LOG" && ok \
+  || bad "unlock must drop the credential ('sudo -k') even on the exit-77 bailout above — otherwise a chown that authenticated and then failed leaves a cached credential live for the rest of the timestamp_timeout window"
 
 # The no-invoking-user refusal (exit 78) is reachable with an `id` stub — it is not dead code.
 # Created LAST: every section above needs the real `id`.

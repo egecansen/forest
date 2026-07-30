@@ -123,15 +123,40 @@ for e in $ENTRYPOINTS; do
   [ -z "$out" ]    && ok || bad "$e.sh must keep stdout empty when it refuses (got: $out)"
 done
 
-# Pin the call sites by IDENTITY, not just by count: this fails both when a guard line is deleted and
-# when a NEW entrypoint lands without one. lock-kit.sh is excluded because it is the tool that
-# establishes the tier (guarding it would lock the operator out of their own repair path), and
-# hedge-scan.sh because it is a pure text screen that reads nothing from the kit's state.
+# Pin the call sites by IDENTITY, not just by count: this fails when a guard line is deleted from one
+# of the known entrypoints below. lock-kit.sh is excluded because it is the tool that establishes the
+# tier (guarding it would lock the operator out of their own repair path), and hedge-scan.sh because
+# it is a pure text screen that reads nothing from the kit's state.
 ACTUAL_GUARDED="$(grep -lF 'integrity_guard "$HERE/.." || exit 76' "$CORE"/*.sh 2>/dev/null \
                   | while IFS= read -r f; do b="$(basename "$f")"; printf '%s\n' "${b%.sh}"; done | sort | tr '\n' ' ')"
 EXPECT_GUARDED="$(printf '%s\n' $ENTRYPOINTS | sort | tr '\n' ' ')"
 [ "$ACTUAL_GUARDED" = "$EXPECT_GUARDED" ] && ok \
   || bad "the set of entrypoints calling integrity_guard must be exactly [$EXPECT_GUARDED] — got [$ACTUAL_GUARDED]"
+
+# The comment this replaces claimed the check above "fails both when a guard line is deleted and
+# when a NEW entrypoint lands without one." The second half was false: ACTUAL_GUARDED is grepped FOR
+# the guard line (so a new unguarded file is simply absent from it, not a mismatch) and
+# EXPECT_GUARDED is the hardcoded $ENTRYPOINTS string above, which a new file on disk cannot change
+# either. Both sets move together and stay equal, so a brand-new core/*.sh entrypoint that forgets
+# the guard is invisible to the comparison above — proven by mutation: dropping such a file in
+# core/ left the whole suite (68/0 at the time) green.
+#
+# Fixed by deriving the expected set from the FILESYSTEM instead of the hardcoded list: every
+# core/*.sh file is an entrypoint that must carry the guard UNLESS it is a known non-entrypoint —
+# the three sourced helpers (never run standalone) or one of the two functional exclusions named
+# above. A new file lands in neither carve-out by default, so it is guilty (must carry the guard)
+# until someone deliberately, reviewably adds it to NON_ENTRYPOINTS with a stated reason — which
+# $ENTRYPOINTS along could never enforce, since nothing added a new file to it automatically either.
+NON_ENTRYPOINTS="_integrity.sh _lock.sh _strict.sh lock-kit.sh hedge-scan.sh"
+UNGUARDED=""
+for f in "$CORE"/*.sh; do
+  [ -f "$f" ] || continue
+  b="$(basename "$f")"
+  case " $NON_ENTRYPOINTS " in *" $b "*) continue ;; esac
+  grep -qF 'integrity_guard "$HERE/.." || exit 76' "$f" || UNGUARDED="$UNGUARDED $b"
+done
+[ -z "$UNGUARDED" ] && ok \
+  || bad "core/*.sh file(s) missing the integrity_guard call and not in NON_ENTRYPOINTS:$UNGUARDED — add the guard, or add the file to NON_ENTRYPOINTS with a stated reason"
 
 echo "integrity-test: $pass passed, $fail failed"
 [ "$fail" -eq 0 ]
