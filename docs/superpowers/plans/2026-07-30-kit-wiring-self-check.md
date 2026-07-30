@@ -30,7 +30,7 @@
 
 | File | Status | Responsibility |
 |---|---|---|
-| `core/_integrity.sh` | modify | Add `integrity_project_root`, `integrity_wiring`, the two per-harness helpers, the worse-wins combiner; extend `integrity_report` to two axes; add the per-process latch to `integrity_guard` |
+| `core/_integrity.sh` | modify | Add `integrity_project_root`, `integrity_wiring`, the two per-harness helpers, the worse-wins combiner; extend `integrity_report` to two axes; compose both axes in `integrity_guard` |
 | `core/tests/integrity-test.sh` | modify | Fixtures for all six wiring values, the tier × wiring matrix, the fixture-reaches-non-absent control, the no-override grep (already present — keep it passing) |
 | `adapters/claude/flaky-kit-self-protection-gate.sh` | modify | Settings files in `SURF_RE`/`match_surface` (Bash branch); outcome inspection in the Write/Edit branch |
 | `adapters/cursor/flaky-kit-self-protection-gate.sh` | modify | The same two changes, byte-identical patterns |
@@ -285,7 +285,7 @@ terminal-only use raises nothing."
 
 ---
 
-## Task 2: Two axes through `integrity_report`, and a per-process latch
+## Task 2: Two axes through `integrity_report`
 
 **Files:**
 - Modify: `kits/flaky-triage-kit/core/_integrity.sh` (`integrity_report`, `integrity_guard`)
@@ -334,6 +334,12 @@ done; ok
 # silently stop checking wiring, which is the quiet-default shape this codebase keeps being bitten by.
 grep -qE 'integrity_report\(\)[^}]*local[^}]*wiring="\$\{2:-\}"' "$HERE/../_integrity.sh" \
   && bad "integrity_report must not default its wiring argument" || ok
+# No environment override may enter this file, under ANY name. The pre-existing assertion below names
+# INTEGRITY_FAKE_UID specifically, so the identical hole returns green under a new name — this one
+# catches the shape instead of the spelling. A variable a caller can set is a skeleton key to the very
+# check it guards, and a cache of the answer is indistinguishable from a forgery of it.
+grep -qE '\$\{?(HEKTOR|INTEGRITY)_[A-Z_]+' "$HERE/../_integrity.sh" \
+  && bad "no environment override may enter _integrity.sh — a caller who can set a variable silences the guard" || ok
 ```
 
 - [ ] **Step 2: Run it and watch it fail**
@@ -376,23 +382,20 @@ Then, after the existing tier `case ... esac` (capture its outcome instead of re
 }
 ```
 
-Then the guard, with the latch:
+Then the guard:
 
 ```bash
 # integrity_guard <kit_root> -> 0 to proceed, 76 to refuse.
-# The composition of both axes. It reads NO environment override for its ANSWER; the latch below
-# caches only the already-computed result for the current process tree, so a triage that execs
-# ingest and cluster evaluates once instead of three times. A cached value can only ever repeat what
-# this process already decided — it cannot introduce one.
+# The composition of both axes. It reads NO environment: every answer is recomputed from the
+# filesystem on every call. An earlier draft cached the computed result in an exported variable to
+# spare a triage the two extra evaluations its execs cost. That cache is indistinguishable from a
+# forgery — the environment belongs to whoever launches the entrypoint — so it would have restored
+# the INTEGRITY_FAKE_UID hole this kit removed, under a new name and past a name-specific test.
+# Recomputing costs at most three jq calls per entrypoint. That is the price of the check being real.
 integrity_guard() {
   local kit="${1:-}" tier wiring
-  if [ -n "${HEKTOR_FK_GUARD_LATCH:-}" ]; then
-    integrity_report "${HEKTOR_FK_GUARD_LATCH%%:*}" "${HEKTOR_FK_GUARD_LATCH##*:}"
-    return $?
-  fi
   tier="$(integrity_tier "$(integrity_owner_uid "$kit/core")" "$(integrity_state "$kit")")"
   wiring="$(integrity_wiring "$kit" "$tier")"
-  export HEKTOR_FK_GUARD_LATCH="$tier:$wiring"
   integrity_report "$tier" "$wiring"
 }
 ```
@@ -412,15 +415,29 @@ Expected: 13
 Run: `for t in core/tests/*.sh; do bash "$t"; done`
 Expected: every file green. State the suite total.
 
-- [ ] **Step 6: Prove the latch cannot weaken the guard**
+- [ ] **Step 6: Prove no variable can forge the guard's answer, and prove the assertion that says so**
+
+First the property itself. Both invocations must reach the same verdict as a bare call, because nothing in the file consults the environment:
 
 ```bash
-# A latch value can only repeat a decision this process already made. Confirm a forged one cannot
-# turn a refusal into a pass for a DIFFERENT kit — the guard recomputes when the latch is unset, and
-# the latch is only ever set by the guard itself.
+# A fixture whose tier/wiring the guard must decide for itself. Any pair of names may be tried; these
+# two are the ones an attacker would reach for first.
 HEKTOR_FK_GUARD_LATCH="hardened:wired" bash -c '. core/_integrity.sh; integrity_guard /nonexistent; echo rc=$?'
+INTEGRITY_FAKE_UID=0                   bash -c '. core/_integrity.sh; integrity_guard /nonexistent; echo rc=$?'
 ```
-Expected: `rc=0` — and record this honestly in the report as what the latch does and does not protect. It is a performance cache inside one process tree, not a trust boundary; the environment it lives in belongs to the agent. Note it in the residual list rather than implying otherwise.
+Expected: both print the same `rc` as the unset call — the variables are dead names.
+
+Then the mutation, because a grep that matches nothing passes whether or not the property holds (a zero-replacement `sed` once read as proof of a defect in this kit; assert the file actually changed):
+
+```bash
+cp core/_integrity.sh /tmp/_integrity.bak
+sed -i '' 's|local kit="${1:-}" tier wiring|local kit="${1:-}" tier="${HEKTOR_FK_TIER:-}" wiring|' core/_integrity.sh
+diff -q /tmp/_integrity.bak core/_integrity.sh >/dev/null && echo "MUTATION DID NOT APPLY — the result below proves nothing"
+bash core/tests/integrity-test.sh   # expected: RED on the no-override assertion
+cp /tmp/_integrity.bak core/_integrity.sh && rm /tmp/_integrity.bak
+```
+
+Record in the report that the guard now evaluates once per entrypoint rather than once per process tree, so the degraded/wiring notice prints up to three times in a triage that execs `ingest` and `cluster`. That deferred minor stays deferred: silencing a repeated warning is worth less than a check no variable can forge.
 
 - [ ] **Step 7: Commit**
 
@@ -432,7 +449,13 @@ integrity_report takes tier and wiring, neither optional — a default would
 silently stop checking. Refusal is tier-coupled: at hardened the gate also
 carries the shadow record, so losing it is weaker than recorded; below
 hardened there is no wall to have lost, so it warns. absent is silent at
-every tier."
+every tier.
+
+integrity_guard recomputes both axes on every call and reads no environment.
+A per-process cache of the answer was designed and dropped: the environment
+belongs to whoever launches the entrypoint, so a cache is indistinguishable
+from a forgery, and the assertion guarding against exactly this named one
+variable rather than the shape. It now catches the shape."
 ```
 
 ---
@@ -676,7 +699,7 @@ Amend the `_integrity` row so it names both axes rather than only the tier:
 Append to the Status cell, keeping the existing text:
 
 ```
-**2026-07-30:** the gate's own WIRING is now checked too. A registration pointing at a path the kit no longer installs to made every tool call emit a non-blocking "No such file" while nothing stated the protection was off (observed in a web-test worktree carrying a pre-relocation path), and deleting that registration was allowed outright. The harness settings files are now surface — by outcome on Write/Edit (deny only if the registration would not survive, so unrelated permission/env edits still pass) and as mutation targets on Bash, where no content is available to inspect. Residual, stated rather than implied: the settings files are protected against EDITS, but their parent directories stay user-owned, so they can still be replaced wholesale; and the per-process guard latch is a cache inside one process tree, not a trust boundary.
+**2026-07-30:** the gate's own WIRING is now checked too. A registration pointing at a path the kit no longer installs to made every tool call emit a non-blocking "No such file" while nothing stated the protection was off (observed in a web-test worktree carrying a pre-relocation path), and deleting that registration was allowed outright. The harness settings files are now surface — by outcome on Write/Edit (deny only if the registration would not survive, so unrelated permission/env edits still pass) and as mutation targets on Bash, where no content is available to inspect. Residual, stated rather than implied: the settings files are protected against EDITS, but their parent directories stay user-owned, so they can still be replaced wholesale. The guard reads nothing from the environment — a per-process cache of its verdict was designed and rejected, because a cache of the answer is indistinguishable from a forgery of it.
 ```
 
 - [ ] **Step 3: Add two items to `lock-kit.sh`'s STILL NOT COVERED list**
@@ -684,9 +707,9 @@ Append to the Status cell, keeping the existing text:
 ```
 #   6. The harness settings files are protected against edits, but their parents stay user-owned, so
 #      a settings file can be replaced rather than edited. Same shape as residual 1, one level down.
-#   7. The guard's per-process latch caches an already-computed decision for one process tree. It
-#      cannot invent a verdict this process did not reach, but it lives in the agent's own
-#      environment — a cache, never a trust boundary.
+#   7. The wiring check reads the settings files an agent can also read. It proves the registration
+#      is present and points at a file this kit owns; it cannot prove the harness will honour it.
+#      A harness-level disable is outside anything this kit can see.
 ```
 
 - [ ] **Step 4: Sweep for claims this change makes untrue**
@@ -710,14 +733,15 @@ git commit -m "kit: describe the wiring axis and the two residuals it leaves
 New behaviour nothing documents is the same defect as a claim nothing
 delivers, sign flipped. Names what the settings protection covers, and
 states plainly that the files are protected against edits while their
-parents are not, and that the guard latch is a cache and not a boundary."
+parents are not, and that a present registration is not proof the harness
+will honour it."
 ```
 
 ---
 
 ## Self-Review
 
-**Spec coverage:** §1 two axes and the six values → Task 1. Identity-from-tier → Task 1's `_wiring_one`. `absent` distinct and silent → Tasks 1 and 2. Tier coupling → Task 2. Both arguments required → Task 2 (with a grep assertion so it cannot regress). Installed-shape derivation → Task 1. Per-harness inference and worse-wins → Task 1. The latch → Task 2. §3 asymmetric settings protection → Tasks 3 (Bash) and 4 (Write/Edit outcome). §4 failure handling → Task 1's `absent` fallbacks and Task 4's unparseable-JSON deny. §5 testing, including the fixture-reaches-non-absent control and `mktemp -d` isolation → Tasks 1-4. §6 out-of-scope items are not implemented, and Task 5 records the residuals. No gaps.
+**Spec coverage:** §1 two axes and the six values → Task 1. Identity-from-tier → Task 1's `_wiring_one`. `absent` distinct and silent → Tasks 1 and 2. Tier coupling → Task 2. Both arguments required → Task 2 (with a grep assertion so it cannot regress). Installed-shape derivation → Task 1. Per-harness inference and worse-wins → Task 1. The rejected cache and the broadened no-override assertion → Task 2. §3 asymmetric settings protection → Tasks 3 (Bash) and 4 (Write/Edit outcome). §4 failure handling → Task 1's `absent` fallbacks and Task 4's unparseable-JSON deny. §5 testing, including the fixture-reaches-non-absent control and `mktemp -d` isolation → Tasks 1-4. §6 out-of-scope items are not implemented, and Task 5 records the residuals. No gaps.
 
 **Name consistency:** `integrity_project_root`, `integrity_wiring`, `_wiring_reg_claude`, `_wiring_reg_cursor`, `_wiring_one`, `_wiring_rank`, `integrity_report <tier> <wiring>`, `integrity_guard <kit_root>` are defined in Tasks 1-2 and used under those exact names throughout. The six wiring values are spelled identically everywhere. Exit code 76 is the only refusal code, matching the existing guard contract.
 

@@ -97,12 +97,20 @@ the better value would let a broken half hide behind a working half, which is th
 asymmetry Tasks 5 and 6 each had to fix; taking the worse one is also what the tier axis already does
 when protection and record disagree.
 
-**Cost and a latch.** One `jq` invocation per settings file present (at most three: the Claude pair
-and Cursor's) plus one or two `stat` calls per entrypoint — roughly double to quadruple today's
-guard. `triage.sh` calls the guard and then execs `ingest` and `cluster`, so one triage pays
-it three times; the design adds a per-process latch (the computed result cached in an exported
-variable) so a process tree evaluates once. That also relieves the already-deferred minor about the
-degraded notice printing three times per triage.
+**Cost, and the cache that was rejected.** One `jq` invocation per settings file present (at most
+three: the Claude pair and Cursor's) plus one or two `stat` calls per entrypoint — roughly double to
+quadruple today's guard. `triage.sh` calls the guard and then execs `ingest` and `cluster`, so one
+triage pays it three times.
+
+An earlier draft cached the computed pair in an exported variable so a process tree would evaluate
+once, which would also have relieved the deferred minor about the degraded notice printing three
+times. **Rejected.** The environment belongs to whoever launches the entrypoint, so a cache of the
+answer is indistinguishable from a forgery of it: one variable would have skipped both axes at all
+thirteen call sites, at the hardened tier, with no password — `INTEGRITY_FAKE_UID` returned under a
+new name, and past the assertion written to prevent it, because that assertion named one variable
+instead of the shape. The guard therefore recomputes on every call and `_integrity.sh` reads nothing
+from the environment; the assertion is broadened to match any `HEKTOR_*`/`INTEGRITY_*` read. Three
+jq calls are the price of the check being real, and the repeated notice stays deferred.
 
 ## 3. `settings.json` on the surface
 
