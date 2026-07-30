@@ -253,9 +253,14 @@ _wiring_one() {
   [ "$got" -lt "$want" ] && { echo partial; return 0; }
   [ -f "$gate" ] || { echo dangling; return 0; }
   # Identity comes free from the tier: harden_targets chowns the gate, and a replacement cannot be
-  # root-owned without the password. Below hardened, ownership proves nothing, so existence is all
-  # there is to check — claiming more there would be the overclaim this kit keeps retracting.
-  if [ "$tier" = hardened ] && [ "$(integrity_owner_uid "$gate")" != "0" ]; then echo foreign; return 0; fi
+  # root-owned without the password. `stale` is included because it means the tree IS root-owned and
+  # only the record disagrees — keying on the record here while integrity_report keys on ownership
+  # would split one property across two conditions. Below those, ownership proves nothing, so
+  # existence is all there is to check; claiming more would be the overclaim this kit keeps retracting.
+  case "$tier" in
+    hardened|stale)
+      if [ "$(integrity_owner_uid "$gate")" != "0" ]; then echo foreign; return 0; fi ;;
+  esac
   echo wired
   return 0
 }
@@ -399,12 +404,17 @@ Append to `core/tests/integrity-test.sh`:
 rep2()    { integrity_report "$1" "$2" >/dev/null 2>&1; echo $?; }
 rep2_out(){ integrity_report "$1" "$2" 2>&1; }
 
-for w in wired absent; do
-  [ "$(rep2 hardened "$w")" = 0 ] && ok || bad "hardened + $w must proceed"
-done
-for w in unregistered dangling foreign partial; do
-  [ "$(rep2 hardened "$w")" = 76 ] && ok || bad "hardened + $w must refuse — the shadow detector went with the gate"
-  case "$(rep2_out hardened "$w")" in *WIRING*) ok ;; *) bad "hardened + $w must name the wiring problem" ;; esac
+# Refusal keys on ROOT OWNERSHIP, which `stale` has as surely as `hardened` — integrity_report
+# already tells a stale tree it is being "treated as hardened", and the shadow-record argument for
+# refusing does not care what the state file claims.
+for t in hardened stale; do
+  for w in wired absent; do
+    [ "$(rep2 "$t" "$w")" = 0 ] && ok || bad "$t + $w must proceed"
+  done
+  for w in unregistered dangling foreign partial; do
+    [ "$(rep2 "$t" "$w")" = 76 ] && ok || bad "$t + $w must refuse — the shadow detector went with the gate"
+    case "$(rep2_out "$t" "$w")" in *WIRING*) ok ;; *) bad "$t + $w must name the wiring problem" ;; esac
+  done
 done
 for t in degraded unprotected unlocked; do
   for w in unregistered dangling foreign partial; do
@@ -426,14 +436,28 @@ for t in hardened degraded unprotected unlocked stale mismatch; do
 done; ok
 # Both arguments are required — a default that turned a missing wiring argument into `absent` would
 # silently stop checking wiring, which is the quiet-default shape this codebase keeps being bitten by.
-grep -qE 'integrity_report\(\)[^}]*local[^}]*wiring="\$\{2:-\}"' "$HERE/../_integrity.sh" \
-  && bad "integrity_report must not default its wiring argument" || ok
-# No environment override may enter this file, under ANY name. The pre-existing assertion below names
-# INTEGRITY_FAKE_UID specifically, so the identical hole returns green under a new name — this one
-# catches the shape instead of the spelling. A variable a caller can set is a skeleton key to the very
-# check it guards, and a cache of the answer is indistinguishable from a forgery of it.
-grep -qE '\$\{?(HEKTOR|INTEGRITY)_[A-Z_]+' "$HERE/../_integrity.sh" \
+# Both arguments are required. Assert the BEHAVIOUR, not the spelling: a grep for `wiring="${2:-}"`
+# passes happily against `wiring="${2:-absent}"`, which is the exact default the constraint names, so
+# it proves only that the pattern matches itself. This file runs under `set -u`, so a one-argument
+# call dies on the unbound $2. Verify that empirically before relying on it; if the shell does not
+# behave that way here, say so and fall back to a grep widened to `wiring="\$\{2[:-]`.
+( integrity_report hardened ) >/dev/null 2>&1
+[ $? -ne 0 ] && ok || bad "integrity_report must not accept a single argument — a defaulted wiring silently stops checking wiring"
+
+# No environment override may enter this file, under ANY name. Naming prefixes is the same failure one
+# step out: `${FK_TIER:-}` reinstates the hole while a HEKTOR|INTEGRITY pattern stays green. Match the
+# SHAPE — any uppercase parameter read outside a comment. The `[^\\]` guard lets _wiring_resolve's
+# escaped \$CLAUDE_PROJECT_DIR literals through, because those are text substituted into a registered
+# command string, not a read of the caller's environment.
+grep -v '^[[:space:]]*#' "$HERE/../_integrity.sh" | grep -qE '(^|[^\\])\$\{?[A-Z][A-Z0-9_]*' \
   && bad "no environment override may enter _integrity.sh — a caller who can set a variable silences the guard" || ok
+
+# The pre-existing INTEGRITY_FAKE_UID assertion keeps its original breadth. It was narrowed to require
+# a `$` prefix so that a comment naming the variable in prose would pass; the comment is what should
+# have moved out of scope, not the check. Stripping comments restores `INTEGRITY_FAKE_UID=0`,
+# `export INTEGRITY_FAKE_UID` and `printenv INTEGRITY_FAKE_UID` to the net.
+grep -v '^[[:space:]]*#' "$HERE/../_integrity.sh" | grep -q 'INTEGRITY_FAKE_UID' \
+  && bad "no environment override may remain in _integrity.sh — it silences the guard for anyone who can set a variable" || ok
 ```
 
 - [ ] **Step 2: Run it and watch it fail**
@@ -467,10 +491,11 @@ Then, after the existing tier `case ... esac` (capture its outcome instead of re
         foreign)      echo "integrity: the registered gate file is not root-owned at the hardened tier, so it is not the file this kit installed." >&2 ;;
       esac
       echo "integrity: re-run the kit installer against this project to repair it." >&2
-      if [ "$tier" = hardened ]; then
-        echo "integrity: refusing — at the hardened tier the gate also carries the out-of-tree shadow record, so losing it means losing the only detector for a replaced kit tree. That is weaker than the recorded protection." >&2
-        rc=76
-      fi ;;
+      case "$tier" in
+        hardened|stale)
+          echo "integrity: refusing — the tree is root-owned, and the gate also carries the out-of-tree shadow record, so losing it means losing the only detector for a replaced kit tree. That is weaker than the protection actually in place." >&2
+          rc=76 ;;
+      esac ;;
   esac
   return "$rc"
 }

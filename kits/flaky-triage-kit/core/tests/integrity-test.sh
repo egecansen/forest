@@ -94,12 +94,13 @@ case "$(rep_out mismatch)" in *MISMATCH*) ok ;; *) bad "mismatch must be loud" ;
 for t in hardened stale unlocked degraded unprotected mismatch; do
   [ -z "$(integrity_report "$t" absent 2>/dev/null)" ] || bad "integrity_report must never write to stdout (tier: $t)"
 done; ok
-# The production path must carry no environment override. Matched as an actual parameter expansion
-# (a leading `$`), not a bare substring: task 2's integrity_guard comment legitimately NAMES
-# INTEGRITY_FAKE_UID in prose (describing the hole it replaced), and a bare-substring check would
-# flag that history lesson as if it were the hole itself. `$INTEGRITY_FAKE_UID` reappearing as a
-# real reference is still caught.
-grep -qE '\$\{?INTEGRITY_FAKE_UID\b' "$HERE/../_integrity.sh" && bad "no environment override may remain in _integrity.sh — it silences the guard for anyone who can set a variable" || ok
+# The production path must carry no environment override. The original bare-substring check is
+# restored to its full breadth (it also catches INTEGRITY_FAKE_UID=0, export INTEGRITY_FAKE_UID,
+# printenv INTEGRITY_FAKE_UID) by stripping comments first, rather than by narrowing the pattern to
+# require a `$` prefix: task 2's integrity_guard comment legitimately NAMES INTEGRITY_FAKE_UID in
+# prose (describing the hole it replaced), so the fix belongs to the comment scope, not the pattern.
+grep -v '^[[:space:]]*#' "$HERE/../_integrity.sh" | grep -q 'INTEGRITY_FAKE_UID' \
+  && bad "no environment override may remain in _integrity.sh — it silences the guard for anyone who can set a variable" || ok
 
 # --- integrity_guard: the COMPOSITION, and that the entrypoints actually call it ----------------
 # Until this section existed, `integrity_guard() { return 0; }` left the entire suite green: the two
@@ -237,6 +238,10 @@ K5="$(wire_fixture "$W/e")"; rm -f "$W/e/.claude/settings.json" "$W/e/.cursor/ho
 K6="$(wire_fixture "$W/f")"
 [ "$(integrity_wiring "$K6" hardened)" = foreign ] && ok || bad "at hardened, a non-root-owned gate file must be foreign"
 [ "$(integrity_wiring "$K6" degraded)" = wired ] && ok || bad "below hardened, ownership proves nothing — the same tree is wired"
+# `stale` gets the identity test too: the tree IS root-owned there and only the record disagrees, so
+# keying this check on the recorded tier while integrity_report keys its refusal on ownership would
+# split one property across two conditions.
+[ "$(integrity_wiring "$K6" stale)" = foreign ] && ok || bad "at stale, a non-root-owned gate file must also be foreign — the tree is root-owned regardless of what .lock-state claims"
 
 # worse-value-wins across harnesses: a working half must not hide a broken half
 K7="$(wire_fixture "$W/g")"; rm -f "$W/g/.cursor/hooks/flaky-kit-self-protection-gate.sh"
@@ -335,16 +340,21 @@ rm -f "$W/m/.claude/settings.json"
 
 rm -rf "$PR" "$W"
 
-# --- tier x wiring: refuse only when a HARDENED tier has lost its wiring ------------
+# --- tier x wiring: refuse only where the tree is ROOT-OWNED (hardened AND stale) --------------
 rep2()    { integrity_report "$1" "$2" >/dev/null 2>&1; echo $?; }
 rep2_out(){ integrity_report "$1" "$2" 2>&1; }
 
-for w in wired absent; do
-  [ "$(rep2 hardened "$w")" = 0 ] && ok || bad "hardened + $w must proceed"
-done
-for w in unregistered dangling foreign partial; do
-  [ "$(rep2 hardened "$w")" = 76 ] && ok || bad "hardened + $w must refuse — the shadow detector went with the gate"
-  case "$(rep2_out hardened "$w")" in *WIRING*) ok ;; *) bad "hardened + $w must name the wiring problem" ;; esac
+# Refusal keys on ROOT OWNERSHIP, which `stale` has as surely as `hardened` — integrity_report
+# already tells a stale tree it is being "treated as hardened", and the shadow-record argument for
+# refusing does not care what the state file claims.
+for t in hardened stale; do
+  for w in wired absent; do
+    [ "$(rep2 "$t" "$w")" = 0 ] && ok || bad "$t + $w must proceed"
+  done
+  for w in unregistered dangling foreign partial; do
+    [ "$(rep2 "$t" "$w")" = 76 ] && ok || bad "$t + $w must refuse — the shadow detector went with the gate"
+    case "$(rep2_out "$t" "$w")" in *WIRING*) ok ;; *) bad "$t + $w must name the wiring problem" ;; esac
+  done
 done
 for t in degraded unprotected unlocked; do
   for w in unregistered dangling foreign partial; do
@@ -358,26 +368,34 @@ for t in hardened degraded unprotected unlocked; do
 done
 # mismatch still refuses regardless of wiring, and still names the tier problem.
 [ "$(rep2 mismatch wired)" = 76 ] && ok || bad "a tier mismatch must refuse even when the wiring is fine"
-# Nothing may reach stdout: four entrypoints emit a contract there.
+# Minor 4: pin each wiring value's OWN detail line, not just the shared "WIRING $wiring" header —
+# swapping the partial/foreign messages, or deleting the whole inner case, would still say WIRING
+# and every assertion above would stay green.
+case "$(rep2_out hardened unregistered)" in *"carries no registration"*) ok ;; *) bad "unregistered must name its own detail line" ;; esac
+case "$(rep2_out hardened dangling)"     in *"does not exist"*)          ok ;; *) bad "dangling must name its own detail line" ;; esac
+case "$(rep2_out hardened partial)"      in *"half the surface"*)        ok ;; *) bad "partial must name its own detail line" ;; esac
+case "$(rep2_out hardened foreign)"      in *"not root-owned"*)          ok ;; *) bad "foreign must name its own detail line" ;; esac
+# Nothing may reach stdout: four entrypoints emit a contract there. Full tier x wiring matrix — a
+# dropped >&2 on any ONE wiring value's echo line is only caught if that value is actually driven
+# through here; unregistered/foreign/partial reach different echo lines than wired/dangling/absent.
 for t in hardened degraded unprotected unlocked stale mismatch; do
-  for w in wired dangling absent; do
+  for w in wired unregistered dangling foreign partial absent; do
     [ -z "$(integrity_report "$t" "$w" 2>/dev/null)" ] || bad "integrity_report must never write to stdout ($t/$w)"
   done
 done; ok
-# Both arguments are required — a default that turned a missing wiring argument into `absent` would
-# silently stop checking wiring, which is the quiet-default shape this codebase keeps being bitten by.
-# Flattened to one line before grepping: the signature line (`integrity_report() {`) and the `local`
-# declaration live on two separate lines in normal style, and grep matches per-line by default — a
-# mutation adding `wiring="${2:-}"` proved this pattern passes vacuously (mutation confirmed applied,
-# suite stayed green) when applied to the two lines directly. `tr` collapses the newline between them
-# to a space so the same pattern actually spans the declaration, without changing what it looks for.
-tr '\n' ' ' < "$HERE/../_integrity.sh" | grep -qE 'integrity_report\(\)[^}]*local[^}]*wiring="\$\{2:-\}"' \
-  && bad "integrity_report must not default its wiring argument" || ok
-# No environment override may enter this file, under ANY name. The pre-existing assertion below names
-# INTEGRITY_FAKE_UID specifically, so the identical hole returns green under a new name — this one
-# catches the shape instead of the spelling. A variable a caller can set is a skeleton key to the very
-# check it guards, and a cache of the answer is indistinguishable from a forgery of it.
-grep -qE '\$\{?(HEKTOR|INTEGRITY)_[A-Z_]+' "$HERE/../_integrity.sh" \
+# Both arguments are required. Assert the BEHAVIOUR, not the spelling: a grep for `wiring="${2:-}"`
+# passes happily against `wiring="${2:-absent}"`, which is the exact default the constraint names, so
+# it proves only that the pattern matches itself. This file runs under `set -u`, so a one-argument
+# call dies on the unbound $2 — verified empirically (rc=127) before relying on it here.
+( integrity_report hardened ) >/dev/null 2>&1
+[ $? -ne 0 ] && ok || bad "integrity_report must not accept a single argument — a defaulted wiring silently stops checking wiring"
+
+# No environment override may enter this file, under ANY name. Naming prefixes is the same failure one
+# step out: `${FK_TIER:-}` reinstates the hole while a HEKTOR|INTEGRITY pattern stays green. Match the
+# SHAPE — any uppercase parameter read outside a comment. The `[^\\]` guard lets _wiring_resolve's
+# escaped \$CLAUDE_PROJECT_DIR literals through, because those are text substituted into a registered
+# command string, not a read of the caller's environment.
+grep -v '^[[:space:]]*#' "$HERE/../_integrity.sh" | grep -qE '(^|[^\\])\$\{?[A-Z][A-Z0-9_]*' \
   && bad "no environment override may enter _integrity.sh — a caller who can set a variable silences the guard" || ok
 
 echo "integrity-test: $pass passed, $fail failed"

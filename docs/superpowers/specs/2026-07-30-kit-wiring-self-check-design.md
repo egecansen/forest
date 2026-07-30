@@ -33,7 +33,7 @@ real; the rest are either already covered or out of scope.
 | Decision | Choice |
 |---|---|
 | Scope | The wiring self-check **and** `settings.json` on the kit's surface — detection and prevention halves of one hole; separately they are half-measures |
-| Behaviour on a broken wiring | **Tier-coupled**, mirroring the kit's existing three-valued rule: refuse at `hardened`, warn at `degraded`/`unprotected`/`unlocked`, silent when no harness is configured at all |
+| Behaviour on a broken wiring | **Tier-coupled**, mirroring the kit's existing three-valued rule: refuse where the tree is root-owned (`hardened` and `stale`), warn at `degraded`/`unprotected`/`unlocked`, silent when no harness is required at all |
 | `settings.json` protection breadth | **Asymmetric.** Write/Edit inspects the payload and denies only when the kit's registration would not survive; Bash denies any mutation, because that branch has no content to inspect |
 
 ## 1. Two axes, deliberately not merged
@@ -58,10 +58,17 @@ So a second function with its own values, and `integrity_guard` evaluates both.
 warning on every terminal-only invocation, and noise is how warnings stop being read.
 
 **Identity comes free from the tier.** `harden_targets` already chowns the gate file, and a
-replacement cannot be root-owned without the password. So at `hardened`, `integrity_owner_uid` on the
-gate distinguishes the kit's gate from a stranger's without inventing a marker — the same
-protection-not-presence test C1's fix introduced, reused rather than re-invented. Below `hardened`,
-ownership proves nothing and the check stops at existence.
+replacement cannot be root-owned without the password. So where the tree is root-owned,
+`integrity_owner_uid` on the gate distinguishes the kit's gate from a stranger's without inventing a
+marker — the same protection-not-presence test C1's fix introduced, reused rather than re-invented.
+Below that, ownership proves nothing and the check stops at existence.
+
+**Root ownership is the condition, not the recorded tier.** `stale` means the tree *is* root-owned
+and only `.lock-state` disagrees — `integrity_report` already tells a stale tree it is being treated
+as hardened. So `stale` refuses on a broken wiring and gets the ownership identity test, exactly as
+`hardened` does. Keying the refusal on ownership while keying the identity test on the record would
+split one property across two conditions, which is how the kit previously ended up with a wall in one
+place and a record in the other.
 
 ## 2. Components and flow
 

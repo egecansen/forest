@@ -140,9 +140,14 @@ _wiring_one() {
   [ "$got" -lt "$want" ] && { echo partial; return 0; }
   [ -f "$gate" ] || { echo dangling; return 0; }
   # Identity comes free from the tier: harden_targets chowns the gate, and a replacement cannot be
-  # root-owned without the password. Below hardened, ownership proves nothing, so existence is all
-  # there is to check — claiming more there would be the overclaim this kit keeps retracting.
-  if [ "$tier" = hardened ] && [ "$(integrity_owner_uid "$gate")" != "0" ]; then echo foreign; return 0; fi
+  # root-owned without the password. `stale` is included because it means the tree IS root-owned and
+  # only the record disagrees — keying on the record here while integrity_report keys on ownership
+  # would split one property across two conditions. Below those, ownership proves nothing, so
+  # existence is all there is to check; claiming more would be the overclaim this kit keeps retracting.
+  case "$tier" in
+    hardened|stale)
+      if [ "$(integrity_owner_uid "$gate")" != "0" ]; then echo foreign; return 0; fi ;;
+  esac
   echo wired
   return 0
 }
@@ -310,10 +315,11 @@ integrity_report() {
         foreign)      echo "integrity: the registered gate file is not root-owned at the hardened tier, so it is not the file this kit installed." >&2 ;;
       esac
       echo "integrity: re-run the kit installer against this project to repair it." >&2
-      if [ "$tier" = hardened ]; then
-        echo "integrity: refusing — at the hardened tier the gate also carries the out-of-tree shadow record, so losing it means losing the only detector for a replaced kit tree. That is weaker than the recorded protection." >&2
-        rc=76
-      fi ;;
+      case "$tier" in
+        hardened|stale)
+          echo "integrity: refusing — the tree is root-owned, and the gate also carries the out-of-tree shadow record, so losing it means losing the only detector for a replaced kit tree. That is weaker than the protection actually in place." >&2
+          rc=76 ;;
+      esac ;;
   esac
   return "$rc"
 }
