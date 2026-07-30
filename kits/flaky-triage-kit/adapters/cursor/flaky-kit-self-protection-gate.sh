@@ -63,7 +63,16 @@ cc_read_input
 # depends on) was not on the surface at all while the gate script beside it was. Both closed; see the
 # Claude gate's comment for the full reasoning, including why an ordinary file inside `.claude/hooks/`
 # is still deliberately NOT surface.
-SURF_RE='\.claude/skills/hektor-flaky-triage(/|$|[[:space:]";)&|])|\.claude/hooks/(flaky-kit-self-protection-gate\.sh|\.flaky-kit-expect|lib/)|\.cursor/hooks/(flaky-kit-self-protection-gate\.sh|lib/)|\.(claude|cursor)/hooks($|[[:space:]";)&|])'
+#
+# HARNESS SETTINGS FILES, added because none of the above protects the thing that makes any of it RUN:
+# the registration itself. `sed -i '' .claude/settings.json` (or `rm -f` it, or truncate it with a
+# redirect) was a verified ALLOW — unregistering the gate is cheaper than editing it, and every other
+# entry on this surface is downstream of that one registration existing. `.claude/settings.local.json`
+# is included because Claude Code merges hook config from both project settings files. Cursor's real
+# registration file is `.cursor/hooks.json` — checked, not assumed: Cursor has no working project-level
+# `.cursor/settings.json` (user settings are a SQLite blob, not a file), so there is no `.local` variant
+# of it to add. Bash-branch pattern only; see the Claude gate's comment for the same reasoning in full.
+SURF_RE='\.claude/skills/hektor-flaky-triage(/|$|[[:space:]";)&|])|\.claude/hooks/(flaky-kit-self-protection-gate\.sh|\.flaky-kit-expect|lib/)|\.cursor/hooks/(flaky-kit-self-protection-gate\.sh|lib/)|\.(claude|cursor)/hooks($|[[:space:]";)&|])|\.(claude|cursor)/settings(\.local)?\.json|\.cursor/hooks\.json'
 # Fallback ONLY when python3/shell-guard.py is unavailable (degraded precision, documented).
 MUT_RE='(>>?|[[:space:]]tee[[:space:]]|sed[[:space:]]+-i|(^|[;&|[:space:]])(cp|mv|rm|chmod|chown|truncate|dd|install|ln|rsync|patch)([[:space:]]|$)|(^|[;&|[:space:]])git[[:space:]]+(checkout|apply|restore|stash|reset|clean)([[:space:]]|$))'
 
@@ -100,6 +109,9 @@ match_surface() {
     */.claude/hooks/lib/*)                                SURFACE="kit protection hook lib (Claude)"; return 0 ;;
     */.claude/hooks/.flaky-kit-expect)                    SURFACE="kit lock-tier record (out-of-tree)"; return 0 ;;
     */.claude/hooks|*/.cursor/hooks)                      SURFACE="harness hooks directory (holds the gate, its lib, and the lock-tier record)"; return 0 ;;
+    */.claude/settings.json|*/.claude/settings.local.json) \
+                                                          SURFACE="harness settings (holds the gate's registration)"; return 0 ;;
+    */.cursor/hooks.json)                                 SURFACE="harness settings (holds the gate's registration)"; return 0 ;;
     *) return 1 ;;
   esac
 }

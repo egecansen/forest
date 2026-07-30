@@ -67,6 +67,8 @@ chmod +x "$SKILL/core/shell-guard.py" "$SKILL/core/lock-kit.sh" \
 printf '{"kit":"config"}\n'      > "$SKILL/core/config.json"
 printf '# unrelated cursor rule\n' > "$PROJ/.cursor/rules/hektor-flaky-triage.mdc"
 printf '{}\n'                    > "$PROJ/.claude/settings.json"
+printf '{}\n'                    > "$PROJ/.claude/settings.local.json"
+printf '{"version":1,"hooks":{}}\n' > "$PROJ/.cursor/hooks.json"
 printf 'x\n'                     > "$PROJ/README.md"
 git -C "$PROJ" add -A >/dev/null; git -C "$PROJ" commit -qm init >/dev/null
 
@@ -130,7 +132,6 @@ assert_claude_edit_deny  "$PROJ/.cursor/hooks/flaky-kit-self-protection-gate.sh"
 assert_claude_edit_deny  "$PROJ/.cursor/hooks/lib/cursor-compat.sh"              "cursor lib"
 assert_claude_edit_deny  "$PROJ/.claude/hooks/lib/audit.sh"                      "claude audit lib"
 assert_claude_edit_allow "$PROJ/.cursor/rules/hektor-flaky-triage.mdc"           "unrelated cursor rule file"
-assert_claude_edit_allow "$PROJ/.claude/settings.json"                          "unrelated claude settings"
 
 echo "== Fix 2 (Task 5): relocated Claude gate lives at .claude/hooks/, out of the shadowable kit tree ==" >&2
 assert_claude_edit_deny  "$PROJ/.claude/hooks/flaky-kit-self-protection-gate.sh" "the relocated Claude gate protects itself at its new path"
@@ -141,8 +142,17 @@ assert_cursor_edit_deny  "$PROJ/.claude/hooks/flaky-kit-self-protection-gate.sh"
 assert_cursor_edit_deny  "$PROJ/.claude/hooks/lib/audit.sh"                      "claude audit lib (parity)"
 assert_cursor_edit_deny  "$PROJ/.cursor/hooks/flaky-kit-self-protection-gate.sh" "cursor gate self-protect"
 assert_cursor_edit_deny  "$PROJ/.cursor/hooks/lib/cursor-compat.sh"              "cursor lib self-protect"
-assert_cursor_edit_allow "$PROJ/.claude/settings.json"                          "unrelated claude settings"
 assert_cursor_edit_allow "$PROJ/.cursor/rules/hektor-flaky-triage.mdc"           "unrelated cursor rule"
+
+echo "== Task 3: harness settings files are surface too — match_surface widened alongside SURF_RE/SURF." >&2
+echo "   '.claude/settings.json' used to be the file used above as the 'unrelated, stays editable'" >&2
+echo "   control; it no longer is one, because it HOLDS the gate's own registration. ==" >&2
+assert_claude_edit_deny  "$PROJ/.claude/settings.json"                          "the gate's own registration lives here"
+assert_claude_edit_deny  "$PROJ/.claude/settings.local.json"                    "Claude Code merges hook config from both project settings files"
+assert_claude_edit_deny  "$PROJ/.cursor/hooks.json"                             "Cursor's hook registration file"
+assert_cursor_edit_deny  "$PROJ/.claude/settings.json"                          "the gate's own registration lives here (parity)"
+assert_cursor_edit_deny  "$PROJ/.claude/settings.local.json"                    "parity"
+assert_cursor_edit_deny  "$PROJ/.cursor/hooks.json"                            "Cursor's hook registration file (parity)"
 
 echo "== Fix 2 (Task 5 correction): Bash-vector mutation of the relocated gate's OWN file must DENY —" >&2
 echo "   this exercises core/shell-guard.py's SURF regex (the real Bash-branch decision-maker; the" >&2
@@ -197,6 +207,37 @@ echo "== Directory-operand SCOPE: deliberately bounded, so this is a control, no
 proj_bash_allow "rm -f $PROJ/.claude/hooks/observe.sh"
 proj_bash_allow "cat $SKILL/core/config.json"          # reads still pass: a mutation verb is required
 
+echo "== Task 3: the settings files are surface for Bash MUTATIONS, reads still pass — deleting or" >&2
+echo "   rewriting the registration is what turns every other protection off, and until now it cost" >&2
+echo "   nothing: 'sed -i .../settings.json' was a verified ALLOW. cwd=PROJ (via proj_bash_deny/allow," >&2
+echo "   not the assert_claude/cursor_bash_* helpers above): those hard-code cwd=\$SKILL, and a bare" >&2
+echo "   relative operand joined onto a cwd INSIDE the kit tree already matches the pre-existing" >&2
+echo "   kit-tree pattern regardless of these new ones, which would make this assertion pass for the" >&2
+echo "   wrong reason — the same trap the 'Directory OPERANDS' comment above already calls out. Both" >&2
+echo "   gates asserted per invocation, closing the hazard that updating the gates' patterns alone" >&2
+echo "   once left the path the kit actually installs to unprotected on both harnesses. ==" >&2
+for s in ".claude/settings.json" ".claude/settings.local.json" ".cursor/hooks.json"; do
+  proj_bash_deny  "sed -i '' $s"
+  proj_bash_deny  "rm -f $s"
+  proj_bash_allow "cat $s"
+  proj_bash_allow "jq . $s"
+done
+# The registration is what makes every other protection run; unregistering it must cost as much as
+# editing the gate itself.
+proj_bash_deny "printf '{}' > .claude/settings.json"
+
+echo "== Task 3: shell-guard.py's SURF verified DIRECTLY, not only through the gate pipeline above —" >&2
+echo "   both gates prefer shell-guard.py whenever python3 is present, so a deny/allow assertion" >&2
+echo "   through a gate cannot by itself prove the BASH-ONLY SURF_RE fallback was updated too; a prior" >&2
+echo "   round shipped exactly that gap (gates' patterns updated, primary engine blind). stdin piped" >&2
+echo "   directly, no jq/gate wrapper in between. ==" >&2
+for s in ".claude/settings.json" ".claude/settings.local.json" ".cursor/hooks.json"; do
+  printf '%s' "sed -i '' $s" | HEKTOR_FK_CWD="$PROJ" python3 "$SKILL/core/shell-guard.py" >/dev/null 2>&1 \
+    && ok || bad "shell-guard.py SURF must directly DENY a Bash mutation of $s: sed -i '' $s"
+  printf '%s' "cat $s" | HEKTOR_FK_CWD="$PROJ" python3 "$SKILL/core/shell-guard.py" >/dev/null 2>&1 \
+    && bad "shell-guard.py SURF must directly ALLOW a read of $s: cat $s" || ok
+done
+
 echo "== Fix 2: SURF_RE stays byte-identical between the two gate scripts (parity) ==" >&2
 CLAUDE_SURF="$(grep -m1 '^SURF_RE=' "$CLAUDE_GATE")"
 CURSOR_SURF="$(grep -m1 '^SURF_RE=' "$CURSOR_GATE")"
@@ -216,7 +257,8 @@ for p in "$SKILL/core/config.json" "$SKILL/SKILL.md" "$SKILL" "$SKILL/core" \
          "$PROJ/.claude/hooks/lib/audit.sh" "$PROJ/.cursor/hooks/lib/audit.sh" \
          "$PROJ/.cursor/hooks/flaky-kit-self-protection-gate.sh" \
          "$PROJ/.claude/hooks" "$PROJ/.cursor/hooks" \
-         "$PROJ/.claude/hooks/observe.sh" "$PROJ/.claude/settings.json" "$PROJ/README.md" "/tmp/elsewhere"
+         "$PROJ/.claude/hooks/observe.sh" "$PROJ/.claude/settings.json" "$PROJ/README.md" "/tmp/elsewhere" \
+         "$PROJ/.claude/settings.local.json" "$PROJ/.cursor/hooks.json"
 do
   if printf '%s' "rm -f $p" | grep -qE "$SURF_RE_VAL"; then B=surface; else B=other; fi
   if printf '%s' "rm -f $p" | HEKTOR_FK_CWD="$PROJ" python3 "$SKILL/core/shell-guard.py" >/dev/null 2>&1; then G=surface; else G=other; fi

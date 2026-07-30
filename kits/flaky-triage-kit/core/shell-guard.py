@@ -103,11 +103,25 @@ import sys, re, os
 # hooks) is deliberately NOT surface — only the gate, its lib/, the record, and the directory as an
 # operand. Blanket-matching that tree would contradict core/tests/self-protection-test.sh's assertion
 # that an unrelated pack hook stays editable.
+#
+# HARNESS SETTINGS FILES. Every fix above protects the gate and what it reads — none of it protected
+# the registration that makes the gate RUN in the first place. `sed -i '' .claude/settings.json` (or
+# `rm -f` it, or `printf '{}' >` it) was a verified ALLOW: deleting the PreToolUse entry is cheaper
+# than editing the gate it points at, and every other protection in this file is downstream of that
+# one registration existing. `.claude/settings.local.json` is included because Claude Code merges hook
+# config from both project settings files, so the registration can live in either. Cursor's real
+# analogue is `.cursor/hooks.json` — its own project settings model was checked, not assumed: Cursor
+# has no working project-level `.cursor/settings.json` (attempts to use one fail; user settings are a
+# SQLite blob, not a file), so there is no `.local` variant to protect and none is added below. This is
+# Bash-branch-only: a Write/Edit that rewrites a settings file but PRESERVES the registration is a
+# different, content-aware question this module cannot answer from a command string alone.
 _END = r'(?=[\s"\'`;)&|]|$)'          # zero-width end-of-shell-token boundary
 _DEFAULT_SURF = (r'\.claude/skills/hektor-flaky-triage(?:/|' + _END + r')'
                  r'|\.claude/hooks/(?:flaky-kit-self-protection-gate\.sh|\.flaky-kit-expect|lib/)'
                  r'|\.cursor/hooks/(?:flaky-kit-self-protection-gate\.sh|lib/)'
-                 r'|\.(?:claude|cursor)/hooks(?:' + _END + r')')
+                 r'|\.(?:claude|cursor)/hooks(?:' + _END + r')'
+                 r'|\.(claude|cursor)/settings(\.local)?\.json'
+                 r'|\.cursor/hooks\.json')
 # PATH-INDEPENDENT: set HEKTOR_FK_SURFACE to the kit's install root and a kit installed ANYWHERE
 # protects itself (the standalone gates do this).
 #

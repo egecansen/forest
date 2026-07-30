@@ -27,6 +27,10 @@
 #   - .claude/hooks/lib/, .cursor/hooks/{gate,lib/}     (the audit lib + the other harness's gate)
 #   - .claude/hooks, .cursor/hooks                      (the DIRECTORIES, as operands — removing one
 #                                                        removes the gate, the lib and the record)
+#   - .claude/settings.json, .claude/settings.local.json,
+#     .cursor/hooks.json                                (the harness's own hook registration — deleting
+#                                                        or truncating it turns every protection above
+#                                                        off for free; Bash-branch only, see Round below)
 #
 # Mirrors .claude/hooks/enforcement-self-protection-gate.sh. This is FRICTION, not a wall:
 # PreToolUse `deny` **is** enforced by the current CLI (verified 2026-06-30, observed live — see
@@ -85,6 +89,13 @@
 # root — not merely a read-only bit, which a same-user chmod reverses; below hardened it degrades to
 # exactly that chmod-only bit. This gate is friction on top of whichever tier is actually reached,
 # never a substitute for either.
+#
+# Round 4 — NOT another shell-construct chase (Round 3 above is still the last of those): this widens
+# WHAT counts as surface, not HOW a command is parsed. Every fix through Round 3 protected the gate and
+# what it reads; none protected the registration that makes the gate run at all. `.claude/settings.json`
+# / `.claude/settings.local.json` / `.cursor/hooks.json` join the surface for exactly that reason — see
+# the header bullet and the SURF_RE comment below for the full reasoning, including why Cursor gets no
+# `.local` arm.
 #
 # Failure -> action
 # -----------------
@@ -178,7 +189,17 @@ fi
 # assertion in core/tests/self-protection-test.sh that an unrelated pack hook stays editable, and
 # those files are legitimately edited. `mv`/`rm` of the DIRECTORY takes the gate with it, which is
 # why the directory itself is in.
-SURF_RE='\.claude/skills/hektor-flaky-triage(/|$|[[:space:]";)&|])|\.claude/hooks/(flaky-kit-self-protection-gate\.sh|\.flaky-kit-expect|lib/)|\.cursor/hooks/(flaky-kit-self-protection-gate\.sh|lib/)|\.(claude|cursor)/hooks($|[[:space:]";)&|])'
+#
+# HARNESS SETTINGS FILES, added because none of the above protects the thing that makes any of it RUN:
+# the PreToolUse registration itself. `sed -i '' .claude/settings.json` (or `rm -f` it, or truncate it
+# with a redirect) was a verified ALLOW — unregistering the gate is cheaper than editing it, and every
+# other entry on this surface is downstream of that one registration existing. `.claude/settings.local.json`
+# is included because Claude Code merges hook config from both project settings files. Cursor's real
+# registration file is `.cursor/hooks.json` — checked, not assumed: Cursor has no working project-level
+# `.cursor/settings.json` (user settings are a SQLite blob, not a file), so there is no `.local` variant
+# of it to add. This is the Bash-branch pattern only; a Write/Edit that rewrites a settings file but
+# PRESERVES the registration is a separate, content-aware question (see match_surface below / Task 4).
+SURF_RE='\.claude/skills/hektor-flaky-triage(/|$|[[:space:]";)&|])|\.claude/hooks/(flaky-kit-self-protection-gate\.sh|\.flaky-kit-expect|lib/)|\.cursor/hooks/(flaky-kit-self-protection-gate\.sh|lib/)|\.(claude|cursor)/hooks($|[[:space:]";)&|])|\.(claude|cursor)/settings(\.local)?\.json|\.cursor/hooks\.json'
 # Bash mutation indicators (redirect / in-place / copy / move / delete / perm / git-mutate / rsync /
 # patch) — heuristic, errs toward flagging. Used as the fallback ONLY when python3/shell-guard.py
 # is unavailable for the Bash branch below (degraded precision, documented, not silent).
@@ -219,6 +240,9 @@ match_surface() {  # $1 = a path -> sets SURFACE and returns 0, or returns 1
     */.claude/hooks/lib/*)                                SURFACE="kit protection hook lib (Claude)"; return 0 ;;
     */.claude/hooks/.flaky-kit-expect)                    SURFACE="kit lock-tier record (out-of-tree)"; return 0 ;;
     */.claude/hooks|*/.cursor/hooks)                      SURFACE="harness hooks directory (holds the gate, its lib, and the lock-tier record)"; return 0 ;;
+    */.claude/settings.json|*/.claude/settings.local.json) \
+                                                          SURFACE="harness settings (holds the gate's registration)"; return 0 ;;
+    */.cursor/hooks.json)                                 SURFACE="harness settings (holds the gate's registration)"; return 0 ;;
     *) return 1 ;;
   esac
 }
