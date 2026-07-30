@@ -154,10 +154,24 @@ its edge:
 - **Repairing the stale registration** in `~/.forest/wt/web-test/tech-WEBT-254904`, the worktree where
   the original defect was observed. Re-running the kit installer against it is the repair.
 
-## Recorded as out of scope
+## Next
 
-Two patterns from the wider hektor pack are the strongest remaining candidates and are documented in
-the design rather than built: enforcing `hedge-scan` as a **Stop hook** in place of the current
-advisory pipe, which would block a final message that rationalises away a red test; and the
-**reviewer-attestation cluster**, which would make the kit's stated two-key rule something other than
-a sentence in a prompt.
+**Enforce `hedge-scan` as a Stop hook.** Selected as the next piece of work once this run completes.
+
+Everything above hardens the kit's *perimeter* — its files, its lock, its wiring, its registration.
+None of it touches the kit's actual job, which is stopping a final message that rationalises away a
+red test. `core/hedge-scan.sh` already performs that detection; `SKILL.md` merely *asks* the agent to
+pipe its summary through it. An agent that skips the pipe loses nothing, so the one control the kit
+exists for is the only one still resting on the agent's cooperation — the same "a control that is not
+itself guarded" shape as everything this report describes, one level in. The pack's `delivery-gate.sh`
+already does it the enforced way: a Stop hook that blocks the message rather than a line in a prompt
+that requests it.
+
+Also recorded as out of scope, and not selected: the **reviewer-attestation cluster**
+(registry → brief gate → write gate → attestation), which would make the kit's stated two-key rule
+something other than a sentence in a prompt — nothing currently enforces that a reviewer rather than
+the fixer ran `gate.sh`. It is larger than a single plan and would need its own design cycle.
+
+Two of the five residuals above are cheaply closeable if they are ever worth a round: putting the
+settings files' parent directories on the harden surface, which closes the replace-rather-than-edit
+path, and testing the registered gate for executability rather than mere existence.
