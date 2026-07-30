@@ -72,8 +72,10 @@ printf '{"history":[{"tier":"unlocked"},\n{"tier":"hardened"}]}\n' > "$RT/core/.
 # environment variable silenced the guard entirely. The seam belongs at the function boundary, not
 # in the environment — so the reporting half is tested here and the uid half is already covered by
 # the integrity_tier cases above.
-rep_out() { integrity_report "$1" 2>&1; }
-rep_rc()  { integrity_report "$1" >/dev/null 2>&1; echo $?; }
+# `absent` is the neutral wiring value: silent at every tier (proven in the tier x wiring block
+# below), so driving these tier-only cases through it reproduces the exact pre-task-2 behaviour.
+rep_out() { integrity_report "$1" absent 2>&1; }
+rep_rc()  { integrity_report "$1" absent >/dev/null 2>&1; echo $?; }
 
 [ -z "$(rep_out hardened)" ] && ok || bad "hardened must be silent"
 [ "$(rep_rc hardened)" = 0 ] && ok || bad "hardened must return 0"
@@ -90,10 +92,14 @@ case "$(rep_out mismatch)" in *MISMATCH*) ok ;; *) bad "mismatch must be loud" ;
 [ "$(rep_rc mismatch)" = 76 ] && ok || bad "mismatch must return 76 so callers refuse"
 # Nothing may reach stdout: four entrypoints emit a machine-read contract there.
 for t in hardened stale unlocked degraded unprotected mismatch; do
-  [ -z "$(integrity_report "$t" 2>/dev/null)" ] || bad "integrity_report must never write to stdout (tier: $t)"
+  [ -z "$(integrity_report "$t" absent 2>/dev/null)" ] || bad "integrity_report must never write to stdout (tier: $t)"
 done; ok
-# The production path must carry no environment override.
-grep -q 'INTEGRITY_FAKE_UID' "$HERE/../_integrity.sh" && bad "no environment override may remain in _integrity.sh — it silences the guard for anyone who can set a variable" || ok
+# The production path must carry no environment override. Matched as an actual parameter expansion
+# (a leading `$`), not a bare substring: task 2's integrity_guard comment legitimately NAMES
+# INTEGRITY_FAKE_UID in prose (describing the hole it replaced), and a bare-substring check would
+# flag that history lesson as if it were the hole itself. `$INTEGRITY_FAKE_UID` reappearing as a
+# real reference is still caught.
+grep -qE '\$\{?INTEGRITY_FAKE_UID\b' "$HERE/../_integrity.sh" && bad "no environment override may remain in _integrity.sh — it silences the guard for anyone who can set a variable" || ok
 
 # --- integrity_guard: the COMPOSITION, and that the entrypoints actually call it ----------------
 # Until this section existed, `integrity_guard() { return 0; }` left the entire suite green: the two
@@ -328,6 +334,51 @@ rm -f "$W/m/.claude/settings.json"
   && ok || bad "with no .harness record at all, the pre-existing file-presence inference must still apply"
 
 rm -rf "$PR" "$W"
+
+# --- tier x wiring: refuse only when a HARDENED tier has lost its wiring ------------
+rep2()    { integrity_report "$1" "$2" >/dev/null 2>&1; echo $?; }
+rep2_out(){ integrity_report "$1" "$2" 2>&1; }
+
+for w in wired absent; do
+  [ "$(rep2 hardened "$w")" = 0 ] && ok || bad "hardened + $w must proceed"
+done
+for w in unregistered dangling foreign partial; do
+  [ "$(rep2 hardened "$w")" = 76 ] && ok || bad "hardened + $w must refuse — the shadow detector went with the gate"
+  case "$(rep2_out hardened "$w")" in *WIRING*) ok ;; *) bad "hardened + $w must name the wiring problem" ;; esac
+done
+for t in degraded unprotected unlocked; do
+  for w in unregistered dangling foreign partial; do
+    [ "$(rep2 "$t" "$w")" = 0 ] && ok || bad "$t + $w must warn and proceed — there is no wall to have lost"
+  done
+  case "$(rep2_out "$t" dangling)" in *WIRING*) ok ;; *) bad "$t + dangling must still say so" ;; esac
+done
+# absent is silent at EVERY tier: no harness configured is not a defect.
+for t in hardened degraded unprotected unlocked; do
+  case "$(rep2_out "$t" absent)" in *WIRING*) bad "absent must never mention wiring (tier: $t)" ;; *) ok ;; esac
+done
+# mismatch still refuses regardless of wiring, and still names the tier problem.
+[ "$(rep2 mismatch wired)" = 76 ] && ok || bad "a tier mismatch must refuse even when the wiring is fine"
+# Nothing may reach stdout: four entrypoints emit a contract there.
+for t in hardened degraded unprotected unlocked stale mismatch; do
+  for w in wired dangling absent; do
+    [ -z "$(integrity_report "$t" "$w" 2>/dev/null)" ] || bad "integrity_report must never write to stdout ($t/$w)"
+  done
+done; ok
+# Both arguments are required — a default that turned a missing wiring argument into `absent` would
+# silently stop checking wiring, which is the quiet-default shape this codebase keeps being bitten by.
+# Flattened to one line before grepping: the signature line (`integrity_report() {`) and the `local`
+# declaration live on two separate lines in normal style, and grep matches per-line by default — a
+# mutation adding `wiring="${2:-}"` proved this pattern passes vacuously (mutation confirmed applied,
+# suite stayed green) when applied to the two lines directly. `tr` collapses the newline between them
+# to a space so the same pattern actually spans the declaration, without changing what it looks for.
+tr '\n' ' ' < "$HERE/../_integrity.sh" | grep -qE 'integrity_report\(\)[^}]*local[^}]*wiring="\$\{2:-\}"' \
+  && bad "integrity_report must not default its wiring argument" || ok
+# No environment override may enter this file, under ANY name. The pre-existing assertion below names
+# INTEGRITY_FAKE_UID specifically, so the identical hole returns green under a new name — this one
+# catches the shape instead of the spelling. A variable a caller can set is a skeleton key to the very
+# check it guards, and a cache of the answer is indistinguishable from a forgery of it.
+grep -qE '\$\{?(HEKTOR|INTEGRITY)_[A-Z_]+' "$HERE/../_integrity.sh" \
+  && bad "no environment override may enter _integrity.sh — a caller who can set a variable silences the guard" || ok
 
 echo "integrity-test: $pass passed, $fail failed"
 [ "$fail" -eq 0 ]

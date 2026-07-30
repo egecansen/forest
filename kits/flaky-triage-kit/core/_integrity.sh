@@ -275,36 +275,59 @@ integrity_tier() {
 # environment, so nothing in production reads an override at all — the test suite greps this file
 # to make sure that variable never reappears here.
 integrity_report() {
-  local tier="${1:-}"
+  local tier="$1" wiring="$2" rc=0
   case "$tier" in
-    hardened) return 0 ;;
+    hardened) rc=0 ;;
     stale)
       echo "integrity: core/ is root-owned but .lock-state disagrees — treating as hardened; re-run 'core/lock-kit.sh lock' to refresh the record" >&2
-      return 0 ;;
+      rc=0 ;;
     unlocked)
       echo "integrity: the kit is UNLOCKED (maintenance window open) — its safety surface is writable right now. Re-lock when done: core/lock-kit.sh lock" >&2
-      return 0 ;;
+      rc=0 ;;
     degraded)
       echo "integrity: DEGRADED tier — the surface is read-only but still owned by this user, so this account can reverse it with a single chmod. Harden with: core/lock-kit.sh lock (needs sudo)" >&2
-      return 0 ;;
+      rc=0 ;;
     unprotected)
       echo "integrity: UNPROTECTED — lock has never run here, so the safety surface is plainly writable by this user and by any agent running as them. Nothing is enforcing the kit's invariants. Protect it with: core/lock-kit.sh lock (needs sudo)" >&2
-      return 0 ;;
+      rc=0 ;;
     mismatch)
       echo "integrity: MISMATCH — this kit was locked at the hardened tier, but core/ is no longer root-owned." >&2
       echo "integrity: this is not the tree that was hardened. Refusing: nothing it produces — summary, verdict, cluster table — should be trusted." >&2
       echo "integrity: if you unlocked deliberately, run 'core/lock-kit.sh lock' to re-establish the tier." >&2
-      return 76 ;;
+      rc=76 ;;
   esac
-  return 0
+  # The wiring axis. `absent` is silent at every tier: the kit runs standalone from a terminal, so
+  # "no gate configured" and "a gate that should be here and isn't" are different facts, and warning
+  # on the first would train the reader to ignore the second.
+  case "$wiring" in
+    wired|absent) : ;;
+    *)
+      echo "integrity: WIRING $wiring — the kit's self-protection gate is not going to run as registered." >&2
+      case "$wiring" in
+        dangling)     echo "integrity: a harness registration points at a gate file that does not exist (a pre-relocation path, or the file was removed)." >&2 ;;
+        unregistered) echo "integrity: a harness settings file exists but carries no registration for the kit's gate." >&2 ;;
+        partial)      echo "integrity: only one of the two required registrations is present, so half the surface is unguarded." >&2 ;;
+        foreign)      echo "integrity: the registered gate file is not root-owned at the hardened tier, so it is not the file this kit installed." >&2 ;;
+      esac
+      echo "integrity: re-run the kit installer against this project to repair it." >&2
+      if [ "$tier" = hardened ]; then
+        echo "integrity: refusing — at the hardened tier the gate also carries the out-of-tree shadow record, so losing it means losing the only detector for a replaced kit tree. That is weaker than the recorded protection." >&2
+        rc=76
+      fi ;;
+  esac
+  return "$rc"
 }
 
 # integrity_guard <kit_root> -> 0 to proceed, 76 to refuse.
-# The trivial composition: real uid + recorded state -> tier -> report. It reads NO environment
-# override — the tier always comes from the filesystem. Each half is tested on its own
-# (integrity_tier with synthetic uids, integrity_report with synthetic tiers), which is the same
-# split already used elsewhere in this file, so nothing here needs a back door to be exercised.
+# The composition of both axes. It reads NO environment: every answer is recomputed from the
+# filesystem on every call. An earlier draft cached the computed result in an exported variable to
+# spare a triage the two extra evaluations its execs cost. That cache is indistinguishable from a
+# forgery — the environment belongs to whoever launches the entrypoint — so it would have restored
+# the INTEGRITY_FAKE_UID hole this kit removed, under a new name and past a name-specific test.
+# Recomputing costs at most three jq calls per entrypoint. That is the price of the check being real.
 integrity_guard() {
-  local kit="${1:-}"
-  integrity_report "$(integrity_tier "$(integrity_owner_uid "$kit/core")" "$(integrity_state "$kit")")"
+  local kit="${1:-}" tier wiring
+  tier="$(integrity_tier "$(integrity_owner_uid "$kit/core")" "$(integrity_state "$kit")")"
+  wiring="$(integrity_wiring "$kit" "$tier")"
+  integrity_report "$tier" "$wiring"
 }
