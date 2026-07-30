@@ -158,6 +158,31 @@ its edge:
 - **Repairing the stale registration** in `~/.forest/wt/web-test/tech-WEBT-254904`, the worktree where
   the original defect was observed. Re-running the kit installer against it is the repair.
 
+## Parked at the final review
+
+The whole-branch review found one Critical and four Important issues, all fixed in a single wave. The
+Critical is worth recording because of where it came from: the two axes disagreed about what a valid
+registration *is*. The gate had been changed to judge a matcher by the set of tools it covers — so it
+allowed widening `Write|Edit` to `Write|Edit|MultiEdit` as strictly better — while the wiring check
+still compared the matcher string, read the same file as `partial`, and refused from all thirteen
+entrypoints. The remedy it printed could not be run either: `install.sh` exits 75 on a root-owned
+`core/`, so recovery needed the password. Both axes now share one slot model, and a parity assertion
+compares them document by document rather than trusting a comment.
+
+That defect was visible earlier as a Minor in Task 1 and was deferred. It became Critical only when a
+later task changed the other axis. Per-task review cannot see that; this is what the whole-branch pass
+is for.
+
+These remain open, each with a ruling rather than a fix:
+
+| Parked | Ruling |
+|---|---|
+| `core/tests/integrity-test.sh:591` — the locality assertion claims "removing any name from any `local` line goes red", but `gate` in `_wiring_one` stays green: the probe passes an empty gate path, so an empty leak is indistinguishable from no leak | Real, and the seventh instance on this branch of an assertion claiming more than it tests. Not load-bearing: no entrypoint uses `gate` as a global, so the consequence is confined to the assertion overclaiming. One line — a second call with a non-empty path — and it goes first in the next round |
+| The cross-axis parity assertion compares slot *derivation* only; `_wiring_cover` and the gate's `_slots_kept` are still kept in step by comment | The covering rule is pinned behaviourally by fixtures on both sides, so a divergence goes red — but structurally, not by construction. Same distrust the `SURF` drift check exists to encode |
+| At `degraded`, the printed "re-run the kit installer" is executable but noisy: `core/` is `chmod a-w`, so the engine copy fails with EACCES while the parts that actually repair wiring still land | Loud, not false. Fixing it means teaching the installer to skip an unwritable engine copy, which is its own change |
+| With no `.harness` record, a `chmod 000` settings file reads `absent` while a malformed one reads `unregistered` | Consistent with the ruling as scoped — that ruling covered record-present cases. The spec's failure table does not cover no-record-unreadable either way, and should when someone next touches it |
+| `docs/superpowers/plans/2026-07-30-kit-wiring-self-check.md:307,490-491` still carry claims the branch retracted | Executed plan text is a historical record, not living spec. The spec and every shipped file are corrected; the plan stays as it was carried out |
+
 ## Next
 
 **Enforce `hedge-scan` as a Stop hook.** Selected as the next piece of work once this run completes.
