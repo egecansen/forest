@@ -231,7 +231,13 @@ _wiring_resolve() {
   [ -n "$cmd" ] || return 0
   p="$(printf '%s' "$cmd" | tr -d '"'\''')"
   p="${p%%[[:space:]]*}"
-  p="$(printf '%s' "$p" | sed -e "s|\${CLAUDE_PROJECT_DIR}|$root|g" -e "s|\$CLAUDE_PROJECT_DIR|$root|g")"
+  # Parameter expansion, not sed. An unescaped $root in a sed replacement makes `&` mean "the whole
+  # match", so a project directory named `R&D` splices the literal `$CLAUDE_PROJECT_DIR` into the
+  # middle of the resolved path; a `|` in the path closes the delimiter and sed errors to stderr.
+  # Both fail closed — `dangling` on a correctly wired install — which is how it would survive a
+  # review that only asked whether the check can be fooled into passing.
+  p="${p//\$\{CLAUDE_PROJECT_DIR\}/$root}"
+  p="${p//\$CLAUDE_PROJECT_DIR/$root}"
   case "$p" in
     '') : ;;
     /*) printf '%s' "$p" ;;

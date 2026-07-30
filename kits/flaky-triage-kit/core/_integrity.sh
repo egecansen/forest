@@ -107,6 +107,15 @@ _wiring_gate_cursor() {
 # $CLAUDE_PROJECT_DIR or ${CLAUDE_PROJECT_DIR} prefix, an absolute path, and a path relative to the
 # project root. Trailing arguments after the script path are dropped.
 #
+# Bash parameter expansion for the substitution, NOT sed: `$root` is interpolated directly into the
+# replacement text, and sed gives that text two live special characters — `&` (splices in the whole
+# match) and its own `|` delimiter (a root containing one breaks the command outright, printing a
+# parse error to stderr). A root like "R&D" or "Ben & Co" silently produced a garbage path; a root
+# containing `|` errored. Both failed CLOSED (dangling/unregistered on a genuinely wired install,
+# never a false `wired`), but a check whose job is to be believed must not corrupt a plausible real
+# path. `${p//pattern/replacement}` has neither failure mode: the replacement text is literal, with
+# no metacharacter re-interpreted, and it drops a subprocess besides.
+#
 # Known limitation, to be stated rather than hidden: a registered path containing spaces resolves to
 # its first token.
 _wiring_resolve() {
@@ -114,7 +123,8 @@ _wiring_resolve() {
   [ -n "$cmd" ] || return 0
   p="$(printf '%s' "$cmd" | tr -d '"'\''')"
   p="${p%%[[:space:]]*}"
-  p="$(printf '%s' "$p" | sed -e "s|\${CLAUDE_PROJECT_DIR}|$root|g" -e "s|\$CLAUDE_PROJECT_DIR|$root|g")"
+  p="${p//\$\{CLAUDE_PROJECT_DIR\}/$root}"
+  p="${p//\$CLAUDE_PROJECT_DIR/$root}"
   case "$p" in
     '') : ;;
     /*) printf '%s' "$p" ;;

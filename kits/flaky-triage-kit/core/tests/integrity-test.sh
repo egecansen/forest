@@ -278,6 +278,15 @@ jq --arg c "/nonexistent-foreign-machine-path/flaky-kit-self-protection-gate.sh"
 [ "$(integrity_wiring "$K9" degraded)" = dangling ] \
   && ok || bad "a registration resolved to a path that does not exist must be dangling even though an unrelated canonical-path file still exists"
 
+# review round 3: a project root containing `&` is a plausible real path (an "R&D" or "Ben & Co"
+# directory) that a sed-based substitution corrupts silently -- sed's replacement text treats `&` as
+# "splice in the whole match", so the resolved path becomes garbage that happens not to exist, and the
+# fixture reads `dangling` on a genuinely correctly-wired install. Bash parameter expansion has no such
+# special character in its replacement text.
+K9A="$(wire_fixture "$W/A&B")"
+[ "$(integrity_wiring "$K9A" degraded)" = wired ] \
+  && ok || bad "a project root containing '&' must still resolve \$CLAUDE_PROJECT_DIR correctly and read wired"
+
 # --- review round 2, Finding 3: pin the most common real deployment (one harness, correctly wired,
 # --- the other simply not present) to `wired` -- the property mutation 4 was supposed to prove and,
 # --- before this round, could not: _wiring_rank's `absent` arm was unreachable dead code because
