@@ -52,7 +52,19 @@
 # the SURF_RE comment for the full reasoning, including why Cursor gets no arm of its own at all (it
 # has no project-level settings.json, `.local` or otherwise). `match_surface` — the Write/Edit
 # matcher — is deliberately UNCHANGED: that branch's rule is deny only when the kit's registration
-# would not survive the edit, which needs the payload Task 4 inspects, not a path match.
+# would not survive the edit, which needs the payload Round 5 inspects, not a path match.
+#
+# Round 5 — the Write/Edit half of the same hole, and deliberately NOT the same rule. That branch has
+# the proposed content (`tool_input.content`, or `old_string`/`new_string` reconstructed against the
+# file), so it can answer the property instead of a proxy for it: with this change applied, is the
+# kit's gate still registered? Deny only when it currently is and would not be. Matching "the gate
+# command string appears in the payload" would be the textual proxy, and a proxy standing in for a
+# property has caused three separate defects in this kit already. Two consequences worth stating
+# because they are choices, not oversights: an edit to a settings file that carries NO registration
+# today passes (the rule is "would lose what it has", never "must always end registered" — a project
+# that never installed this kit is not frozen out of its own settings), and unparseable proposed JSON
+# is DENIED (survival cannot be verified, and writing malformed settings is itself a defect — the
+# pack's run-status-write-gate sets that precedent). See the Claude gate for the same note in full.
 set -uo pipefail
 
 _DIR="$(dirname "${BASH_SOURCE[0]}")"
@@ -63,6 +75,7 @@ if [ -f "$_COMPAT" ]; then . "$_COMPAT"; else exit 0; fi
 
 cc_have_jq || exit 0   # jq absent -> fail-open
 cc_read_input
+JQ="$CC_JQ"            # so _reg_slots() below stays byte-identical with the Claude gate's copy
 
 # Patterns mirror the Claude gate's bash-ERE prefilter (kept in sync with core/shell-guard.py's python flavor).
 # Round2 re-review: also covers both harnesses' gate scripts + vendored libs (`.cursor/hooks/*` and
@@ -107,6 +120,28 @@ except Exception:
   else
     printf '%s' "$raw"
   fi
+}
+
+# _reg_slots <json-file> -> one sorted line per harness slot the kit's gate is registered under, e.g.
+# "PreToolUse:Bash" / "beforeShellExecution". Silent and empty for an unreadable or unparseable file.
+#
+# Kept BYTE-IDENTICAL with the OTHER harness's gate (asserted by core/tests/self-protection-test.sh);
+# only the I/O boundary that feeds it differs between the two harnesses.
+#
+# `test(...)` on the gate FILENAME, not on a whole command string, because we are asking whether the
+# REGISTRATION exists — not whether some text happens to appear. And SLOTS, not a count of mentions:
+# core/_integrity.sh already rules that a harness's two slots are both required ("half a registration
+# is half the gate" — it answers `partial`, not `wired`, when one is missing), so "at least one
+# command still names the gate" would call deleting the whole Bash arm a survival and silently unwire
+# the entire Bash branch. Compare the SET before against the SET after; adding slots is fine.
+_reg_slots() {
+  "$JQ" -r '
+    def gate: select((.command // "") | test("flaky-kit-self-protection-gate\\.sh"));
+    [ (.hooks.PreToolUse // [])[]? | (.matcher // "") as $m | (.hooks // [])[]? | gate | "PreToolUse:\($m)" ]
+    + [ (.hooks.beforeShellExecution // [])[]? | gate | "beforeShellExecution" ]
+    + [ (.hooks.preToolUse // [])[]? | gate | "preToolUse" ]
+    | unique | .[]
+  ' "$1" 2>/dev/null
 }
 
 match_surface() {
@@ -189,10 +224,52 @@ if [ -n "$CMD" ]; then
   fi
   SURFACE="kit safety surface (Bash write)"; TARGET="$CMD"
 elif [ -n "$FP" ]; then
-  # Check the CANONICAL form first (closes ./ ../ symlink/cwd-relative bypasses); fall back to the
-  # raw FP so an already-literal path still matches even if canon_path degraded to a no-op.
-  if match_surface "$(canon_path "$FP" "$CWD")"; then :; elif match_surface "$FP"; then :; else exit 0; fi
   TARGET="$FP"
+  TOOL_NAME="$(cc_tool)"
+  # Settings files are surface for Bash (no content to inspect there) but decided by OUTCOME here,
+  # where the payload is available: deny only when the kit's registration would not survive. Blanket-
+  # denying would make this kit block unrelated permission/env/model edits in every project it is
+  # installed into — heavy for a component that claims to be standalone — so `match_surface` carries
+  # no settings arm and this arm sits in front of it. Same decision as the Claude gate; only the three
+  # payload accessors below differ, per this file's I/O-boundary-only porting rule.
+  case "$(canon_path "$TARGET" "$CWD")" in
+    */.claude/settings.json|*/.claude/settings.local.json|*/.cursor/hooks.json)
+      [ -r "$TARGET" ] || exit 0                   # nothing registered yet -> nothing to lose
+      _was="$(mktemp)"; _reg_slots "$TARGET" > "$_was"
+      # NOT "must always end registered": a project that never installed this kit must not be frozen
+      # out of its own settings file, malformed content included.
+      [ -s "$_was" ] || { rm -f "$_was"; exit 0; }  # not currently registered -> nothing to lose
+      _prop="$(mktemp)"
+      if [ "$TOOL_NAME" = Write ]; then
+        cc_content > "$_prop"
+      else
+        OLD="$(cc_old_string)"
+        NEW="$(cc_new_string)"
+        # Literal (never regex) first-occurrence replace, matching the Edit tool's own semantics —
+        # same lesson as hooks/run-status-write-gate.sh, whose awk sub() reconstruction failed OPEN
+        # on a metacharacter in old_string. No python3 -> reconstruct as "unchanged", which is the
+        # fail-open floor: this gate must never wedge every tool call.
+        python3 - "$TARGET" "$OLD" "$NEW" > "$_prop" <<'PY' || cp "$TARGET" "$_prop"
+import sys
+src, old, new = open(sys.argv[1]).read(), sys.argv[2], sys.argv[3]
+sys.stdout.write(src.replace(old, new, 1) if old else src)
+PY
+      fi
+      if "$JQ" -e . "$_prop" >/dev/null 2>&1; then
+        _now="$(mktemp)"; _reg_slots "$_prop" > "$_now"
+        _lost="$(grep -Fxv -f "$_now" "$_was" | tr '\n' ' ' | sed 's/ *$//')"
+        rm -f "$_now"
+        if [ -z "$_lost" ]; then rm -f "$_was" "$_prop"; exit 0; fi   # every slot survives -> allow
+        SURFACE="harness settings — this change would leave the kit's gate unregistered for: ${_lost}"
+      else
+        SURFACE="harness settings — the proposed content is not parseable JSON, so the registration's survival cannot be verified"
+      fi
+      rm -f "$_was" "$_prop" ;;
+    *)
+      # Check the CANONICAL form first (closes ./ ../ symlink/cwd-relative bypasses); fall back to the
+      # raw FP so an already-literal path still matches even if canon_path degraded to a no-op.
+      if match_surface "$(canon_path "$TARGET" "$CWD")"; then :; elif match_surface "$TARGET"; then :; else exit 0; fi ;;
+  esac
 else
   exit 0
 fi

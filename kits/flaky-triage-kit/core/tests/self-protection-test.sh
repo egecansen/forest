@@ -83,6 +83,14 @@ cursor_denied() { run_cursor "$1" | jq -e '.permission == "deny"' >/dev/null 2>&
 bash_json()        { jq -n --arg c "$1" --arg cmd "$2" '{tool_name:"Bash", cwd:$c, tool_input:{command:$cmd}}'; }
 cursor_bash_json() { jq -n --arg c "$1" --arg cmd "$2" '{command:$cmd, cwd:$c}'; }
 edit_json()        { jq -n --arg c "$1" --arg f "$2" '{tool_name:"Edit", cwd:$c, tool_input:{file_path:$f}}'; }
+# Task 4 payload builders. `edit_json` above carries a file_path and NOTHING else, which is exactly
+# what makes it useless for the outcome check: an assertion built on it cannot tell "denies any edit of
+# this path" from "denies an edit that drops the registration" — the single distinction Task 4 turns
+# on. These two carry a REAL proposed payload (content for Write, old/new for Edit) so the assertions
+# below name the outcome. One builder serves both harnesses: cursor-compat's cc_content /
+# cc_old_string / cc_new_string read the same `.tool_input.*` keys.
+write_json()       { jq -n --arg c "$1" --arg f "$2" --arg t "$3" '{tool_name:"Write", cwd:$c, tool_input:{file_path:$f, content:$t}}'; }
+edit_str_json()    { jq -n --arg c "$1" --arg f "$2" --arg o "$3" --arg n "$4" '{tool_name:"Edit", cwd:$c, tool_input:{file_path:$f, old_string:$o, new_string:$n}}'; }
 
 assert_claude_bash_deny()  { claude_denied "$(bash_json "$SKILL" "$1")"        && ok || bad "claude DENY Bash: $1"; }
 assert_claude_bash_allow() { claude_denied "$(bash_json "$SKILL" "$1")"        && bad "claude should ALLOW Bash: $1" || ok; }
@@ -92,6 +100,18 @@ assert_claude_edit_deny()  { claude_denied "$(edit_json "$PROJ" "$1")"  && ok ||
 assert_claude_edit_allow() { claude_denied "$(edit_json "$PROJ" "$1")"  && bad "claude should ALLOW Edit: $2 ($1)" || ok; }
 assert_cursor_edit_deny()  { cursor_denied "$(edit_json "$PROJ" "$1")"  && ok || bad "cursor DENY Edit: $2 ($1)"; }
 assert_cursor_edit_allow() { cursor_denied "$(edit_json "$PROJ" "$1")"  && bad "cursor should ALLOW Edit: $2 ($1)" || ok; }
+
+# Task 4: same primitives (claude_denied / cursor_denied), payload-carrying builders. Every one is
+# asserted on BOTH gates, per the hazard the Task 3 comment below records: updating one gate's logic
+# and testing only that gate once left the other harness silently unprotected.
+assert_claude_write_deny()     { claude_denied "$(write_json "$PROJ" "$1" "$2")"        && ok || bad "claude DENY Write: $3 ($1)"; }
+assert_claude_write_allow()    { claude_denied "$(write_json "$PROJ" "$1" "$2")"        && bad "claude should ALLOW Write: $3 ($1)" || ok; }
+assert_cursor_write_deny()     { cursor_denied "$(write_json "$PROJ" "$1" "$2")"        && ok || bad "cursor DENY Write: $3 ($1)"; }
+assert_cursor_write_allow()    { cursor_denied "$(write_json "$PROJ" "$1" "$2")"        && bad "cursor should ALLOW Write: $3 ($1)" || ok; }
+assert_claude_edit_str_deny()  { claude_denied "$(edit_str_json "$PROJ" "$1" "$2" "$3")" && ok || bad "claude DENY Edit: $4 ($1)"; }
+assert_claude_edit_str_allow() { claude_denied "$(edit_str_json "$PROJ" "$1" "$2" "$3")" && bad "claude should ALLOW Edit: $4 ($1)" || ok; }
+assert_cursor_edit_str_deny()  { cursor_denied "$(edit_str_json "$PROJ" "$1" "$2" "$3")" && ok || bad "cursor DENY Edit: $4 ($1)"; }
+assert_cursor_edit_str_allow() { cursor_denied "$(edit_str_json "$PROJ" "$1" "$2" "$3")" && bad "cursor should ALLOW Edit: $4 ($1)" || ok; }
 
 echo "== Fix 1: subshell / command-substitution cd-tracking (must DENY, both gates) ==" >&2
 for cmd in \
@@ -230,10 +250,105 @@ for s in ".claude/settings.json" ".claude/settings.local.json" ".cursor/hooks.js
     && bad "shell-guard.py SURF must directly ALLOW a read of $s: cat $s" || ok
 done
 
+echo "== Task 4: Write/Edit on a settings file is decided by OUTCOME, not by path. This branch HAS the" >&2
+echo "   payload, so it answers the real question — with this change applied, is the kit's gate still" >&2
+echo "   registered? Blanket-denying by path would make the kit block unrelated permission / env / model" >&2
+echo "   edits in every project it installs into. The two 'unrelated claude settings' ALLOW assertions" >&2
+echo "   in the Fix 2 sections above are the standing guard against that over-denial; they stay ALLOW" >&2
+echo "   because that fixture settings.json carries no registration at all. ==" >&2
+# --- Write/Edit on settings: deny only when the registration would not survive -------
+SJ="$PROJ/.claude/settings.json"
+REG='{"hooks":{"PreToolUse":[{"matcher":"Write|Edit","hooks":[{"type":"command","command":"\"$CLAUDE_PROJECT_DIR/.claude/hooks/flaky-kit-self-protection-gate.sh\""}]},{"matcher":"Bash","hooks":[{"type":"command","command":"\"$CLAUDE_PROJECT_DIR/.claude/hooks/flaky-kit-self-protection-gate.sh\""}]}]}}'
+printf '%s\n' "$REG" > "$SJ"
+
+# A Write that drops the registration -> DENY
+assert_claude_write_deny "$SJ" '{"hooks":{"PreToolUse":[]}}' \
+  "a Write that leaves the kit unregistered must be denied"
+assert_cursor_write_deny "$SJ" '{"hooks":{"PreToolUse":[]}}' \
+  "a Write that leaves the kit unregistered must be denied"
+# A Write that keeps the registration and changes something unrelated -> ALLOW
+KEEP="$(printf '%s' "$REG" | jq '.permissions = {"allow":["Bash(ls:*)"]}')"
+assert_claude_write_allow "$SJ" "$KEEP" \
+  "a Write that keeps the registration must be allowed even though it touches settings.json"
+assert_cursor_write_allow "$SJ" "$KEEP" \
+  "a Write that keeps the registration must be allowed even though it touches settings.json"
+# Unparseable proposed JSON -> DENY (survival cannot be verified, and writing broken settings is
+# itself a defect — the pack's run-status-write-gate sets this precedent)
+assert_claude_write_deny "$SJ" '{"hooks":' \
+  "a Write of unparseable JSON must be denied"
+assert_cursor_write_deny "$SJ" '{"hooks":' \
+  "a Write of unparseable JSON must be denied"
+# An Edit whose old_string carries the registration away -> DENY. Note WHICH registration: only the
+# Bash arm. `_reg_slots` (not "does the gate's filename still appear somewhere") is what makes this a
+# DENY — the Write|Edit arm survives this edit untouched, so a "one mention is enough" test would call
+# it a survival and ALLOW the Bash branch Task 3 just closed being unwired. core/_integrity.sh already
+# rules on this: both matchers are required, "half a registration is half the gate" (it reports
+# `partial`, not `wired`, when one is missing).
+assert_claude_edit_str_deny "$SJ" \
+  '"matcher":"Bash","hooks":[{"type":"command","command":"\"$CLAUDE_PROJECT_DIR/.claude/hooks/flaky-kit-self-protection-gate.sh\""}]' '' \
+  "an Edit that removes the Bash registration must be denied"
+assert_cursor_edit_str_deny "$SJ" \
+  '"matcher":"Bash","hooks":[{"type":"command","command":"\"$CLAUDE_PROJECT_DIR/.claude/hooks/flaky-kit-self-protection-gate.sh\""}]' '' \
+  "an Edit that removes the Bash registration must be denied"
+# An Edit that touches an unrelated key -> ALLOW
+assert_claude_edit_str_allow "$SJ" '"hooks"' '"hooks"' \
+  "a no-op Edit that preserves the registration must be allowed"
+assert_cursor_edit_str_allow "$SJ" '"hooks"' '"hooks"' \
+  "a no-op Edit that preserves the registration must be allowed"
+# When the file is NOT currently registered, the gate has nothing to protect -> ALLOW
+printf '{"hooks":{"PreToolUse":[]}}\n' > "$SJ"
+assert_claude_write_allow "$SJ" '{"hooks":{"PreToolUse":[]}}' \
+  "with no registration present there is nothing to lose, so the write must be allowed"
+assert_cursor_write_allow "$SJ" '{"hooks":{"PreToolUse":[]}}' \
+  "with no registration present there is nothing to lose, so the write must be allowed"
+# ...and that "nothing to lose" exit is what keeps the unparseable-JSON deny from freezing a project
+# that never installed this kit out of its own settings file. Without this control the early
+# not-currently-registered guard has no assertion on it at all: every OTHER unregistered-file case is
+# allowed by the survival comparison anyway (losing none of zero slots), so only the malformed-content
+# path distinguishes "nothing to lose" from "must always end registered".
+assert_claude_write_allow "$SJ" '{"hooks":' \
+  "unparseable JSON in a file this kit is not registered in is not this kit's business"
+assert_cursor_write_allow "$SJ" '{"hooks":' \
+  "unparseable JSON in a file this kit is not registered in is not this kit's business"
+printf '%s\n' "$REG" > "$SJ"
+
+echo "== Task 4: the same rule on CURSOR's registration file, whose shape is different — two EVENTS," >&2
+echo "   not two PreToolUse matchers. Everything above reads a Claude-shaped document, so the two" >&2
+echo "   cursor arms of the gates' _reg_slots() were reachable by no assertion at all: deleting either" >&2
+echo "   one left the whole suite green. One assertion per arm, plus the over-denial control. ==" >&2
+CH="$PROJ/.cursor/hooks.json"
+CGATE_CMD=".cursor/hooks/flaky-kit-self-protection-gate.sh"
+CREG="$(jq -nc --arg c "$CGATE_CMD" '{version:1, hooks:{
+  beforeShellExecution:[{command:$c, timeout:10}],
+  preToolUse:[{command:$c, matcher:"Write|Edit", timeout:10}]}}')"
+printf '%s\n' "$CREG" > "$CH"
+# Unrelated change (the file's own version key) -> ALLOW
+assert_claude_write_allow "$CH" "$(printf '%s' "$CREG" | jq -c '.version = 2')" \
+  "a Write that keeps both Cursor events registered must be allowed"
+assert_cursor_write_allow "$CH" "$(printf '%s' "$CREG" | jq -c '.version = 2')" \
+  "a Write that keeps both Cursor events registered must be allowed"
+# Each event dropped on its own -> DENY. Losing one of the two is a loss: the Bash vector and the
+# file-edit vector are registered separately here, exactly as Claude's two matchers are.
+assert_claude_write_deny "$CH" "$(printf '%s' "$CREG" | jq -c 'del(.hooks.beforeShellExecution)')" \
+  "a Write that drops the Cursor beforeShellExecution registration must be denied"
+assert_cursor_write_deny "$CH" "$(printf '%s' "$CREG" | jq -c 'del(.hooks.beforeShellExecution)')" \
+  "a Write that drops the Cursor beforeShellExecution registration must be denied"
+assert_claude_write_deny "$CH" "$(printf '%s' "$CREG" | jq -c 'del(.hooks.preToolUse)')" \
+  "a Write that drops the Cursor preToolUse registration must be denied"
+assert_cursor_write_deny "$CH" "$(printf '%s' "$CREG" | jq -c 'del(.hooks.preToolUse)')" \
+  "a Write that drops the Cursor preToolUse registration must be denied"
+printf '{"version":1,"hooks":{}}\n' > "$CH"   # restore the fixture's original shape
+
 echo "== Fix 2: SURF_RE stays byte-identical between the two gate scripts (parity) ==" >&2
 CLAUDE_SURF="$(grep -m1 '^SURF_RE=' "$CLAUDE_GATE")"
 CURSOR_SURF="$(grep -m1 '^SURF_RE=' "$CURSOR_GATE")"
 [ -n "$CLAUDE_SURF" ] && [ "$CLAUDE_SURF" = "$CURSOR_SURF" ] && ok || bad "SURF_RE identical across both gate scripts"
+# Same reasoning for Task 4's registration reader: the gates are two files by necessity, not by design,
+# and a divergence here is something a later reader "fixes" in the wrong direction. Only the I/O
+# boundary (which accessor produces the payload) may differ between them.
+CLAUDE_REG="$(sed -n '/^_reg_slots() {/,/^}/p' "$CLAUDE_GATE")"
+CURSOR_REG="$(sed -n '/^_reg_slots() {/,/^}/p' "$CURSOR_GATE")"
+[ -n "$CLAUDE_REG" ] && [ "$CLAUDE_REG" = "$CURSOR_REG" ] && ok || bad "_reg_slots() identical across both gate scripts"
 
 echo "== SURF DRIFT: the bash-ERE fallback and shell-guard.py's SURF must classify the same paths ==" >&2
 # There are two surface patterns in two languages, "kept in sync" by comment only — and the review that

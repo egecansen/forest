@@ -29,11 +29,14 @@
 #                                                        removes the gate, the lib and the record)
 #
 # The harness's own hook registration (.claude/settings.json, .claude/settings.local.json,
-# .cursor/hooks.json) is surface for the BASH branch ONLY (see Round 4 below) — NOT for this list,
-# and NOT for Write/Edit: this branch denies outright on a path match, with no look at the payload,
-# and a settings file legitimately gets edited for reasons that have nothing to do with the kit
-# (permissions, env vars, model). Blanket-denying Write/Edit here would be the negation of the
-# outcome-based check Task 4 owns for that branch, not a coarse approximation of it.
+# .cursor/hooks.json) is deliberately NOT on that list, because the list is a path match and a
+# settings file legitimately gets edited for reasons that have nothing to do with the kit
+# (permissions, env vars, model). The two branches ask different questions about it:
+#   - Bash    -> surface, deny on mutation (Round 4 below). No content is available there and the
+#                outcome of `jq ... > tmp && mv tmp settings.json` cannot be read off the command.
+#   - Write/Edit -> decided by OUTCOME (Round 5 below). The payload IS available, so the branch
+#                answers whether the kit's registration survives the change instead of matching text
+#                that resembles it.
 #
 # Mirrors .claude/hooks/enforcement-self-protection-gate.sh. This is FRICTION, not a wall:
 # PreToolUse `deny` **is** enforced by the current CLI (verified 2026-06-30, observed live — see
@@ -101,7 +104,19 @@
 # the SURF_RE comment for the full reasoning, including why Cursor gets no arm of its own at all (it
 # has no project-level settings.json, `.local` or otherwise). `match_surface` — the Write/Edit
 # matcher — is deliberately UNCHANGED: that branch's rule is deny only when the kit's registration
-# would not survive the edit, which needs the payload Task 4 inspects, not a path match.
+# would not survive the edit, which needs the payload Round 5 inspects, not a path match.
+#
+# Round 5 — the Write/Edit half of the same hole, and deliberately NOT the same rule. That branch has
+# the proposed content (`tool_input.content`, or `old_string`/`new_string` reconstructed against the
+# file), so it can answer the property instead of a proxy for it: with this change applied, is the
+# kit's gate still registered? Deny only when it currently is and would not be. Matching "the gate
+# command string appears in the payload" would be the textual proxy, and a proxy standing in for a
+# property has caused three separate defects in this kit already. Two consequences worth stating
+# because they are choices, not oversights: an edit to a settings file that carries NO registration
+# today passes (the rule is "would lose what it has", never "must always end registered" — a project
+# that never installed this kit is not frozen out of its own settings), and unparseable proposed JSON
+# is DENIED (survival cannot be verified, and writing malformed settings is itself a defect — the
+# pack's run-status-write-gate sets that precedent).
 #
 # Failure -> action
 # -----------------
@@ -208,7 +223,7 @@ fi
 # is a claim nothing can check. This is the Bash-branch pattern ONLY: `match_surface` below (the
 # Write/Edit matcher) is deliberately untouched by these settings paths — that branch decides by
 # OUTCOME (does the registration survive the edit), which needs the payload, not a path match; see
-# Task 4.
+# Round 5 above and the settings arm of the Write|Edit `case`.
 SURF_RE='\.claude/skills/hektor-flaky-triage(/|$|[[:space:]";)&|])|\.claude/hooks/(flaky-kit-self-protection-gate\.sh|\.flaky-kit-expect|lib/)|\.cursor/hooks/(flaky-kit-self-protection-gate\.sh|lib/)|\.(claude|cursor)/hooks($|[[:space:]";)&|])|\.claude/settings(\.local)?\.json|\.cursor/hooks\.json'
 # Bash mutation indicators (redirect / in-place / copy / move / delete / perm / git-mutate / rsync /
 # patch) — heuristic, errs toward flagging. Used as the fallback ONLY when python3/shell-guard.py
@@ -254,13 +269,75 @@ match_surface() {  # $1 = a path -> sets SURFACE and returns 0, or returns 1
   esac
 }
 
+# _reg_slots <json-file> -> one sorted line per harness slot the kit's gate is registered under, e.g.
+# "PreToolUse:Bash" / "beforeShellExecution". Silent and empty for an unreadable or unparseable file.
+#
+# Kept BYTE-IDENTICAL with the OTHER harness's gate (asserted by core/tests/self-protection-test.sh);
+# only the I/O boundary that feeds it differs between the two harnesses.
+#
+# `test(...)` on the gate FILENAME, not on a whole command string, because we are asking whether the
+# REGISTRATION exists — not whether some text happens to appear. And SLOTS, not a count of mentions:
+# core/_integrity.sh already rules that a harness's two slots are both required ("half a registration
+# is half the gate" — it answers `partial`, not `wired`, when one is missing), so "at least one
+# command still names the gate" would call deleting the whole Bash arm a survival and silently unwire
+# the entire Bash branch. Compare the SET before against the SET after; adding slots is fine.
+_reg_slots() {
+  "$JQ" -r '
+    def gate: select((.command // "") | test("flaky-kit-self-protection-gate\\.sh"));
+    [ (.hooks.PreToolUse // [])[]? | (.matcher // "") as $m | (.hooks // [])[]? | gate | "PreToolUse:\($m)" ]
+    + [ (.hooks.beforeShellExecution // [])[]? | gate | "beforeShellExecution" ]
+    + [ (.hooks.preToolUse // [])[]? | gate | "preToolUse" ]
+    | unique | .[]
+  ' "$1" 2>/dev/null
+}
+
 case "$TOOL_NAME" in
   Write|Edit)
     TARGET=$(echo "$INPUT" | "$JQ" -r '.tool_input.file_path // empty' 2>/dev/null || echo "")
     [ -n "$TARGET" ] || exit 0
-    # Check the CANONICAL form first (closes ./ ../ symlink/cwd-relative bypasses); fall back to the
-    # raw TARGET so an already-literal path still matches even if canon_path degraded to a no-op.
-    if match_surface "$(canon_path "$TARGET")"; then :; elif match_surface "$TARGET"; then :; else exit 0; fi ;;
+    # Settings files are surface for Bash (no content to inspect there) but decided by OUTCOME here,
+    # where the payload is available: deny only when the kit's registration would not survive. Blanket-
+    # denying would make this kit block unrelated permission/env/model edits in every project it is
+    # installed into — heavy for a component that claims to be standalone — so `match_surface` carries
+    # no settings arm and this arm sits in front of it.
+    case "$(canon_path "$TARGET")" in
+      */.claude/settings.json|*/.claude/settings.local.json|*/.cursor/hooks.json)
+        [ -r "$TARGET" ] || exit 0                   # nothing registered yet -> nothing to lose
+        _was="$(mktemp)"; _reg_slots "$TARGET" > "$_was"
+        # NOT "must always end registered": a project that never installed this kit must not be frozen
+        # out of its own settings file, malformed content included.
+        [ -s "$_was" ] || { rm -f "$_was"; exit 0; }  # not currently registered -> nothing to lose
+        _prop="$(mktemp)"
+        if [ "$TOOL_NAME" = Write ]; then
+          echo "$INPUT" | "$JQ" -r '.tool_input.content // ""' > "$_prop"
+        else
+          OLD=$(echo "$INPUT" | "$JQ" -r '.tool_input.old_string // ""')
+          NEW=$(echo "$INPUT" | "$JQ" -r '.tool_input.new_string // ""')
+          # Literal (never regex) first-occurrence replace, matching the Edit tool's own semantics —
+          # same lesson as hooks/run-status-write-gate.sh, whose awk sub() reconstruction failed OPEN
+          # on a metacharacter in old_string. No python3 -> reconstruct as "unchanged", which is the
+          # fail-open floor: this gate must never wedge every tool call.
+          python3 - "$TARGET" "$OLD" "$NEW" > "$_prop" <<'PY' || cp "$TARGET" "$_prop"
+import sys
+src, old, new = open(sys.argv[1]).read(), sys.argv[2], sys.argv[3]
+sys.stdout.write(src.replace(old, new, 1) if old else src)
+PY
+        fi
+        if "$JQ" -e . "$_prop" >/dev/null 2>&1; then
+          _now="$(mktemp)"; _reg_slots "$_prop" > "$_now"
+          _lost="$(grep -Fxv -f "$_now" "$_was" | tr '\n' ' ' | sed 's/ *$//')"
+          rm -f "$_now"
+          if [ -z "$_lost" ]; then rm -f "$_was" "$_prop"; exit 0; fi   # every slot survives -> allow
+          SURFACE="harness settings — this change would leave the kit's gate unregistered for: ${_lost}"
+        else
+          SURFACE="harness settings — the proposed content is not parseable JSON, so the registration's survival cannot be verified"
+        fi
+        rm -f "$_was" "$_prop" ;;
+      *)
+        # Check the CANONICAL form first (closes ./ ../ symlink/cwd-relative bypasses); fall back to the
+        # raw TARGET so an already-literal path still matches even if canon_path degraded to a no-op.
+        if match_surface "$(canon_path "$TARGET")"; then :; elif match_surface "$TARGET"; then :; else exit 0; fi ;;
+    esac ;;
   Bash)
     # Bash file-writes bypass the Write|Edit matcher — close that gap. Flag only when a command both
     # TOUCHES the surface AND MUTATES it (a read like `cat core/x.sh` passes through untouched).
