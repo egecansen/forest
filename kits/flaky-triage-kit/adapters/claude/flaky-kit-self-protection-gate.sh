@@ -27,10 +27,13 @@
 #   - .claude/hooks/lib/, .cursor/hooks/{gate,lib/}     (the audit lib + the other harness's gate)
 #   - .claude/hooks, .cursor/hooks                      (the DIRECTORIES, as operands — removing one
 #                                                        removes the gate, the lib and the record)
-#   - .claude/settings.json, .claude/settings.local.json,
-#     .cursor/hooks.json                                (the harness's own hook registration — deleting
-#                                                        or truncating it turns every protection above
-#                                                        off for free; Bash-branch only, see Round below)
+#
+# The harness's own hook registration (.claude/settings.json, .claude/settings.local.json,
+# .cursor/hooks.json) is surface for the BASH branch ONLY (see Round 4 below) — NOT for this list,
+# and NOT for Write/Edit: this branch denies outright on a path match, with no look at the payload,
+# and a settings file legitimately gets edited for reasons that have nothing to do with the kit
+# (permissions, env vars, model). Blanket-denying Write/Edit here would be the negation of the
+# outcome-based check Task 4 owns for that branch, not a coarse approximation of it.
 #
 # Mirrors .claude/hooks/enforcement-self-protection-gate.sh. This is FRICTION, not a wall:
 # PreToolUse `deny` **is** enforced by the current CLI (verified 2026-06-30, observed live — see
@@ -91,11 +94,14 @@
 # never a substitute for either.
 #
 # Round 4 — NOT another shell-construct chase (Round 3 above is still the last of those): this widens
-# WHAT counts as surface, not HOW a command is parsed. Every fix through Round 3 protected the gate and
-# what it reads; none protected the registration that makes the gate run at all. `.claude/settings.json`
-# / `.claude/settings.local.json` / `.cursor/hooks.json` join the surface for exactly that reason — see
-# the header bullet and the SURF_RE comment below for the full reasoning, including why Cursor gets no
-# `.local` arm.
+# WHAT counts as surface for the BASH branch ONLY, not HOW a command is parsed and not the Write/Edit
+# branch below. Every fix through Round 3 protected the gate and what it reads; none protected the
+# registration that makes the gate run at all. `.claude/settings.json` / `.claude/settings.local.json`
+# / `.cursor/hooks.json` join the Bash-branch surface for exactly that reason (`SURF_RE` below) — see
+# the SURF_RE comment for the full reasoning, including why Cursor gets no arm of its own at all (it
+# has no project-level settings.json, `.local` or otherwise). `match_surface` — the Write/Edit
+# matcher — is deliberately UNCHANGED: that branch's rule is deny only when the kit's registration
+# would not survive the edit, which needs the payload Task 4 inspects, not a path match.
 #
 # Failure -> action
 # -----------------
@@ -195,11 +201,15 @@ fi
 # with a redirect) was a verified ALLOW — unregistering the gate is cheaper than editing it, and every
 # other entry on this surface is downstream of that one registration existing. `.claude/settings.local.json`
 # is included because Claude Code merges hook config from both project settings files. Cursor's real
-# registration file is `.cursor/hooks.json` — checked, not assumed: Cursor has no working project-level
-# `.cursor/settings.json` (user settings are a SQLite blob, not a file), so there is no `.local` variant
-# of it to add. This is the Bash-branch pattern only; a Write/Edit that rewrites a settings file but
-# PRESERVES the registration is a separate, content-aware question (see match_surface below / Task 4).
-SURF_RE='\.claude/skills/hektor-flaky-triage(/|$|[[:space:]";)&|])|\.claude/hooks/(flaky-kit-self-protection-gate\.sh|\.flaky-kit-expect|lib/)|\.cursor/hooks/(flaky-kit-self-protection-gate\.sh|lib/)|\.(claude|cursor)/hooks($|[[:space:]";)&|])|\.(claude|cursor)/settings(\.local)?\.json|\.cursor/hooks\.json'
+# registration file is `.cursor/hooks.json` — checked, not assumed: Cursor has no project-level
+# `settings.json` of ANY kind (not merely no `.local` variant — user settings are a SQLite blob, not a
+# file, and a `.vscode/settings.json`-style per-project override does not work in Cursor at all), so no
+# `.cursor/settings.json` arm is added, `.local` or otherwise — a pattern for a file that cannot exist
+# is a claim nothing can check. This is the Bash-branch pattern ONLY: `match_surface` below (the
+# Write/Edit matcher) is deliberately untouched by these settings paths — that branch decides by
+# OUTCOME (does the registration survive the edit), which needs the payload, not a path match; see
+# Task 4.
+SURF_RE='\.claude/skills/hektor-flaky-triage(/|$|[[:space:]";)&|])|\.claude/hooks/(flaky-kit-self-protection-gate\.sh|\.flaky-kit-expect|lib/)|\.cursor/hooks/(flaky-kit-self-protection-gate\.sh|lib/)|\.(claude|cursor)/hooks($|[[:space:]";)&|])|\.claude/settings(\.local)?\.json|\.cursor/hooks\.json'
 # Bash mutation indicators (redirect / in-place / copy / move / delete / perm / git-mutate / rsync /
 # patch) — heuristic, errs toward flagging. Used as the fallback ONLY when python3/shell-guard.py
 # is unavailable for the Bash branch below (degraded precision, documented, not silent).
@@ -240,9 +250,6 @@ match_surface() {  # $1 = a path -> sets SURFACE and returns 0, or returns 1
     */.claude/hooks/lib/*)                                SURFACE="kit protection hook lib (Claude)"; return 0 ;;
     */.claude/hooks/.flaky-kit-expect)                    SURFACE="kit lock-tier record (out-of-tree)"; return 0 ;;
     */.claude/hooks|*/.cursor/hooks)                      SURFACE="harness hooks directory (holds the gate, its lib, and the lock-tier record)"; return 0 ;;
-    */.claude/settings.json|*/.claude/settings.local.json) \
-                                                          SURFACE="harness settings (holds the gate's registration)"; return 0 ;;
-    */.cursor/hooks.json)                                 SURFACE="harness settings (holds the gate's registration)"; return 0 ;;
     *) return 1 ;;
   esac
 }

@@ -626,16 +626,15 @@ Extend the default alternation (keep the `_SURF_ROOT` override additive, as it a
                      r'|\.cursor/hooks\.json'
 ```
 
-- [ ] **Step 4: Add them to both gates' `SURF_RE` and `match_surface`**
+- [ ] **Step 4: Add them to both gates' `SURF_RE` — and to nothing else**
 
-`SURF_RE` gains the same two alternatives. `match_surface` gains:
+`SURF_RE` gains the same alternatives, byte-identical between the two gates.
 
-```bash
-    */.claude/settings.json|*/.claude/settings.local.json) SURFACE="harness settings (holds the gate's registration)"; return 0 ;;
-    */.cursor/settings.json|*/.cursor/settings.local.json|*/.cursor/hooks.json) SURFACE="harness settings (holds the gate's registration)"; return 0 ;;
-```
+**Do not touch `match_surface`.** It is the Write/Edit branch's matcher, and a path matching it is denied outright with no look at the payload. That is the negation of what Task 4 must build, not a coarse first approximation of it: the spec's rule for that branch is *deny only when the kit's registration would not survive*, so an edit that changes permissions, env or model has to pass. Adding settings paths here would also delete the only assertions that a settings file stays editable, which is precisely the property Task 4 is supposed to turn red before it turns green.
 
-Check during implementation whether Cursor actually has a `settings.local.json`; if it does not, drop that arm rather than carrying a pattern for a file that cannot exist — and say so in your report.
+Leave every Write/Edit-branch assertion in `core/tests/self-protection-test.sh` exactly as it is, including the two `edit_allow` assertions on `.claude/settings.json`. Task 4 owns them.
+
+Cursor has no project-level `settings.json` and no `.local` variant. Do not carry an alternative for either in `SURF` or `SURF_RE` — a pattern for a file that cannot exist is a claim nothing can check, and it invites a later reader to "restore" the matching Write/Edit arm for symmetry.
 
 - [ ] **Step 5: Verify directly, not only through the suite**
 

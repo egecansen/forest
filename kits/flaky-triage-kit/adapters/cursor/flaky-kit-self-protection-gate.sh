@@ -45,10 +45,14 @@
 # gate is friction on top of whichever tier is actually reached, never a substitute for either.
 #
 # Round 4 — NOT another shell-construct chase (Round 3 above is still the last of those): this widens
-# WHAT counts as surface, not HOW a command is parsed. Every fix through Round 3 protected the gate and
-# what it reads; none protected the registration that makes the gate run at all. `.claude/settings.json`
-# / `.claude/settings.local.json` / `.cursor/hooks.json` join the surface for exactly that reason — see
-# the SURF_RE comment below for the full reasoning, including why Cursor gets no `.local` arm.
+# WHAT counts as surface for the BASH branch ONLY, not HOW a command is parsed and not the Write/Edit
+# branch below. Every fix through Round 3 protected the gate and what it reads; none protected the
+# registration that makes the gate run at all. `.claude/settings.json` / `.claude/settings.local.json`
+# / `.cursor/hooks.json` join the Bash-branch surface for exactly that reason (`SURF_RE` below) — see
+# the SURF_RE comment for the full reasoning, including why Cursor gets no arm of its own at all (it
+# has no project-level settings.json, `.local` or otherwise). `match_surface` — the Write/Edit
+# matcher — is deliberately UNCHANGED: that branch's rule is deny only when the kit's registration
+# would not survive the edit, which needs the payload Task 4 inspects, not a path match.
 set -uo pipefail
 
 _DIR="$(dirname "${BASH_SOURCE[0]}")"
@@ -75,10 +79,13 @@ cc_read_input
 # redirect) was a verified ALLOW — unregistering the gate is cheaper than editing it, and every other
 # entry on this surface is downstream of that one registration existing. `.claude/settings.local.json`
 # is included because Claude Code merges hook config from both project settings files. Cursor's real
-# registration file is `.cursor/hooks.json` — checked, not assumed: Cursor has no working project-level
-# `.cursor/settings.json` (user settings are a SQLite blob, not a file), so there is no `.local` variant
-# of it to add. Bash-branch pattern only; see the Claude gate's comment for the same reasoning in full.
-SURF_RE='\.claude/skills/hektor-flaky-triage(/|$|[[:space:]";)&|])|\.claude/hooks/(flaky-kit-self-protection-gate\.sh|\.flaky-kit-expect|lib/)|\.cursor/hooks/(flaky-kit-self-protection-gate\.sh|lib/)|\.(claude|cursor)/hooks($|[[:space:]";)&|])|\.(claude|cursor)/settings(\.local)?\.json|\.cursor/hooks\.json'
+# registration file is `.cursor/hooks.json` — checked, not assumed: Cursor has no project-level
+# `settings.json` of ANY kind (not merely no `.local` variant — user settings are a SQLite blob, not a
+# file, and a `.vscode/settings.json`-style per-project override does not work in Cursor at all), so no
+# `.cursor/settings.json` arm is added, `.local` or otherwise. Bash-branch pattern ONLY: `match_surface`
+# below (the Write/Edit matcher) is deliberately untouched by these settings paths; see the Claude
+# gate's comment for the same reasoning in full.
+SURF_RE='\.claude/skills/hektor-flaky-triage(/|$|[[:space:]";)&|])|\.claude/hooks/(flaky-kit-self-protection-gate\.sh|\.flaky-kit-expect|lib/)|\.cursor/hooks/(flaky-kit-self-protection-gate\.sh|lib/)|\.(claude|cursor)/hooks($|[[:space:]";)&|])|\.claude/settings(\.local)?\.json|\.cursor/hooks\.json'
 # Fallback ONLY when python3/shell-guard.py is unavailable (degraded precision, documented).
 MUT_RE='(>>?|[[:space:]]tee[[:space:]]|sed[[:space:]]+-i|(^|[;&|[:space:]])(cp|mv|rm|chmod|chown|truncate|dd|install|ln|rsync|patch)([[:space:]]|$)|(^|[;&|[:space:]])git[[:space:]]+(checkout|apply|restore|stash|reset|clean)([[:space:]]|$))'
 
@@ -115,9 +122,6 @@ match_surface() {
     */.claude/hooks/lib/*)                                SURFACE="kit protection hook lib (Claude)"; return 0 ;;
     */.claude/hooks/.flaky-kit-expect)                    SURFACE="kit lock-tier record (out-of-tree)"; return 0 ;;
     */.claude/hooks|*/.cursor/hooks)                      SURFACE="harness hooks directory (holds the gate, its lib, and the lock-tier record)"; return 0 ;;
-    */.claude/settings.json|*/.claude/settings.local.json) \
-                                                          SURFACE="harness settings (holds the gate's registration)"; return 0 ;;
-    */.cursor/hooks.json)                                 SURFACE="harness settings (holds the gate's registration)"; return 0 ;;
     *) return 1 ;;
   esac
 }

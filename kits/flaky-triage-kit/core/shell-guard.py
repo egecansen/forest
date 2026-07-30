@@ -111,16 +111,19 @@ import sys, re, os
 # one registration existing. `.claude/settings.local.json` is included because Claude Code merges hook
 # config from both project settings files, so the registration can live in either. Cursor's real
 # analogue is `.cursor/hooks.json` — its own project settings model was checked, not assumed: Cursor
-# has no working project-level `.cursor/settings.json` (attempts to use one fail; user settings are a
-# SQLite blob, not a file), so there is no `.local` variant to protect and none is added below. This is
-# Bash-branch-only: a Write/Edit that rewrites a settings file but PRESERVES the registration is a
-# different, content-aware question this module cannot answer from a command string alone.
+# has no project-level `settings.json` of ANY kind (not merely no `.local` variant — user settings are
+# a SQLite blob, not a file, and a `.vscode/settings.json`-style per-project override does not work in
+# Cursor at all), so no `.cursor/settings.json` alternative is added below, `.local` or otherwise — a
+# pattern for a file that cannot exist is a claim nothing can check. This is Bash-branch-only: the
+# gates' `match_surface` (the Write/Edit matcher) is deliberately untouched by these settings paths —
+# that branch decides by OUTCOME (does the registration survive the edit), which needs the payload,
+# not a path match; see Task 4.
 _END = r'(?=[\s"\'`;)&|]|$)'          # zero-width end-of-shell-token boundary
 _DEFAULT_SURF = (r'\.claude/skills/hektor-flaky-triage(?:/|' + _END + r')'
                  r'|\.claude/hooks/(?:flaky-kit-self-protection-gate\.sh|\.flaky-kit-expect|lib/)'
                  r'|\.cursor/hooks/(?:flaky-kit-self-protection-gate\.sh|lib/)'
                  r'|\.(?:claude|cursor)/hooks(?:' + _END + r')'
-                 r'|\.(claude|cursor)/settings(\.local)?\.json'
+                 r'|\.claude/settings(\.local)?\.json'
                  r'|\.cursor/hooks\.json')
 # PATH-INDEPENDENT: set HEKTOR_FK_SURFACE to the kit's install root and a kit installed ANYWHERE
 # protects itself (the standalone gates do this).

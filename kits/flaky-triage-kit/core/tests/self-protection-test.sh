@@ -132,6 +132,7 @@ assert_claude_edit_deny  "$PROJ/.cursor/hooks/flaky-kit-self-protection-gate.sh"
 assert_claude_edit_deny  "$PROJ/.cursor/hooks/lib/cursor-compat.sh"              "cursor lib"
 assert_claude_edit_deny  "$PROJ/.claude/hooks/lib/audit.sh"                      "claude audit lib"
 assert_claude_edit_allow "$PROJ/.cursor/rules/hektor-flaky-triage.mdc"           "unrelated cursor rule file"
+assert_claude_edit_allow "$PROJ/.claude/settings.json"                          "unrelated claude settings"
 
 echo "== Fix 2 (Task 5): relocated Claude gate lives at .claude/hooks/, out of the shadowable kit tree ==" >&2
 assert_claude_edit_deny  "$PROJ/.claude/hooks/flaky-kit-self-protection-gate.sh" "the relocated Claude gate protects itself at its new path"
@@ -142,17 +143,8 @@ assert_cursor_edit_deny  "$PROJ/.claude/hooks/flaky-kit-self-protection-gate.sh"
 assert_cursor_edit_deny  "$PROJ/.claude/hooks/lib/audit.sh"                      "claude audit lib (parity)"
 assert_cursor_edit_deny  "$PROJ/.cursor/hooks/flaky-kit-self-protection-gate.sh" "cursor gate self-protect"
 assert_cursor_edit_deny  "$PROJ/.cursor/hooks/lib/cursor-compat.sh"              "cursor lib self-protect"
+assert_cursor_edit_allow "$PROJ/.claude/settings.json"                          "unrelated claude settings"
 assert_cursor_edit_allow "$PROJ/.cursor/rules/hektor-flaky-triage.mdc"           "unrelated cursor rule"
-
-echo "== Task 3: harness settings files are surface too — match_surface widened alongside SURF_RE/SURF." >&2
-echo "   '.claude/settings.json' used to be the file used above as the 'unrelated, stays editable'" >&2
-echo "   control; it no longer is one, because it HOLDS the gate's own registration. ==" >&2
-assert_claude_edit_deny  "$PROJ/.claude/settings.json"                          "the gate's own registration lives here"
-assert_claude_edit_deny  "$PROJ/.claude/settings.local.json"                    "Claude Code merges hook config from both project settings files"
-assert_claude_edit_deny  "$PROJ/.cursor/hooks.json"                             "Cursor's hook registration file"
-assert_cursor_edit_deny  "$PROJ/.claude/settings.json"                          "the gate's own registration lives here (parity)"
-assert_cursor_edit_deny  "$PROJ/.claude/settings.local.json"                    "parity"
-assert_cursor_edit_deny  "$PROJ/.cursor/hooks.json"                            "Cursor's hook registration file (parity)"
 
 echo "== Fix 2 (Task 5 correction): Bash-vector mutation of the relocated gate's OWN file must DENY —" >&2
 echo "   this exercises core/shell-guard.py's SURF regex (the real Bash-branch decision-maker; the" >&2
