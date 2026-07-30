@@ -51,7 +51,7 @@ So a second function with its own values, and `integrity_guard` evaluates both.
 | `dangling` | registered, but the file it points at is absent — **the observed case** |
 | `foreign` | the file exists but is not root-owned at the hardened tier, so it cannot be the kit's gate |
 | `partial` | one matcher registered, the other not — half the protection is silently off |
-| `absent` | no harness settings file at all. **Not a defect and not a warning** |
+| `absent` | no harness is required here — not an installed layout, no `jq`, or a record naming none. **Not a defect and not a warning** |
 
 `absent` is separate on purpose. The kit claims to run standalone from a terminal, so "no gate" and
 "a gate that should be there and isn't" are different facts. Merging them would print a meaningless
@@ -87,15 +87,31 @@ proxy that happens to be right; checking the shape is the property itself.
 | Claude | `<proj>/.claude/settings.json`, `settings.local.json` | the gate command under `PreToolUse`, in **both** the `Write\|Edit` and `Bash` matchers |
 | Cursor | `<proj>/.cursor/hooks.json` | `beforeShellExecution` and `preToolUse` registrations |
 
-Each harness is only required if its settings file exists, so a single-harness install raises nothing
-for the other. On the Claude side a registration in **either** `settings.json` or
-`settings.local.json` counts as wired — requiring both would fail every project that uses only one.
+**Which harnesses are required comes from the install-time record, not from inference.** `--harness`
+was a flag that vanished after the run, so the only available proxy was "a settings file exists" —
+which flags a project carrying a `.cursor/hooks.json` from some unrelated tool even though the kit
+was installed for Claude alone. `install.sh` now writes its selection to `core/.harness`, inside the
+surface `harden_targets` chowns, so at the hardened tier an agent cannot rewrite it to require
+nothing. A kit with no record predates the file and falls back to the old inference; requiring
+nothing instead would turn every existing install into a green `wired`.
 
-**When both harnesses are configured, the worse value wins.** A project whose Claude gate is `wired`
-and whose Cursor gate is `dangling` reports `dangling`, and the message names which harness. Taking
-the better value would let a broken half hide behind a working half, which is the one-harness
-asymmetry Tasks 5 and 6 each had to fix; taking the worse one is also what the tier axis already does
-when protection and record disagree.
+On the Claude side a registration in **either** `settings.json` or `settings.local.json` counts as
+wired — requiring both would fail every project that uses only one.
+
+**`dangling` resolves the registered path.** The check extracts the registered `.command`, expands
+`$CLAUDE_PROJECT_DIR`, resolves a relative path against the project root, and tests *that* file —
+not the path this kit would have installed. Asking "does some command string mention the gate?" and
+then stat-ing the canonical path are two different questions: a `settings.json` copied between
+machines answers the first yes while the gate never runs, and reporting `wired` there is precisely
+the false assurance this axis exists to remove. Ownership at the hardened tier is tested on the same
+resolved path.
+
+**When both harnesses are required, the worse value wins.** A project whose Claude gate is `wired`
+and whose Cursor gate is `dangling` reports `dangling`. Taking the better value would let a broken
+half hide behind a working half, which is the one-harness asymmetry Tasks 5 and 6 each had to fix;
+taking the worse one is also what the tier axis already does when protection and record disagree.
+The returned value does not name which harness produced it, and the message does not either — it
+directs the reader to re-run the installer, which repairs both.
 
 **Cost, and the cache that was rejected.** One `jq` invocation per settings file present (at most
 three: the Claude pair and Cursor's) plus one or two `stat` calls per entrypoint — roughly double to
