@@ -262,8 +262,8 @@ integrity_tier() {
   return 0
 }
 
-# integrity_report <tier> -> 0 to proceed, 76 to refuse. Prints to stderr, never stdout, so it can
-# never contaminate a script whose stdout is a JSON contract (rerun, gate, ledger, summary).
+# integrity_report <tier> <wiring> -> 0 to proceed, 76 to refuse. Prints to stderr, never stdout, so
+# it can never contaminate a script whose stdout is a JSON contract (rerun, gate, ledger, summary).
 #
 # Split out from integrity_guard so the messaging/decision half is a PURE function of the tier
 # string and can be driven directly by the test suite. An earlier draft kept them fused and let the
