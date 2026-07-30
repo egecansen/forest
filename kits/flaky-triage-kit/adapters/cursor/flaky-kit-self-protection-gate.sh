@@ -43,6 +43,12 @@
 # SKILL.md, both gate scripts and their vendored libs) and the kit ROOT to root — not merely a read-only
 # bit, which a same-user chmod reverses; below hardened it degrades to exactly that chmod-only bit. This
 # gate is friction on top of whichever tier is actually reached, never a substitute for either.
+#
+# Round 4 — NOT another shell-construct chase (Round 3 above is still the last of those): this widens
+# WHAT counts as surface, not HOW a command is parsed. Every fix through Round 3 protected the gate and
+# what it reads; none protected the registration that makes the gate run at all. `.claude/settings.json`
+# / `.claude/settings.local.json` / `.cursor/hooks.json` join the surface for exactly that reason — see
+# the SURF_RE comment below for the full reasoning, including why Cursor gets no `.local` arm.
 set -uo pipefail
 
 _DIR="$(dirname "${BASH_SOURCE[0]}")"
