@@ -135,11 +135,13 @@ its edge:
    user-writable for the harness's own unrelated edits — so this gate (Bash mutation-deny, Write/Edit
    outcome-check) is their only defense, at every tier including hardened, and it shares the same
    heuristic-bypass limits already named for the rest of this gate.
-2. The wiring check proves the registration is present and points at a file this kit owns. It cannot
-   prove the harness will honour it — a harness-level disable is outside anything the kit can see.
+2. The wiring check proves the registration is present and, at the hardened or stale tier, that it
+   points at a file this kit owns — below those tiers only existence is checked. Either way it
+   cannot prove the harness will honour it — a harness-level disable is outside anything the kit can
+   see.
 3. A registered gate path containing spaces resolves to its first token.
-4. `_wiring_one` tests that the gate file exists, not that it is executable, so a registered but
-   non-executable gate reads as `wired` below the hardened tier.
+4. `_wiring_one` tests that the gate file exists, not that it is executable, at every tier including
+   hardened — a registered, root-owned, non-executable gate still reads as `wired`.
 5. The guard re-evaluates per entrypoint process, so the warning can print up to three times in a
    triage that chains `ingest` and `cluster`. This is the accepted cost of the guard reading nothing
    from the environment.
@@ -174,6 +176,13 @@ Also recorded as out of scope, and not selected: the **reviewer-attestation clus
 something other than a sentence in a prompt — nothing currently enforces that a reviewer rather than
 the fixer ran `gate.sh`. It is larger than a single plan and would need its own design cycle.
 
-Two of the five residuals above are cheaply closeable if they are ever worth a round: putting the
-settings files' parent directories on the harden surface, which closes the replace-rather-than-edit
-path, and testing the registered gate for executability rather than mere existence.
+One of the five residuals above is cheaply closeable if it's ever worth a round: testing the
+registered gate for executability rather than mere existence (residual 4). Residual 1 has no cheap
+fix. The settings files must stay user-writable for the harness's own unrelated edits (permissions,
+env, model, MCP config), so there is no ownership floor to add without breaking that. Chowning
+`.claude/`/`.cursor/` doesn't route around it either: the settings files would still need to stay
+individually editable for those legitimate updates, and it collides with `core/lock-kit.sh`'s own
+requirement that `.claude/hooks` (nested inside `.claude/`) stay user-writable for the pack
+installer. What's there — the CLI gate's Bash mutation-deny and Write/Edit outcome-check — is
+already the limit of what this residual can close without taking away the harness's own write
+access to its own settings.

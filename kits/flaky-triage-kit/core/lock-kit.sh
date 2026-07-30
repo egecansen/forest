@@ -105,10 +105,11 @@
 #      compiled writer, or any construct that is not a literal, parseable command naming a
 #      recognized verb).
 #   8. The wiring check (`core/_integrity.sh`'s `integrity_wiring`) reads the same settings files an
-#      agent can also write. It proves a registration is present and, at the hardened tier, that it
-#      points at a file this kit still owns — it cannot prove the harness itself will honour that
-#      registration. A harness setting that disables hooks entirely, or a harness bug that silently
-#      ignores one, is outside anything this file or `_integrity.sh` can see.
+#      agent can also write. It proves a registration is present and, at the hardened or stale tier,
+#      that it points at a file this kit still owns — below those, existence is all it checks. It
+#      cannot prove the harness itself will honour that registration, at any tier. A harness setting
+#      that disables hooks entirely, or a harness bug that silently ignores one, is outside anything
+#      this file or `_integrity.sh` can see.
 #
 # Closed since this list was first written, recorded here so the change stays legible instead of
 # quietly vanishing: `core/shell-guard.py` honoured `HEKTOR_FK_SURFACE` by REPLACING its surface

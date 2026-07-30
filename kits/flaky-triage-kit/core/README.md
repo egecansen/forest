@@ -21,7 +21,7 @@ and calls these; it MUST NOT mutate state except through them (kernel P2).
 | `hedge-scan` | fixer's own summary text → clean (0) / HEDGED + matched phrases (2) | cheap deterministic pre-screen: self-reported uncertainty ("should work", "only ran once") is not a green — catch it before spending a reviewer call |
 | `apply` | a fix patch → applied in the working tree (git-tracked, clean-tree check) + diff | **I3** confined to `source_roots`, git-reversible, kit never commits · **I10** rev-pin |
 | `ledger` | read/write run state via validated subcommands (v2: cluster-upsert / cluster-state / event / validate · cluster-vrt) | **I5** re-derive "applied" from source, never trust ledger for safety · **I11** `validate --final` gates session end |
-| `_integrity` *(sourced)* | kit root → tier (`hardened`/`unlocked`/`degraded`/`unprotected`/`mismatch`/`stale`) **and** wiring (`wired`/`unregistered`/`dangling`/`foreign`/`partial`/`absent`) | **P4** both are asserted at every entrypoint, not assumed. Refuses (76) when protection is weaker than recorded — a tier mismatch, or a hardened tier whose gate registration no longer resolves |
+| `_integrity` *(sourced)* | kit root → tier (`hardened`/`unlocked`/`degraded`/`unprotected`/`mismatch`/`stale`) **and** wiring (`wired`/`unregistered`/`dangling`/`foreign`/`partial`/`absent`) | **P4** both are asserted at every entrypoint, not assumed. Refuses (76) on a tier `mismatch`, or when a `hardened`/`stale` tier's wiring is `dangling`/`unregistered`/`partial`/`foreign` |
 | `lock-kit` | `lock`/`unlock`/`status` → OS-level tier on the safety surface | **P4** hardened = root-owned safety surface **including the kit root** (reopen needs a password); degrades to chmod-only and names the tier it actually reached |
 | `summary` | ledger → convergence report | **I7** allowlist emitted fields (no raw stackTrace / PII / tokens) |
 
@@ -48,9 +48,12 @@ The self-protection gate guards this dir (edits need `HEKTOR_FLAKYKIT_UNLOCK=1`)
 **verified** (2026-06-25: deny on `core/**` + `SKILL.md`, allow + audit on the unlock, passthrough
 otherwise) and the gate also matches **Bash** writes (redirect/`sed -i`/`cp`/`mv`/`rm`/`chmod`) —
 including, since 2026-07-30, the kit tree and both harnesses' hook directories as `mv`/`rm`
-**operands**, and the out-of-tree `.flaky-kit-expect` record. It did not match any of those before:
-every surface pattern ended in `/`, so `mv <kit> /tmp/x` and `rm -rf .claude/hooks` were allowed and
-unaudited on every install.
+**operands**, the out-of-tree `.flaky-kit-expect` record, and the harness settings files that
+register the gate at all (`.claude/settings.json`, `.claude/settings.local.json`,
+`.cursor/hooks.json`): Bash denies any mutation of them outright, and Write/Edit denies only an edit
+that would drop the registration — neither is chown-backed the way `core/**` is (full residual in
+`core/lock-kit.sh`'s header). It did not match any of those before: every surface pattern ended in
+`/`, so `mv <kit> /tmp/x` and `rm -rf .claude/hooks` were allowed and unaudited on every install.
 
 **2026-06-30 correction, itself corrected 2026-07-30:** PreToolUse `deny` **is** enforced by the
 current CLI (observed live — a sibling gate blocked a `settings.json` edit), so the gate's denials are
@@ -69,7 +72,8 @@ that as a description of one). Reopening then needs a password, not just `HEKTOR
 PreToolUse gate intercepts an agent's call with it set, never by `lock-kit.sh` running directly). Both
 `lock` and `unlock` end with `sudo -k`, because sudo's cached credential otherwise leaves a ~5-minute
 no-prompt reopen window that `lock` itself created. Without `sudo` the tier **degrades** to the old
-chmod-a-w-only behaviour, which the same user can reverse. `core/_integrity.sh` asserts the tier
-that's actually there at every entrypoint (2026-07-29), so a silent slip from hardened to degraded
+chmod-a-w-only behaviour, which the same user can reverse. `core/_integrity.sh` asserts both the
+tier and the gate's wiring that are actually there at every entrypoint (tier: 2026-07-29; wiring:
+2026-07-30), so a silent slip from hardened to degraded, or a registration that stopped resolving,
 can't pass as still-protected. What the hardened tier does **not** cover is listed in full in
 `core/lock-kit.sh`'s header — read that list before calling this kit protected.
