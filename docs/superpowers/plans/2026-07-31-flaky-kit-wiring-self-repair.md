@@ -14,7 +14,7 @@
 
 - **bash 3.2 compatible** — macOS system bash. No associative arrays, no `${var^^}`.
 - **`_integrity.sh` and `_wiring_repair.sh` must never wedge a caller.** Every function returns 0 and prints its answer. A repair that cannot run resolves to doing nothing and saying why; it never aborts an entrypoint.
-- **No environment override may enter either file.** `core/tests/integrity-test.sh` greps for the *shape* of any `$UPPERCASE` read outside a comment — a variable a caller can set is a skeleton key to the check it guards. Test seams run through function arguments.
+- **No environment override may enter either file.** `core/tests/integrity-test.sh` greps for the *shape* of any `$UPPERCASE` read outside a comment — a variable a caller can set is a skeleton key to the check it guards. Test seams run through function arguments. **One name is excluded:** `CLAUDE_PROJECT_DIR` appears in `_wiring_repair.sh` as a literal inside single quotes — the text written into the settings file, expanded by the harness when it later runs the gate, never by bash here. grep cannot distinguish a read from a literal, so the exclusion is by name and Task 2 closes it with a behavioural assertion instead: with `CLAUDE_PROJECT_DIR` set to a hijacked path in the environment, the written command must still carry the unexpanded text.
 - **stderr only.** Four entrypoints (`rerun`, `gate`, `ledger`, `summary`) emit a machine-read contract on stdout, so the repair's narration goes to stderr and nothing else.
 - **`stat` is not portable:** BSD/macOS `stat -f %u`, GNU `stat -c %u`. `integrity_owner_uid` already branches on `uname -s` — reuse it, do not re-implement.
 - **`foreign` is never repaired.** A gate at the kit's path that is not the kit's is someone else's; overwriting it is the kit deciding a conflict it cannot see both sides of.
@@ -213,9 +213,24 @@ case "$(wiring_repair "$W/.claude/skills/hektor-flaky-triage" degraded unregiste
 esac
 rm -rf "$R"
 
-# No environment override may enter the repair unit either.
-grep -v '^[[:space:]]*#' "$HERE/../_wiring_repair.sh" | grep -qE '(^|[^\\])\$\{?[A-Z][A-Z0-9_]*' \
+# No environment override may enter the repair unit either — with ONE excluded name.
+# CLAUDE_PROJECT_DIR appears in this file as a LITERAL inside single quotes: it is the text written
+# into the settings file, which the harness expands when it later runs the gate. Bash never expands
+# it here, so it is not a read and the property the constraint protects is untouched. grep cannot
+# tell a read from a literal, so the exclusion is by name and the assertion below closes it by
+# behaviour instead — which is stronger than the grep it replaces.
+grep -v '^[[:space:]]*#' "$HERE/../_wiring_repair.sh" | grep -v 'CLAUDE_PROJECT_DIR' \
+  | grep -qE '(^|[^\\])\$\{?[A-Z][A-Z0-9_]*' \
   && bad "no environment override may enter _wiring_repair.sh" || ok
+
+# The excluded name is genuinely a literal: set it in the environment to something else and the
+# written command must still carry the unexpanded text, never the hijacked path. If this ever fails,
+# the exclusion above has stopped being safe and the grep is no longer the thing to fix.
+R="$(mktemp -d)"; W="$(wire_fixture "$R")"; echo '{}' > "$W/.claude/settings.json"
+CLAUDE_PROJECT_DIR=/tmp/hijack-me wiring_repair "$W/.claude/skills/hektor-flaky-triage" degraded unregistered >/dev/null 2>&1
+grep -q 'CLAUDE_PROJECT_DIR' "$W/.claude/settings.json" && ok || bad "the registered command must keep \$CLAUDE_PROJECT_DIR unexpanded"
+grep -q '/tmp/hijack-me' "$W/.claude/settings.json" && bad "the registered command must not expand CLAUDE_PROJECT_DIR from the caller's environment" || ok
+rm -rf "$R"
 ```
 
 - [ ] **Step 2: Run it and watch it fail**
@@ -576,9 +591,10 @@ rm -rf "$R"
 # The guard's signature is unchanged, so no call site moved.
 [ "$(grep -c 'integrity_guard "' "$HERE"/../*.sh)" -ge 1 ] && ok || bad "integrity_guard call sites must not have moved"
 
-# The repair runs BEFORE the report, and the report still sees the pre-repair value.
-grep -qE 'wiring_repair "\$kit" "\$tier" "\$wiring"' "$HERE/../_integrity.sh" && ok \
-  || bad "integrity_guard must call wiring_repair with the computed tier and wiring"
+# The ordering — repair, then report the pre-repair value — is pinned by behaviour above and by the
+# mutation in Step 5, not by a grep for how the call is spelled. An assertion that matches source
+# text passes whenever the text is right and says nothing about what the code does; this plan has
+# now caught that shape twice, once in each of the preceding two cycles.
 ```
 
 - [ ] **Step 2: Run it and watch it fail**
