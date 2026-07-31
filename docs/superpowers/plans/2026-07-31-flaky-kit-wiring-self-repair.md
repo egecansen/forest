@@ -643,10 +643,29 @@ At the top of `core/_integrity.sh`, beside the file's other sourcing, add:
 
 ```bash
 # The repair unit. Sourced here so `integrity_guard` can call it, kept in its own file so the
-# detector functions below stay free of any filesystem write.
+# detector functions below stay free of any filesystem write. At LOAD time and from THIS file's own
+# directory — not from `integrity_guard`'s argument. That argument previously only selected what to
+# report on; sourcing from it would make the guard execute code from a path its caller chose, before
+# it has learned anything about that tree's ownership.
 _INTEGRITY_HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 [ -r "$_INTEGRITY_HERE/_wiring_repair.sh" ] && . "$_INTEGRITY_HERE/_wiring_repair.sh" || wiring_repair() { return 0; }
 ```
+
+`${BASH_SOURCE[0]}` trips the no-environment-read scan, which matches any `$UPPERCASE`. **Exclude it by
+name**, the way `CLAUDE_PROJECT_DIR` already is, and state the reason beside it. `BASH_SOURCE` is a
+stronger candidate for exclusion than that precedent: bash maintains the array and overwrites element
+0 on every source and function entry, so a caller cannot preset it, and the threat the assertion names
+— *a caller who can set a variable silences the guard* — does not apply. The idiom is already in-repo
+at `core/lock-kit.sh:150` and in `core/ledger.sh`. No behavioural backstop is needed, unlike
+`CLAUDE_PROJECT_DIR`, whose exclusion had to be closed by one.
+
+Both lines are production wiring that no assertion reaches by default, because the test file sources
+`_wiring_repair.sh` globally and the fixtures never place it in their own `core/`. Pin them: drive
+`integrity_guard` in a **subshell that does not already have `wiring_repair` defined** —
+`bash -c '. "$K/core/_integrity.sh"; integrity_guard "$K"'` — against a fixture whose `core/` really
+holds `_wiring_repair.sh`, and assert the registration was repaired. Then remove that file and assert
+the guard still returns sanely and nothing wedges. Without those two, deleting either line leaves the
+whole suite green and returns the branch to the inert state this task exists to end.
 
 Then replace `integrity_guard`'s body:
 
