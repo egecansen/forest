@@ -110,9 +110,36 @@ _wr_register_cursor() {
   return 0
 }
 
+# _wr_restore_gate <kit_root> <project_root> <tier> <harness> <dest-dir> -> 0. Narrates; never fails.
+#
+# Restores only where the tree is NOT root-owned. At `hardened` and `stale` the gate's path must hold
+# a root-owned file — that ownership IS _wiring_one's identity test — and this process runs as the
+# user, so the file it wrote would report `foreign`: the repair would break the kit differently while
+# claiming to heal it. `stale` is included with `hardened` because it means the tree IS root-owned and
+# only .lock-state disagrees; keying this on the recorded tier while the identity test keys on
+# ownership would split one property across two conditions.
+_wr_restore_gate() {
+  local kit="$1" root="$2" tier="$3" harness="$4" dest="$5" src="$kit/core/gate-src/$4"
+  case "$tier" in
+    hardened|stale)
+      echo "integrity: not restoring the $harness gate — this tree is root-owned, so a file written as you would not be the kit's. Unlock, reinstall, lock." >&2
+      return 0 ;;
+  esac
+  if [ ! -r "$src/flaky-kit-self-protection-gate.sh" ]; then
+    echo "integrity: cannot restore the $harness gate — no restore source at $src." >&2
+    return 0
+  fi
+  mkdir -p "$dest/lib" 2>/dev/null || return 0
+  cp "$src/flaky-kit-self-protection-gate.sh" "$dest/flaky-kit-self-protection-gate.sh" 2>/dev/null || return 0
+  chmod +x "$dest/flaky-kit-self-protection-gate.sh" 2>/dev/null || true
+  [ -r "$src/lib/audit.sh" ] && cp "$src/lib/audit.sh" "$dest/lib/audit.sh" 2>/dev/null
+  echo "integrity: restored the $harness gate from the engine's copy." >&2
+  return 0
+}
+
 # wiring_repair <kit_root> <tier> <wiring> -> narrates to stderr, always returns 0.
 wiring_repair() {
-  local kit="${1:-}" tier="${2:-}" wiring="${3:-}" root wc wu s did=0
+  local kit="${1:-}" tier="${2:-}" wiring="${3:-}" root wc wu s did_c=0 did_u=0
   case "$wiring" in
     unregistered|partial|dangling) : ;;
     *) return 0 ;;                      # wired, absent, foreign: nothing to do or nothing that is ours
@@ -125,13 +152,16 @@ wiring_repair() {
   wc="${1:-0}"; wu="${2:-0}"
 
   if [ "$wc" = 1 ]; then
+    [ "$wiring" = dangling ] && _wr_restore_gate "$kit" "$root" "$tier" claude "$root/.claude/hooks"
     s="$root/.claude/settings.json"
     mkdir -p "$(dirname "$s")" 2>/dev/null
     [ -e "$s" ] || echo '{}' > "$s" 2>/dev/null
     if [ -w "$s" ] && jq -e . "$s" >/dev/null 2>&1; then
       if _wr_lock "$s"; then
         if _wr_register "$s" '"$CLAUDE_PROJECT_DIR/.claude/hooks/flaky-kit-self-protection-gate.sh"' 'Write|Edit' 'Bash'; then
-          did=1
+          did_c=1
+        else
+          echo "integrity: the Claude gate registration merge failed — $s was not repaired." >&2
         fi
         _wr_unlock
       else
@@ -143,13 +173,16 @@ wiring_repair() {
   fi
 
   if [ "$wu" = 1 ]; then
+    [ "$wiring" = dangling ] && _wr_restore_gate "$kit" "$root" "$tier" cursor "$root/.cursor/hooks"
     s="$root/.cursor/hooks.json"
     mkdir -p "$(dirname "$s")" 2>/dev/null
     [ -e "$s" ] || echo '{"version":1,"hooks":{}}' > "$s" 2>/dev/null
     if [ -w "$s" ] && jq -e . "$s" >/dev/null 2>&1; then
       if _wr_lock "$s"; then
         if _wr_register_cursor "$s" '.cursor/hooks/flaky-kit-self-protection-gate.sh'; then
-          did=1
+          did_u=1
+        else
+          echo "integrity: the Cursor gate registration merge failed — $s was not repaired." >&2
         fi
         _wr_unlock
       else
@@ -160,6 +193,7 @@ wiring_repair() {
     fi
   fi
 
-  [ "$did" = 1 ] && echo "integrity: REPAIRED — the kit's gate registration has been rewritten." >&2
+  [ "$did_c" = 1 ] && echo "integrity: REPAIRED — the Claude gate registration has been rewritten." >&2
+  [ "$did_u" = 1 ] && echo "integrity: REPAIRED — the Cursor gate registration has been rewritten." >&2
   return 0
 }

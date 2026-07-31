@@ -876,5 +876,85 @@ grep -q 'CLAUDE_PROJECT_DIR' "$R/.claude/settings.json" && ok || bad "the regist
 grep -q '/tmp/hijack-me' "$R/.claude/settings.json" && bad "the registered command must not expand CLAUDE_PROJECT_DIR from the caller's environment" || ok
 rm -rf "$R"
 
+# --- wiring_repair: the gate file --------------------------------------------------------------
+# ADAPTED FROM THE BRIEF, same reason as the earlier "ADAPTED FROM THE BRIEF" note in this file:
+# wire_fixture returns the KIT path directly ($dir/.claude/skills/hektor-flaky-triage), not a
+# project root one level up from it. The brief's snippet computed K as "$W/.claude/skills/hektor-
+# flaky-triage" (assuming W was the project root), which under the helper's real contract double-
+# appends the suffix onto a path that is already the kit path. K is therefore just wire_fixture's
+# return value here, and the restored file's location is checked under R (the actual project root
+# passed INTO wire_fixture), never under K.
+#
+# Below root ownership the file comes back.
+for T in degraded unprotected unlocked; do
+  R="$(mktemp -d)"; K="$(wire_fixture "$R")"
+  mkdir -p "$K/core/gate-src/claude/lib"
+  printf '#!/bin/sh\nexit 0\n' > "$K/core/gate-src/claude/flaky-kit-self-protection-gate.sh"
+  chmod +x "$K/core/gate-src/claude/flaky-kit-self-protection-gate.sh"
+  printf 'audit\n' > "$K/core/gate-src/claude/lib/audit.sh"
+  rm -f "$R/.claude/hooks/flaky-kit-self-protection-gate.sh"
+  wiring_repair "$K" "$T" dangling >/dev/null 2>&1
+  [ -x "$R/.claude/hooks/flaky-kit-self-protection-gate.sh" ] && ok || bad "$T: a dangling gate must be restored, executable"
+  [ -f "$R/.claude/hooks/lib/audit.sh" ] && ok || bad "$T: the audit lib must be restored beside it"
+  rm -rf "$R"
+done
+
+# Where the tree is root-owned it is NOT restored — a user-owned file there reads as `foreign`,
+# so the repair would break the kit differently while claiming to heal it. Asserted at BOTH
+# hardened and stale: a rule that read the recorded tier instead of ownership would pass the
+# first and fail the second.
+for T in hardened stale; do
+  R="$(mktemp -d)"; K="$(wire_fixture "$R")"
+  mkdir -p "$K/core/gate-src/claude/lib"
+  printf '#!/bin/sh\nexit 0\n' > "$K/core/gate-src/claude/flaky-kit-self-protection-gate.sh"
+  rm -f "$R/.claude/hooks/flaky-kit-self-protection-gate.sh"
+  wiring_repair "$K" "$T" dangling >/dev/null 2>&1
+  [ ! -e "$R/.claude/hooks/flaky-kit-self-protection-gate.sh" ] && ok || bad "$T: a root-owned tree must not get a user-owned gate"
+  case "$(wiring_repair "$K" "$T" dangling 2>&1 >/dev/null)" in
+    *root-owned*) ok ;; *) bad "$T: refusing to restore must say why" ;;
+  esac
+  rm -rf "$R"
+done
+
+# No restore source -> no restore, and it says so rather than failing silently.
+R="$(mktemp -d)"; K="$(wire_fixture "$R")"
+rm -rf "$K/core/gate-src"
+rm -f "$R/.claude/hooks/flaky-kit-self-protection-gate.sh"
+wiring_repair "$K" degraded dangling >/dev/null 2>&1
+[ ! -e "$R/.claude/hooks/flaky-kit-self-protection-gate.sh" ] && ok || bad "no restore source must mean no restore"
+case "$(wiring_repair "$K" degraded dangling 2>&1 >/dev/null)" in
+  *restore\ source*) ok ;; *) bad "a missing restore source must be named" ;;
+esac
+rm -rf "$R"
+
+# --- carried forward from Task 2 review, Finding 1: a failed merge must not be completely silent -
+# Task 2 correctly stopped announcing REPAIRED when the merge fails, but added no diagnostic in its
+# place — measured, the failing-merge fixture below printed nothing at all, contradicting this
+# file's own header ("every failure mode here resolves to doing nothing and saying why"). Same
+# fixture as the REPAIRED-gating test above (a PreToolUse STRING forces _wr_register to error
+# internally); the new assertion is the flip side that test never checked: something must be SAID.
+R="$(mktemp -d)"; W="$(wire_fixture "$R")"
+printf 'claude\n' > "$W/core/.harness"
+jq '.hooks.PreToolUse = "not-an-array"' "$R/.claude/settings.json" > "$R/s" && mv "$R/s" "$R/.claude/settings.json"
+OUT="$(wiring_repair "$W" degraded unregistered 2>&1 >/dev/null)"
+[ -n "$OUT" ] && ok || bad "a merge that fails internally must say why instead of printing nothing at all"
+case "$OUT" in *"Claude gate registration merge failed"*) ok ;; *) bad "the diagnostic must actually name the failed merge, not just make some noise — got: $OUT" ;; esac
+rm -rf "$R"
+
+# --- carried forward from Task 2 review, Finding 2: `did` is an OR across the two harnesses -------
+# A single OR'd `did` prints one shared REPAIRED even when only one harness actually succeeded,
+# leaving a failing Claude merge unregistered AND unmentioned beside a healthy Cursor one.
+# core/.harness=all forces both branches to run; Claude's settings are corrupted the same way as
+# above (merge fails), Cursor's are left exactly as wire_fixture built them (already fully
+# registered, so its merge is a trivial, successful no-op) — the asymmetry the OR was hiding.
+R="$(mktemp -d)"; W="$(wire_fixture "$R")"
+printf 'all\n' > "$W/core/.harness"
+jq '.hooks.PreToolUse = "not-an-array"' "$R/.claude/settings.json" > "$R/s" && mv "$R/s" "$R/.claude/settings.json"
+OUT="$(wiring_repair "$W" degraded unregistered 2>&1 >/dev/null)"
+case "$OUT" in *"Claude gate registration merge failed"*) ok ;; *) bad "a failing Claude merge alongside a healthy Cursor one must still name Claude's failure — got: $OUT" ;; esac
+case "$OUT" in *"REPAIRED — the Cursor gate registration has been rewritten."*) ok ;; *) bad "a healthy Cursor merge must still be announced BY NAME, not folded into one shared REPAIRED — got: $OUT" ;; esac
+case "$OUT" in *"REPAIRED — the Claude gate registration has been rewritten."*) bad "Claude must not be reported REPAIRED when its own merge failed — got: $OUT" ;; *) ok ;; esac
+rm -rf "$R"
+
 echo "integrity-test: $pass passed, $fail failed"
 [ "$fail" -eq 0 ]
