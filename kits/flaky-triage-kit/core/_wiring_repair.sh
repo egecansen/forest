@@ -16,57 +16,85 @@ _WR_LOCKFD="201"
 _WR_LOCKDIR=""
 
 _wr_unlock() {
-  [ -n "$_WR_LOCKDIR" ] && { rmdir "$_WR_LOCKDIR" 2>/dev/null || true; _WR_LOCKDIR=""; }
+  [ -n "$_WR_LOCKDIR" ] && { rm -rf "$_WR_LOCKDIR" 2>/dev/null || true; _WR_LOCKDIR=""; }
   eval "exec ${_WR_LOCKFD}>&-" 2>/dev/null || true
   return 0
 }
 
 # _wr_lock <file> -> 0 if held, 1 if not. Mirrors core/ledger.sh's discipline (flock where present,
-# portable mkdir spinlock otherwise) with one deliberate difference: ledger.sh dies on timeout and
-# this RETURNS. A lost lock means one entrypoint skips a repair the next one will retry; it must not
-# take the caller down with it.
+# portable mkdir spinlock otherwise) with two deliberate differences from ledger.sh:
+#
+# 1. ledger.sh DIES on timeout; this RETURNS. A lost lock means one entrypoint skips a repair the
+#    next one will retry, and must not take the caller down with it.
+#
+# 2. ledger.sh releases via `trap 'ledger_unlock' EXIT INT TERM` — and this file MUST NOT do that.
+#    _wiring_repair.sh is sourced by thirteen entrypoints through _integrity.sh; an EXIT trap
+#    installed here would clobber whatever EXIT trap the sourcing entrypoint already set for its
+#    OWN cleanup, the moment this file is sourced — not even at lock time. So a killed holder (a
+#    Ctrl-C mid-`_wr_register`) cannot be recovered by trap. It is recovered the same way
+#    core/_lock.sh's gradle_lock_acquire steals a dead gradle lock instead: the holder writes its
+#    own pid into the lock directory right after acquiring it, and a contender steals the lock the
+#    moment that pid is provably dead, or — a directory left by a holder that crashed BETWEEN mkdir
+#    and writing its pid — once it has sat long enough that no live acquire is still in flight.
+#    Proven necessary by measurement, not assumed: a pre-existing `.lock.d` with no recovery logic
+#    cost every subsequent call the full 10s wait forever, on an otherwise healthy fixture — the
+#    exact "must never wedge a caller" violation this file exists to prevent.
 _wr_lock() {
-  local target="${1:-}" waited=0
+  local target="${1:-}" waited=0 p
+  [ -n "$target" ] || return 1
   if command -v flock >/dev/null 2>&1; then
     eval "exec ${_WR_LOCKFD}>\"\$target.lock\"" 2>/dev/null || return 1
     flock -w 10 "$_WR_LOCKFD" 2>/dev/null || return 1
     return 0
   fi
   until mkdir "$target.lock.d" 2>/dev/null; do
+    p="$(cat "$target.lock.d/pid" 2>/dev/null || true)"          # steal if the holder is dead…
+    if [ -n "$p" ] && ! kill -0 "$p" 2>/dev/null; then
+      rm -rf "$target.lock.d" 2>/dev/null; continue
+    fi
+    if [ ! -e "$target.lock.d/pid" ] && [ "$waited" -ge 40 ]; then  # …or pidless + stale (2s)
+      rm -rf "$target.lock.d" 2>/dev/null; continue
+    fi
     waited=$((waited + 1))
     [ "$waited" -ge 200 ] && return 1      # 200 * 0.05s = 10s cap
     sleep 0.05
   done
+  echo "$$" > "$target.lock.d/pid" 2>/dev/null || true
   _WR_LOCKDIR="$target.lock.d"
   return 0
 }
 
-# _wr_register <settings-file> <command> <matcher>... -> 0. Idempotent and additive: adds the matcher
-# block if absent and the command inside it if absent, and touches nothing else in the document.
-# Same merge install.sh performs, so an install and a repair cannot disagree about the shape.
+# _wr_register <settings-file> <command> <matcher>... -> 0 if EVERY matcher merged and was written,
+# 1 if any one failed (mktemp, jq, or the mv). The caller uses this to decide whether to say
+# REPAIRED — a merge that never actually landed must never be reported as one that did. Idempotent
+# and additive: adds the matcher block if absent and the command inside it if absent, and touches
+# nothing else in the document. Same merge install.sh performs, so an install and a repair cannot
+# disagree about the shape.
 _wr_register() {
-  local s="$1" c="$2" m t
+  local s="$1" c="$2" m t rc=0
   shift 2
   for m in "$@"; do
-    t="$(mktemp)" || return 0
+    t="$(mktemp)" || { rc=1; continue; }
     if jq --arg m "$m" --arg c "$c" '
       .hooks //= {} | .hooks.PreToolUse //= [] |
       (if any(.hooks.PreToolUse[]?; .matcher==$m) then . else .hooks.PreToolUse += [{matcher:$m, hooks:[]}] end) |
       .hooks.PreToolUse |= map(if .matcher==$m then (.hooks //= []) |
         (if any(.hooks[]?; .command==$c) then . else .hooks += [{type:"command", command:$c, timeout:10}] end)
         else . end)' "$s" > "$t" 2>/dev/null && [ -s "$t" ]; then
-      mv "$t" "$s"
+      mv "$t" "$s" || rc=1
     else
       rm -f "$t"
+      rc=1
     fi
   done
-  return 0
+  return "$rc"
 }
 
-# _wr_register_cursor <hooks-file> <command> -> 0. Cursor's spelling of the same three slots.
+# _wr_register_cursor <hooks-file> <command> -> 0 on a successful merge+write, 1 otherwise. Cursor's
+# spelling of the same three slots; same success/failure contract as _wr_register above.
 _wr_register_cursor() {
   local s="$1" c="$2" t
-  t="$(mktemp)" || return 0
+  t="$(mktemp)" || return 1
   if jq --arg c "$c" '
     .hooks //= {} |
     .hooks.beforeShellExecution //= [] |
@@ -77,6 +105,7 @@ _wr_register_cursor() {
     mv "$t" "$s"
   else
     rm -f "$t"
+    return 1
   fi
   return 0
 }
@@ -97,12 +126,14 @@ wiring_repair() {
 
   if [ "$wc" = 1 ]; then
     s="$root/.claude/settings.json"
+    mkdir -p "$(dirname "$s")" 2>/dev/null
     [ -e "$s" ] || echo '{}' > "$s" 2>/dev/null
     if [ -w "$s" ] && jq -e . "$s" >/dev/null 2>&1; then
       if _wr_lock "$s"; then
-        _wr_register "$s" '"$CLAUDE_PROJECT_DIR/.claude/hooks/flaky-kit-self-protection-gate.sh"' 'Write|Edit' 'Bash'
+        if _wr_register "$s" '"$CLAUDE_PROJECT_DIR/.claude/hooks/flaky-kit-self-protection-gate.sh"' 'Write|Edit' 'Bash'; then
+          did=1
+        fi
         _wr_unlock
-        did=1
       else
         echo "integrity: could not lock $s to repair the registration; the next entrypoint will retry." >&2
       fi
@@ -113,12 +144,14 @@ wiring_repair() {
 
   if [ "$wu" = 1 ]; then
     s="$root/.cursor/hooks.json"
+    mkdir -p "$(dirname "$s")" 2>/dev/null
     [ -e "$s" ] || echo '{"version":1,"hooks":{}}' > "$s" 2>/dev/null
     if [ -w "$s" ] && jq -e . "$s" >/dev/null 2>&1; then
       if _wr_lock "$s"; then
-        _wr_register_cursor "$s" '.cursor/hooks/flaky-kit-self-protection-gate.sh'
+        if _wr_register_cursor "$s" '.cursor/hooks/flaky-kit-self-protection-gate.sh'; then
+          did=1
+        fi
         _wr_unlock
-        did=1
       else
         echo "integrity: could not lock $s to repair the registration; the next entrypoint will retry." >&2
       fi

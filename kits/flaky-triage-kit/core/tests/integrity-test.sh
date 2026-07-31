@@ -648,14 +648,22 @@ case "$(slots_of "$R/.claude/settings.json")" in
 esac
 rm -rf "$R"
 
-# Symmetric case for Cursor: hooks.json entirely absent, core/.harness requires cursor. Checked via
-# _wiring_cover rather than a `case`/glob match on the literal string "beforeShellExecution:*" — that
-# asterisk is data here, not a wildcard, and a glob pattern is the wrong tool to compare it literally.
+# Symmetric case for Cursor: hooks.json entirely absent, core/.harness requires cursor. The WHOLE
+# .cursor/ directory is removed here, not just the file — a plain `rm -f` on the file alone leaves
+# wire_fixture's `.cursor/hooks/` directory behind, which masked a real bug found in review: the
+# repair never `mkdir -p`'d the parent directory, so it silently failed to create hooks.json
+# whenever .cursor/ itself did not already exist (measured: "hooks.json created: NO"). The
+# equivalent stress for CLAUDE is structurally impossible to build: the kit itself lives under
+# .claude/skills/hektor-flaky-triage, so a fixture where .claude/ is fully absent has no kit_root
+# for integrity_project_root to resolve in the first place — .claude/ is guaranteed to exist in any
+# fixture this function can even be called against. Checked via _wiring_cover rather than a
+# `case`/glob match on the literal string "beforeShellExecution:*" — that asterisk is data here, not
+# a wildcard, and a glob pattern is the wrong tool to compare it literally.
 R="$(mktemp -d)"; W="$(wire_fixture "$R")"
 printf 'cursor\n' > "$W/core/.harness"
-rm -f "$R/.cursor/hooks.json"
+rm -rf "$R/.cursor"
 wiring_repair "$W" degraded unregistered >/dev/null 2>&1
-[ -f "$R/.cursor/hooks.json" ] && ok || bad "repair must create hooks.json from scratch when Cursor is required and the file is gone entirely"
+[ -f "$R/.cursor/hooks.json" ] && ok || bad "repair must create hooks.json from scratch when Cursor is required and the file (and its directory) are gone entirely"
 [ -n "$(_wiring_cover "$(_wiring_slots "$R/.cursor/hooks.json")" beforeShellExecution '*')" ] \
   && ok || bad "a from-scratch hooks.json must still register beforeShellExecution"
 rm -rf "$R"
@@ -693,6 +701,57 @@ wiring_repair "$W" degraded partial >/dev/null 2>&1
 case "$(slots_of "$R/.claude/settings.json")" in *PreToolUse:Bash*) ok ;; *) bad "partial: the missing slot must be added" ;; esac
 rm -rf "$R"
 
+# dangling falls through the SAME case arm as unregistered/partial — deliberately: Task 3 hangs the
+# gate-FILE restore off this state, and this task's own `case` must not block that. But THIS task
+# does not restore the gate file; it only re-asserts the REGISTRATION, which in a dangling fixture
+# is already fully correct (the registration names the right command — the FILE that command points
+# at is what's missing). Pin what this task actually does, no more: the merge runs harmlessly
+# (idempotent, so re-writing an already-correct registration changes nothing observable), the
+# function still returns 0, and the missing gate file stays missing — restoring it is explicitly out
+# of this task's scope.
+R="$(mktemp -d)"; W="$(wire_fixture "$R")"
+rm -f "$R/.claude/hooks/flaky-kit-self-protection-gate.sh"
+wiring_repair "$W" degraded dangling >/dev/null 2>&1
+rc=$?
+[ "$rc" -eq 0 ] && ok || bad "dangling must still return 0, never wedge the caller"
+case "$(slots_of "$R/.claude/settings.json")" in
+  *PreToolUse:Bash*) ok ;; *) bad "dangling: the existing registration must still cover Bash after repair" ;;
+esac
+case "$(slots_of "$R/.claude/settings.json")" in
+  *PreToolUse:Write*) ok ;; *) bad "dangling: the existing registration must still cover Write" ;;
+esac
+[ ! -f "$R/.claude/hooks/flaky-kit-self-protection-gate.sh" ] \
+  && ok || bad "dangling: this task must not restore the gate file itself — that is Task 3's job"
+rm -rf "$R"
+
+# Stale-lock recovery (review Critical): a `.lock.d` left behind by a killed holder (a Ctrl-C
+# mid-`_wr_register`) must not wedge every future call. Two shapes, matching _wr_lock's own two
+# recovery branches: a lock that never got as far as writing its pid (a holder that crashed between
+# `mkdir` and the pid write) is reclaimed once it has sat past the pidless-stale threshold; a lock
+# whose recorded holder is PROVABLY DEAD is reclaimed immediately. Pinned FUNCTIONALLY (the repair
+# still completes) rather than by a tight wall-clock assertion, which would be its own source of CI
+# flakiness — the measured numbers proving the fix (a stale lock cost every call the FULL 10s wait,
+# forever, on the pre-fix code — reproduced directly at ~14s elapsed) are recorded in the task report
+# instead of pinned here.
+R="$(mktemp -d)"; W="$(wire_fixture "$R")"
+jq 'del(.hooks.PreToolUse[] | select(.matcher=="Bash"))' "$R/.claude/settings.json" > "$R/s" && mv "$R/s" "$R/.claude/settings.json"
+mkdir -p "$R/.claude/settings.json.lock.d"           # pidless: simulates a crash mid-acquire
+wiring_repair "$W" degraded partial >/dev/null 2>&1
+case "$(slots_of "$R/.claude/settings.json")" in
+  *PreToolUse:Bash*) ok ;; *) bad "a pidless stale lock must eventually be reclaimed, not wedge the repair forever" ;;
+esac
+rm -rf "$R"
+
+R="$(mktemp -d)"; W="$(wire_fixture "$R")"
+jq 'del(.hooks.PreToolUse[] | select(.matcher=="Bash"))' "$R/.claude/settings.json" > "$R/s" && mv "$R/s" "$R/.claude/settings.json"
+( exit 0 ) & DEADPID=$!; wait "$DEADPID" 2>/dev/null   # a pid guaranteed to be dead by the time we use it
+mkdir -p "$R/.claude/settings.json.lock.d"; echo "$DEADPID" > "$R/.claude/settings.json.lock.d/pid"
+wiring_repair "$W" degraded partial >/dev/null 2>&1
+case "$(slots_of "$R/.claude/settings.json")" in
+  *PreToolUse:Bash*) ok ;; *) bad "a lock held by a provably dead pid must be reclaimed immediately" ;;
+esac
+rm -rf "$R"
+
 # foreign is NEVER written to. The file must come back byte-identical.
 R="$(mktemp -d)"; W="$(wire_fixture "$R")"
 cp "$R/.claude/settings.json" "$R/before.json"
@@ -708,21 +767,63 @@ for V in wired absent; do
   rm -rf "$R"
 done
 
-# The repair is ADDITIVE: unrelated keys survive untouched.
+# The repair is ADDITIVE: unrelated keys survive untouched, and so do SIBLING HOOK EVENTS. A merge
+# that rebuilt `.hooks` as `{PreToolUse: (.hooks.PreToolUse // [])}` — discarding PostToolUse,
+# SessionStart, Stop, UserPromptSubmit, every other real event a project's settings.json can carry —
+# would satisfy the three top-level-key assertions below and still destroy real hook config.
+# Confirmed by mutation during review: exactly that rewrite left this file green because nothing
+# looked INSIDE `.hooks` for a sibling event.
 R="$(mktemp -d)"; W="$(wire_fixture "$R")"
-jq '.permissions = {allow:["Bash(ls:*)"]} | .env = {FOO:"bar"} | .model = "sonnet"' "$R/.claude/settings.json" > "$R/s" && mv "$R/s" "$R/.claude/settings.json"
+jq '.permissions = {allow:["Bash(ls:*)"]} | .env = {FOO:"bar"} | .model = "sonnet"
+    | .hooks.PostToolUse = [{"matcher":"Write","hooks":[{"type":"command","command":"echo post"}]}]
+    | .hooks.Stop = [{"hooks":[{"type":"command","command":"echo stop"}]}]' \
+   "$R/.claude/settings.json" > "$R/s" && mv "$R/s" "$R/.claude/settings.json"
 jq 'del(.hooks.PreToolUse[] | select(.matcher=="Bash"))' "$R/.claude/settings.json" > "$R/s" && mv "$R/s" "$R/.claude/settings.json"
 wiring_repair "$W" degraded partial >/dev/null 2>&1
 [ "$(jq -r '.permissions.allow[0]' "$R/.claude/settings.json")" = "Bash(ls:*)" ] && ok || bad "repair must leave permissions untouched"
 [ "$(jq -r '.env.FOO' "$R/.claude/settings.json")" = "bar" ] && ok || bad "repair must leave env untouched"
 [ "$(jq -r '.model' "$R/.claude/settings.json")" = "sonnet" ] && ok || bad "repair must leave model untouched"
+[ "$(jq -r '.hooks.PostToolUse[0].hooks[0].command' "$R/.claude/settings.json")" = "echo post" ] \
+  && ok || bad "repair must leave the sibling hook event PostToolUse untouched"
+[ "$(jq -r '.hooks.Stop[0].hooks[0].command' "$R/.claude/settings.json")" = "echo stop" ] \
+  && ok || bad "repair must leave the sibling hook event Stop untouched"
 rm -rf "$R"
 
-# Not an installed layout -> nothing is written anywhere. Running the suite from the source tree
-# must never mutate a settings file.
+# The Cursor merge must be additive too: unrelated top-level keys survive, and re-adding a DELETED
+# preToolUse array must not come at the cost of the beforeShellExecution array that was already
+# there (or vice versa) — a merge that rebuilt the whole document around just one of the two slots
+# would satisfy the from-scratch test above (which only checks beforeShellExecution) and still lose
+# the other. Confirmed by mutation during review: replacing the Cursor merge with a
+# beforeShellExecution-only document left the suite fully green, because the only prior Cursor
+# coverage was that single from-scratch assertion.
+R="$(mktemp -d)"; W="$(wire_fixture "$R")"
+jq '.someOtherTool = {custom:true}' "$R/.cursor/hooks.json" > "$R/s" && mv "$R/s" "$R/.cursor/hooks.json"
+jq 'del(.hooks.preToolUse)' "$R/.cursor/hooks.json" > "$R/s" && mv "$R/s" "$R/.cursor/hooks.json"
+wiring_repair "$W" degraded partial >/dev/null 2>&1
+[ "$(jq -r '.someOtherTool.custom' "$R/.cursor/hooks.json")" = "true" ] \
+  && ok || bad "Cursor repair must leave unrelated top-level keys untouched"
+[ "$(jq '.hooks.beforeShellExecution | length' "$R/.cursor/hooks.json")" -ge 1 ] \
+  && ok || bad "Cursor repair must not drop beforeShellExecution while re-adding preToolUse"
+[ "$(jq '.hooks.preToolUse | length' "$R/.cursor/hooks.json")" -ge 1 ] \
+  && ok || bad "Cursor repair must re-add a deleted preToolUse array"
+rm -rf "$R"
+
+# Not an installed layout -> nothing is written anywhere, and the ATTEMPT is never even made.
+# core/.harness is forced to `claude` here — review found that without it, "$R/notakit" has no
+# .claude or .cursor at all, so _wiring_want's own fallback already returns "0 0" regardless of
+# root, and the `[ -n "$root" ] || return 0` guard this assertion means to pin is never even
+# reached: a mutation deleting that guard left the suite green, because there was nothing downstream
+# for its absence to change. Forcing the harness record makes the guard the ONLY thing standing
+# between this call and an attempted repair. SILENCE is what actually distinguishes "the guard
+# fired" from "the guard was skipped and the write merely failed somewhere outside the sandbox": an
+# empty root concatenates to the real filesystem's "/", which this test process cannot write to
+# either way, so `find "$R"` stays empty regardless — but with the guard gone, the attempt still
+# prints "cannot repair the registration" to stderr first. The guard prevents that line entirely.
 R="$(mktemp -d)"; mkdir -p "$R/notakit/core"
-wiring_repair "$R/notakit" degraded unregistered >/dev/null 2>&1
+printf 'claude\n' > "$R/notakit/core/.harness"
+OUT="$(wiring_repair "$R/notakit" degraded unregistered 2>&1 >/dev/null)"
 [ -z "$(find "$R" -name 'settings*.json' 2>/dev/null)" ] && ok || bad "a non-installed layout must never be written to"
+[ -z "$OUT" ] && ok || bad "a non-installed layout must be silent, not attempt (and fail) a repair — got: $OUT"
 rm -rf "$R"
 
 # It narrates on stderr and nothing reaches stdout — four entrypoints emit a contract there.
@@ -734,6 +835,21 @@ case "$(wiring_repair "$W" degraded unregistered 2>&1 >/dev/null)" in
 esac
 rm -rf "$R"
 
+# REPAIRED must be gated on an ACTUAL write, not merely on acquiring the lock (review Important 2).
+# `.hooks.PreToolUse` is set to a STRING here, not an array: the file still parses as valid JSON (so
+# the pre-check passes and the lock is acquired), but the merge jq errors internally
+# (`string and array cannot be added`, confirmed separately), so `_wr_register` returns 1 and no
+# write lands. core/.harness pins this to Claude only, so a Cursor-side success elsewhere in the
+# same call cannot mask the assertion.
+R="$(mktemp -d)"; W="$(wire_fixture "$R")"
+printf 'claude\n' > "$W/core/.harness"
+jq '.hooks.PreToolUse = "not-an-array"' "$R/.claude/settings.json" > "$R/s" && mv "$R/s" "$R/.claude/settings.json"
+cp "$R/.claude/settings.json" "$R/before.json"
+OUT="$(wiring_repair "$W" degraded unregistered 2>&1 >/dev/null)"
+case "$OUT" in *REPAIRED*) bad "a merge that fails internally must not announce REPAIRED — got: $OUT" ;; *) ok ;; esac
+cmp -s "$R/before.json" "$R/.claude/settings.json" && ok || bad "a failed merge must not leave the settings file half-written"
+rm -rf "$R"
+
 # No environment override may enter the repair unit either — with ONE excluded name.
 # CLAUDE_PROJECT_DIR appears in this file as a LITERAL inside single quotes: it is the text written
 # into the settings file, which the harness expands when it later runs the gate. Bash never expands
@@ -743,6 +859,13 @@ rm -rf "$R"
 grep -v '^[[:space:]]*#' "$HERE/../_wiring_repair.sh" | grep -v 'CLAUDE_PROJECT_DIR' \
   | grep -qE '(^|[^\\])\$\{?[A-Z][A-Z0-9_]*' \
   && bad "no environment override may enter _wiring_repair.sh" || ok
+
+# Residual blind spot, noted rather than closed (review round 2): the exclusion above is by NAME, so
+# it also hides a hypothetical `if [ "$CLAUDE_PROJECT_DIR" = ... ]`-style READ of the variable's
+# VALUE, not just the literal-command use this file actually makes of the name. The behavioural
+# assertion below only checks what ends up WRITTEN to the settings file — it would not catch a
+# branch that reads the variable's value and does something else with it entirely. No such read
+# exists in _wiring_repair.sh today; if one is ever added, neither check here would catch it.
 
 # The excluded name is genuinely a literal: set it in the environment to something else and the
 # written command must still carry the unexpanded text, never the hijacked path. If this ever fails,
