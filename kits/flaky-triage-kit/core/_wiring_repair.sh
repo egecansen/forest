@@ -125,14 +125,34 @@ _wr_restore_gate() {
       echo "integrity: not restoring the $harness gate — this tree is root-owned, so a file written as you would not be the kit's. Unlock, reinstall, lock." >&2
       return 0 ;;
   esac
-  if [ ! -r "$src/flaky-kit-self-protection-gate.sh" ]; then
-    echo "integrity: cannot restore the $harness gate — no restore source at $src." >&2
+  # This harness's gate is already there. `dangling` is a verdict over the whole project, so a
+  # project whose Claude gate is missing and whose Cursor gate is fine reaches this function twice;
+  # without this line the healthy one is overwritten and announced as "restored", which is a repair
+  # claimed for a harness that was never broken — the same misattribution the per-harness `did_c`
+  # and `did_u` split exists to prevent, one function over.
+  [ -e "$dest/flaky-kit-self-protection-gate.sh" ] && return 0
+
+  # `-s`, not `-r`. A zero-byte source is readable, and restoring it installs an empty gate that
+  # allows everything — while `_wiring_one` below the root-owned tiers tests only `[ -f ]`, so the
+  # answer flips from a loud, repairable `dangling` to a silent `wired`. A self-protection gate that
+  # passes every check and enforces nothing is worse than a missing one. The merge path already
+  # guards this class with `[ -s "$t" ]`.
+  if [ ! -s "$src/flaky-kit-self-protection-gate.sh" ]; then
+    echo "integrity: cannot restore the $harness gate — no usable restore source at $src." >&2
     return 0
   fi
-  mkdir -p "$dest/lib" 2>/dev/null || return 0
-  cp "$src/flaky-kit-self-protection-gate.sh" "$dest/flaky-kit-self-protection-gate.sh" 2>/dev/null || return 0
+  if ! mkdir -p "$dest/lib" 2>/dev/null; then
+    echo "integrity: cannot restore the $harness gate — $dest is not creatable." >&2
+    return 0
+  fi
+  if ! cp "$src/flaky-kit-self-protection-gate.sh" "$dest/flaky-kit-self-protection-gate.sh" 2>/dev/null; then
+    echo "integrity: cannot restore the $harness gate — writing $dest failed." >&2
+    return 0
+  fi
   chmod +x "$dest/flaky-kit-self-protection-gate.sh" 2>/dev/null || true
-  [ -r "$src/lib/audit.sh" ] && cp "$src/lib/audit.sh" "$dest/lib/audit.sh" 2>/dev/null
+  if [ -s "$src/lib/audit.sh" ] && ! cp "$src/lib/audit.sh" "$dest/lib/audit.sh" 2>/dev/null; then
+    echo "integrity: restored the $harness gate, but its audit lib did not copy — the gate still runs, unaudited." >&2
+  fi
   echo "integrity: restored the $harness gate from the engine's copy." >&2
   return 0
 }

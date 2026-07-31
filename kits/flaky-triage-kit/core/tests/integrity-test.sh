@@ -701,14 +701,21 @@ wiring_repair "$W" degraded partial >/dev/null 2>&1
 case "$(slots_of "$R/.claude/settings.json")" in *PreToolUse:Bash*) ok ;; *) bad "partial: the missing slot must be added" ;; esac
 rm -rf "$R"
 
-# dangling falls through the SAME case arm as unregistered/partial — deliberately: Task 3 hangs the
-# gate-FILE restore off this state, and this task's own `case` must not block that. But THIS task
-# does not restore the gate file; it only re-asserts the REGISTRATION, which in a dangling fixture
-# is already fully correct (the registration names the right command — the FILE that command points
-# at is what's missing). Pin what this task actually does, no more: the merge runs harmlessly
-# (idempotent, so re-writing an already-correct registration changes nothing observable), the
-# function still returns 0, and the missing gate file stays missing — restoring it is explicitly out
-# of this task's scope.
+# dangling falls through the SAME case arm as unregistered/partial — deliberately: the gate-FILE
+# restore (added in a later round of this same task) hangs off this state too, and this `case` must
+# not block it. This block, unlike that one, is about the REGISTRATION half: in a dangling fixture
+# the registration is already fully correct (it names the right command — the FILE that command
+# points at is what's missing), so re-running the merge must be harmless and idempotent, changing
+# nothing observable, and the function must still return 0.
+#
+# This fixture also has no `core/gate-src`, so — as a side effect, not what this block exists to pin
+# — the gate-file restore below finds nothing to restore either. That specific case ("no restore
+# source -> no restore, and it says so") gets its own dedicated assertion further down, driven by a
+# fixture built to test exactly that. A prior version of this comment claimed restoring the gate file
+# was "explicitly out of this task's scope" and asserted the file's non-existence as proof — true only
+# because this fixture happens to carry no restore source, and stale the moment the restore was
+# added. Removed rather than reworded to keep asserting non-existence: that would just be the same
+# assertion under two names for two different reasons, one of which no longer holds.
 R="$(mktemp -d)"; W="$(wire_fixture "$R")"
 rm -f "$R/.claude/hooks/flaky-kit-self-protection-gate.sh"
 wiring_repair "$W" degraded dangling >/dev/null 2>&1
@@ -720,8 +727,6 @@ esac
 case "$(slots_of "$R/.claude/settings.json")" in
   *PreToolUse:Write*) ok ;; *) bad "dangling: the existing registration must still cover Write" ;;
 esac
-[ ! -f "$R/.claude/hooks/flaky-kit-self-protection-gate.sh" ] \
-  && ok || bad "dangling: this task must not restore the gate file itself — that is Task 3's job"
 rm -rf "$R"
 
 # Stale-lock recovery (review Critical): a `.lock.d` left behind by a killed holder (a Ctrl-C
@@ -925,6 +930,98 @@ wiring_repair "$K" degraded dangling >/dev/null 2>&1
 case "$(wiring_repair "$K" degraded dangling 2>&1 >/dev/null)" in
   *restore\ source*) ok ;; *) bad "a missing restore source must be named" ;;
 esac
+rm -rf "$R"
+
+# --- review round 2, Important 1: a ZERO-BYTE restore source must not be restored -----------------
+# `[ -r ]` passes on an empty file. Installing one would create a gate that PASSES its own existence
+# check (`_wiring_one` below the root-owned tiers tests only `[ -f ]`) while enforcing nothing at
+# all — a loud, repairable `dangling` silently flipping to `wired`, worse than the missing file it
+# replaced. Asserted three ways: the file must not land, the ENGINE'S OWN wiring verdict must stay
+# `dangling` rather than flip to `wired` (the actual exploit, not just a proxy for it), and the
+# refusal must say why.
+R="$(mktemp -d)"; K="$(wire_fixture "$R")"
+mkdir -p "$K/core/gate-src/claude/lib"
+: > "$K/core/gate-src/claude/flaky-kit-self-protection-gate.sh"   # zero bytes: readable, unusable
+rm -f "$R/.claude/hooks/flaky-kit-self-protection-gate.sh"
+wiring_repair "$K" degraded dangling >/dev/null 2>&1
+[ ! -e "$R/.claude/hooks/flaky-kit-self-protection-gate.sh" ] && ok || bad "a zero-byte restore source must not be installed"
+[ "$(integrity_wiring "$K" degraded)" = dangling ] \
+  && ok || bad "a zero-byte restore source must leave the verdict dangling, not flip it to wired (got $(integrity_wiring "$K" degraded))"
+case "$(wiring_repair "$K" degraded dangling 2>&1 >/dev/null)" in
+  *"no usable restore source"*) ok ;; *) bad "a zero-byte restore source must say why it was refused" ;;
+esac
+rm -rf "$R"
+
+# --- review round 2, Important 2: mkdir/cp failures inside the restore must say why ----------------
+# Same shape as the carried Task-2 finding this task already fixed in the REGISTRATION path, one
+# function below — a failure here must not be silent either.
+#
+# mkdir failure: a plain FILE sits where the destination directory must go, so `mkdir -p "$dest/lib"`
+# cannot create it (verified directly above: `mkdir -p` on a path whose parent is a regular file
+# returns 1 with "Not a directory").
+R="$(mktemp -d)"; K="$(wire_fixture "$R")"
+mkdir -p "$K/core/gate-src/claude/lib"
+printf '#!/bin/sh\nexit 0\n' > "$K/core/gate-src/claude/flaky-kit-self-protection-gate.sh"
+rm -rf "$R/.claude/hooks"
+: > "$R/.claude/hooks"                       # a FILE where the dest directory must go
+OUT="$(wiring_repair "$K" degraded dangling 2>&1 >/dev/null)"
+case "$OUT" in *"not creatable"*) ok ;; *) bad "an mkdir failure inside the restore must say why — got: $OUT" ;; esac
+rm -rf "$R"
+
+# cp failure: `dest/lib` is pre-created (so `mkdir -p` is a mere existence check, not a write — see
+# the mkdir-existing probe above) but `dest` itself is not writable, so the gate script — which lands
+# directly in `dest`, not `dest/lib` — cannot be written (verified directly above: `cp` into a 555
+# directory returns 1, "Permission denied").
+R="$(mktemp -d)"; K="$(wire_fixture "$R")"
+mkdir -p "$K/core/gate-src/claude/lib"
+printf '#!/bin/sh\nexit 0\n' > "$K/core/gate-src/claude/flaky-kit-self-protection-gate.sh"
+rm -f "$R/.claude/hooks/flaky-kit-self-protection-gate.sh"
+mkdir -p "$R/.claude/hooks/lib"               # pre-created while still writable
+chmod 555 "$R/.claude/hooks"
+OUT="$(wiring_repair "$K" degraded dangling 2>&1 >/dev/null)"
+chmod 755 "$R/.claude/hooks"                 # restore perms so cleanup below can actually remove it
+case "$OUT" in *"writing"*"failed"*) ok ;; *) bad "a cp failure inside the restore must say why — got: $OUT" ;; esac
+rm -rf "$R"
+
+# audit-lib copy failure: the gate script itself lands fine (dest dir writable), but `dest/lib` is
+# not, so only the audit lib fails to copy. This is a DEGRADED outcome, not a broken one — the
+# adapter's gate stubs `hektor_audit(){ :; }` when the lib is absent — so the message says exactly
+# that instead of treating it as a full restore failure, and the gate script must still land.
+R="$(mktemp -d)"; K="$(wire_fixture "$R")"
+mkdir -p "$K/core/gate-src/claude/lib"
+printf '#!/bin/sh\nexit 0\n' > "$K/core/gate-src/claude/flaky-kit-self-protection-gate.sh"
+chmod +x "$K/core/gate-src/claude/flaky-kit-self-protection-gate.sh"
+printf 'audit\n' > "$K/core/gate-src/claude/lib/audit.sh"
+rm -f "$R/.claude/hooks/flaky-kit-self-protection-gate.sh"
+mkdir -p "$R/.claude/hooks/lib"
+chmod 555 "$R/.claude/hooks/lib"             # lib itself unwritable; hooks/ stays writable
+OUT="$(wiring_repair "$K" degraded dangling 2>&1 >/dev/null)"
+chmod 755 "$R/.claude/hooks/lib"             # restore perms so cleanup below can actually remove it
+case "$OUT" in *"still runs, unaudited"*) ok ;; *) bad "a failed audit-lib copy must say the gate still runs unaudited — got: $OUT" ;; esac
+[ -x "$R/.claude/hooks/flaky-kit-self-protection-gate.sh" ] \
+  && ok || bad "the gate script itself must still land even when the audit lib copy fails"
+rm -rf "$R"
+
+# --- review round 2, Important 3: a HEALTHY harness must not be overwritten just because the OTHER
+# --- one is dangling -------------------------------------------------------------------------------
+# `dangling` is a verdict over the WHOLE project (the worse of the two harnesses), so a project whose
+# Claude gate is missing and whose Cursor gate is fine reaches `_wr_restore_gate` for BOTH harnesses.
+# Without the "already there" guard, the healthy Cursor gate gets silently overwritten and announced
+# as restored — a repair claimed for a harness that was never broken, the same misattribution class
+# the per-harness `did_c`/`did_u` split fixed in the registration path. Proven with deliberately
+# DIFFERENT content at the two restore sources, so an overwrite is observable by content, not just by
+# an announcement.
+R="$(mktemp -d)"; K="$(wire_fixture "$R")"
+mkdir -p "$K/core/gate-src/claude/lib" "$K/core/gate-src/cursor/lib"
+printf '#!/bin/sh\nexit 0\n' > "$K/core/gate-src/claude/flaky-kit-self-protection-gate.sh"
+printf '#!/bin/sh\nexit 1\n' > "$K/core/gate-src/cursor/flaky-kit-self-protection-gate.sh"
+rm -f "$R/.claude/hooks/flaky-kit-self-protection-gate.sh"          # Claude: dangling
+cp "$R/.cursor/hooks/flaky-kit-self-protection-gate.sh" "$R/before-cursor-gate.sh"  # Cursor: healthy
+OUT="$(wiring_repair "$K" degraded dangling 2>&1 >/dev/null)"
+cmp -s "$R/before-cursor-gate.sh" "$R/.cursor/hooks/flaky-kit-self-protection-gate.sh" \
+  && ok || bad "a healthy Cursor gate must not be overwritten just because Claude's is dangling"
+case "$OUT" in *"restored the cursor gate"*) bad "a healthy Cursor gate must not be announced as restored — got: $OUT" ;; *) ok ;; esac
+case "$OUT" in *"restored the claude gate"*) ok ;; *) bad "the actually-broken Claude gate must still be restored and announced — got: $OUT" ;; esac
 rm -rf "$R"
 
 # --- carried forward from Task 2 review, Finding 1: a failed merge must not be completely silent -
