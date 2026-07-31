@@ -104,9 +104,25 @@ it goes on refusing until a human unlocks, reinstalls and locks. The refusal is 
 the repair: at that tier the protection is real, its loss is serious, and a registration written into
 a session that cannot load it buys nothing while destroying the only signal that anything is wrong.
 
+**`mismatch` is the third refusing tier, and it writes nothing either.** The ruling above was phrased
+"where the tree is root-owned", which reaches `hardened` and `stale` but not `mismatch` — the tier
+whose whole meaning is that the record *claims* root ownership the tree does not have. The whole-branch
+review measured what the repair did there: it restored the gate script **out of a tree the same run
+declares untrustworthy** — "this is not the tree that was hardened; nothing it produces should be
+trusted" — into the path that is the kit's own protection hook, and flipped the axis from `dangling` to
+`wired`.
+
+The run is refused anyway, so the write buys nothing, which is the argument that settled `hardened`
+and `stale`. What it costs is real: `harden_targets` picks up `.claude/hooks/flaky-kit-self-protection-gate.sh`
+only when the file exists, so before this branch a re-lock left that path empty and the kit went on
+refusing until someone reinstalled. With the file planted, the re-lock chowns it to root and the
+ownership identity test accepts it — a signal that used to survive the printed remedy no longer does.
+No attacker gains a capability they lacked, since at `mismatch` they already own the tree; the point is
+that there is no upside to set against the loss.
+
 Everywhere else the repair runs in full and the run proceeds, unchanged from the warn-and-proceed rule.
-Self-repair is a convenience for the tiers that admit they are conveniences, and the hardened tier
-keeps its wall.
+Self-repair is a convenience for the tiers that admit they are conveniences. Every tier that refuses —
+`hardened`, `stale`, `mismatch` — writes nothing at all.
 
 ## 5. Considered and rejected: a liveness heartbeat
 
