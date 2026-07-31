@@ -22,7 +22,7 @@ project having done the right thing.
 | Decision | Choice |
 |---|---|
 | Trigger | **Automatic.** Any entrypoint whose guard sees a repairable wiring state repairs it |
-| Registration | Repaired at **every** tier |
+| Registration | Repaired **only where the tree is not root-owned** — see §4, which corrects an earlier draft that repaired at every tier |
 | Gate file | Restored **only where the tree is not root-owned**, from a copy installed inside `core/` |
 | After repairing where the tree is root-owned | **Still refuses.** The gate arms on the next session; the message says so and the exit is a restart |
 | Neighbouring hooks | Out of scope. The kit repairs its own registration, not the project's other packs' |
@@ -83,15 +83,27 @@ write. Below `hardened` the restore source is no better protected than anything 
 A written registration does not arm a running session. The harness reads hook configuration at
 session start, so a repair takes effect on the next session and not before.
 
-This is stated rather than smoothed over, and it decides the post-repair behaviour: where the tree is
-root-owned the guard still returns 76 after repairing, because the refusal means *the protection that
-is actually in place has been lost*, and a repair does not put it back for this session. The message
-names all three facts — what was broken, that it was repaired, and that a restart arms it. The
-legitimate exit is a session restart, which is cheap; unlike the tier's other remedies it needs no
-password.
+This is stated rather than smoothed over, and it decides the post-repair behaviour — but the first
+draft of that decision was wrong, and implementation proved it.
 
-Everywhere else the repair is reported and the run proceeds, unchanged from today's warn-and-proceed
-rule.
+The draft said: where the tree is root-owned the guard repairs and still returns 76, because the
+protection it records is not in place for this session. That holds for exactly **one call**.
+`integrity_guard` recomputes both axes from the filesystem every time, and the repair writes the
+registration to disk — so the next entrypoint reads `wired` and returns 0, while the running session's
+harness still has no gate loaded. Measured: `integrity_report hardened unregistered` → 76,
+`integrity_report hardened wired` → 0. One entrypoint refuses, every entrypoint after it proceeds
+unprotected. That is the silent loss of protection this whole arc exists to prevent, reintroduced by
+the repair itself.
+
+**So where the tree is root-owned, nothing is repaired — not the gate file, and not the registration
+either.** The guard detects, says exactly what is wrong, and refuses; because nothing changes on disk,
+it goes on refusing until a human unlocks, reinstalls and locks. The refusal is worth more there than
+the repair: at that tier the protection is real, its loss is serious, and a registration written into
+a session that cannot load it buys nothing while destroying the only signal that anything is wrong.
+
+Everywhere else the repair runs in full and the run proceeds, unchanged from the warn-and-proceed rule.
+Self-repair is a convenience for the tiers that admit they are conveniences, and the hardened tier
+keeps its wall.
 
 ## 5. Considered and rejected: a liveness heartbeat
 

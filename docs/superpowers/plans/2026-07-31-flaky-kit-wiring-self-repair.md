@@ -43,6 +43,45 @@
 
 ---
 
+## Correction taken during Task 5 — root-owned trees repair nothing
+
+Tasks 2 and 4 shipped a registration repair that runs at every tier, and every document said a
+root-owned tree "still refuses after repairing". Task 5's review measured that and it is true for
+exactly **one call**: `integrity_guard` recomputes from the filesystem each time, the repair writes the
+registration to disk, so the next entrypoint reads `wired` and returns 0 while the session's harness
+still has no gate loaded. `integrity_report hardened unregistered` → 76; `integrity_report hardened
+wired` → 0.
+
+**Ruling: where the tree is root-owned — `hardened` and `stale` — `wiring_repair` writes nothing at
+all.** Not the gate file, which Task 3 already refused there, and not the registration either. It
+narrates what is wrong and returns; the guard's own refusal then holds on every subsequent call,
+because nothing on disk has changed. Below root ownership the repair is unchanged.
+
+`wiring_repair` gains one guard, above the harness blocks and after the `wiring` case:
+
+```bash
+  # Root-owned tree: detect and say so, repair nothing. A registration written here would be read as
+  # `wired` by the very next entrypoint — the guard recomputes from disk every call — so the tier
+  # would stop refusing while this session's harness still has no gate loaded. One call would refuse
+  # and every call after it would proceed unprotected, which is the silent loss this axis exists to
+  # catch. The refusal is worth more here than the repair: the protection at this tier is real, and a
+  # registration this session cannot use buys nothing while destroying the only signal.
+  case "$tier" in
+    hardened|stale)
+      echo "integrity: not repairing — this tree is root-owned, so a repair would silence the refusal on the next entrypoint without arming anything. Unlock, re-run the installer, and lock." >&2
+      return 0 ;;
+  esac
+```
+
+`_wr_restore_gate`'s own `hardened|stale` arm becomes unreachable through `wiring_repair` and stays as
+a defence in depth for any future direct caller — say so where it lives rather than deleting it.
+
+Assertions this needs: at `hardened` **and** at `stale`, an `unregistered` fixture must come back with
+its settings file byte-identical and the refusal message present; and the guard must return 76 on the
+**second** consecutive call as well as the first, which is the property the previous behaviour failed.
+
+---
+
 ## Task 1: Ship the restore source
 
 **Files:**
