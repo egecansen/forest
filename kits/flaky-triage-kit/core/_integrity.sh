@@ -397,9 +397,30 @@ integrity_report() {
 # forgery — the environment belongs to whoever launches the entrypoint — so it would have restored
 # the INTEGRITY_FAKE_UID hole this kit removed, under a new name and past a name-specific test.
 # Recomputing costs at most three jq calls per entrypoint. That is the price of the check being real.
+#
+# It also loads the repair unit, lazily, from "$kit/core" — deliberately NOT from this file's own
+# location via a private ${BASH_SOURCE[0]}-derived directory (the shape the task's own plan sketched,
+# mirroring how every one of the thirteen entrypoints finds ITS OWN directory before sourcing this
+# file). Putting that same idiom here would place a `${BASH_SOURCE[0]}` literal directly inside
+# _integrity.sh — which is exactly the "any $UPPERCASE read outside a comment" shape the environment
+# scan two sections below exists to forbid, and does: verified empirically, adding that one line
+# alone turns it red. `kit/core` is not a guess standing in for that path — every one of the thirteen
+# entrypoints invokes this function with its own directory's parent as the sole argument (`$HERE/..`),
+# so `kit/core` IS `$HERE`, the exact directory `_wiring_repair.sh` is installed beside, reached with
+# no new uppercase name entering this file. Missing or unreadable resolves to a no-op — a kit_root
+# that predates Tasks 2/3, or a test fixture that never copied the file, must not wedge any of the
+# thirteen callers either. Once loaded (for real, or as the no-op stub) it stays loaded: a later call
+# whose OWN kit_root lacks the file does not re-run this check, so it can never clobber a real
+# wiring_repair with the stub.
 integrity_guard() {
   local kit="${1:-}" tier wiring
+  [ -r "$kit/core/_wiring_repair.sh" ] && . "$kit/core/_wiring_repair.sh"
+  command -v wiring_repair >/dev/null 2>&1 || wiring_repair() { return 0; }
   tier="$(integrity_tier "$(integrity_owner_uid "$kit/core")" "$(integrity_state "$kit")")"
   wiring="$(integrity_wiring "$kit" "$tier")"
+  # Repair first, report the PRE-repair verdict. A written registration does not arm a running
+  # session — the harness reads hook config at startup — so where the tree is root-owned this still
+  # refuses, and it should: the protection the tier records is not in place for this session.
+  wiring_repair "$kit" "$tier" "$wiring"
   integrity_report "$tier" "$wiring"
 }

@@ -1053,5 +1053,93 @@ case "$OUT" in *"REPAIRED — the Cursor gate registration has been rewritten."*
 case "$OUT" in *"REPAIRED — the Claude gate registration has been rewritten."*) bad "Claude must not be reported REPAIRED when its own merge failed — got: $OUT" ;; *) ok ;; esac
 rm -rf "$R"
 
+# --- Task 4: integrity_guard calls wiring_repair between detection and reporting ------------------
+# Three prior tasks built _wiring_repair.sh; nothing in production sourced it and integrity_guard
+# never called it, so the whole repair was dead code reachable from no entrypoint (confirmed at the
+# time: grep -rn "wiring_repair" outside core/tests/ matched only comments). This section pins that
+# it is now wired in, AND that the ordering is the deliberate one: repair happens, but the verdict
+# handed to integrity_report is the PRE-repair one — a written registration does not arm a running
+# session, because the harness reads hook config at startup, so a root-owned tree must still refuse
+# on the very call that finds and fixes it.
+
+# integrity_guard repairs and proceeds at a tier that was never going to refuse anyway (no root
+# ownership involved) — a genuinely unprotected fixture whose settings.json has been wiped of its
+# registration entirely.
+#
+# ADAPTED FROM THE BRIEF, same convention as every other "ADAPTED FROM THE BRIEF" note in this file:
+# wire_fixture(R) returns the KIT path directly, not a project root one level above it, so K is just
+# that return value and the settings file lives under R (wire_fixture's own argument), never under K.
+R="$(mktemp -d)"; K="$(wire_fixture "$R")"
+echo '{}' > "$R/.claude/settings.json"
+integrity_guard "$K" >/dev/null 2>&1; rc=$?
+[ "$rc" = 0 ] && ok || bad "an unprotected tree must proceed after repairing"
+case "$(slots_of "$R/.claude/settings.json")" in
+  *PreToolUse:Bash*) ok ;; *) bad "the guard must have repaired the registration" ;;
+esac
+# Second call: now wired, and silent about wiring.
+case "$(integrity_guard "$K" 2>&1 >/dev/null)" in
+  *WIRING*) bad "a repaired registration must read as wired on the next call" ;; *) ok ;;
+esac
+rm -rf "$R"
+
+# The guard's signature is unchanged, so no call site moved.
+#
+# ADAPTED FROM THE BRIEF: the brief's own snippet here — `[ "$(grep -c '...' "$HERE"/../*.sh)" -ge 1 ]`
+# — hands `[ ]` a MULTI-LINE "path:count" blob the instant more than one file matches (grep -c prints
+# one "path:count" line PER FILE when given multiple files, not a single combined total), and `[ -ge ]`
+# against a multi-line string is not a comparison, it is a guaranteed "integer expression expected"
+# error — verified directly against this unmodified tree, before this task changed anything: that
+# exact line evaluates to `bad` unconditionally, every time, regardless of how many call sites exist.
+# `grep -o` + `wc -l` collapses the matches across every file to the single total the assertion needs.
+[ "$(grep -o 'integrity_guard "' "$HERE"/../*.sh | wc -l | tr -d '[:space:]')" -eq 13 ] \
+  && ok || bad "integrity_guard call sites must not have moved (expected 13)"
+
+# The ordering — repair, then report the PRE-repair value — is pinned by BEHAVIOUR, not by a grep for
+# how the call is spelled: a hardened tree that lost its registration must still refuse (76) on the
+# very call that repairs it. Real root ownership needs a password this suite cannot supply, so a
+# PATH-shimmed `stat` reports uid 0 for exactly this fixture's core/ dir AND its (still user-owned)
+# gate file — the same technique core/tests/lock-tier-test.sh already uses to drive its own hardened
+# branch without sudo, extended to a colon-separated STAT_TARGETS the same way that file's own
+# STAT_TARGETS does, so BOTH root-ownership checks integrity_guard can reach (the tier's own
+# integrity_owner_uid call, and integrity_wiring's identity check on the resolved gate path) see a
+# root-owned tree, not just the first one a narrower fixture happened to need. Only the numeric `%u`
+# query is intercepted, matching that file's own rule; anything else, or a `%u` query against any
+# other path, falls straight through to the real stat.
+REAL_STAT="$(command -v stat)"
+export REAL_STAT
+SHIM="$(mktemp -d)"
+cat > "$SHIM/stat" <<'STATSH'
+#!/bin/bash
+case " $* " in *" %u "*) ;; *) exec "$REAL_STAT" "$@" ;; esac
+IFS=:
+for t in ${STAT_TARGETS:-}; do
+  for a in "$@"; do [ "$a" = "$t" ] && { echo 0; exit 0; }; done
+done
+unset IFS
+exec "$REAL_STAT" "$@"
+STATSH
+chmod +x "$SHIM/stat"
+
+# `pwd -P` immediately after mktemp, same reason as the PR fixture above and lock-tier-test.sh /
+# install-guard-test.sh: on macOS mktemp -d hands back a /var/folders/... path whose /var is a
+# symlink to /private/var, and integrity_project_root resolves the PHYSICAL path via `cd ... && pwd
+# -P`. Comparing the shim's target against the un-resolved $R silently misses every match: the gate
+# path integrity_wiring actually stats is the /private/var/... form, so a naive STAT_TARGETS built
+# from the raw mktemp path never fires there and the mutation drill below stays green for the wrong
+# reason (a resolution miss, not the ordering being right) — caught by cross-checking this fixture's
+# own POST-repair wiring against the same shim before trusting the rc it produces.
+R="$(mktemp -d)"; R="$(cd "$R" && pwd -P)"; K="$(wire_fixture "$R")"
+printf 'claude\n' > "$K/core/.harness"
+printf '{"tier":"hardened","at":"x"}\n' > "$K/core/.lock-state"
+echo '{}' > "$R/.claude/settings.json"          # the registration is gone: unregistered
+GATE="$R/.claude/hooks/flaky-kit-self-protection-gate.sh"
+RC="$(STAT_TARGETS="$K/core:$GATE" PATH="$SHIM:$PATH" integrity_guard "$K" >/dev/null 2>&1; echo $?)"
+[ "$RC" = 76 ] && ok \
+  || bad "a hardened tree that lost its registration must still refuse (76) on the very call that repairs it — reporting the post-repair value would let the call that found the breakage proceed as though it never happened (got $RC)"
+case "$(slots_of "$R/.claude/settings.json")" in
+  *PreToolUse:Bash*) ok ;; *) bad "the guard must have repaired the registration even while it still refuses" ;;
+esac
+rm -rf "$R" "$SHIM"
+
 echo "integrity-test: $pass passed, $fail failed"
 [ "$fail" -eq 0 ]
