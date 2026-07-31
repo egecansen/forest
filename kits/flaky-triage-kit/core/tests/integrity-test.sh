@@ -150,11 +150,15 @@ EXPECT_GUARDED="$(printf '%s\n' $ENTRYPOINTS | sort | tr '\n' ' ')"
 #
 # Fixed by deriving the expected set from the FILESYSTEM instead of the hardcoded list: every
 # core/*.sh file is an entrypoint that must carry the guard UNLESS it is a known non-entrypoint —
-# the three sourced helpers (never run standalone) or one of the two functional exclusions named
-# above. A new file lands in neither carve-out by default, so it is guilty (must carry the guard)
-# until someone deliberately, reviewably adds it to NON_ENTRYPOINTS with a stated reason — which
-# $ENTRYPOINTS along could never enforce, since nothing added a new file to it automatically either.
-NON_ENTRYPOINTS="_integrity.sh _lock.sh _strict.sh lock-kit.sh hedge-scan.sh"
+# the four sourced helpers (never run standalone) or one of the two functional exclusions named
+# above. `_wiring_repair.sh` joins the sourced helpers here for the same reason `_integrity.sh`
+# itself is excluded: it is sourced BY the file that calls integrity_guard, not a standalone
+# entrypoint, and it must never call the guard itself — the mutation it performs is precisely the
+# repair a refused entrypoint would never reach. A new file lands in neither carve-out by default,
+# so it is guilty (must carry the guard) until someone deliberately, reviewably adds it to
+# NON_ENTRYPOINTS with a stated reason — which $ENTRYPOINTS along could never enforce, since nothing
+# added a new file to it automatically either.
+NON_ENTRYPOINTS="_integrity.sh _lock.sh _strict.sh _wiring_repair.sh lock-kit.sh hedge-scan.sh"
 UNGUARDED=""
 for f in "$CORE"/*.sh; do
   [ -f "$f" ] || continue
@@ -618,6 +622,110 @@ esac
 # command string, not a read of the caller's environment.
 grep -v '^[[:space:]]*#' "$HERE/../_integrity.sh" | grep -qE '(^|[^\\])\$\{?[A-Z][A-Z0-9_]*' \
   && bad "no environment override may enter _integrity.sh — a caller who can set a variable silences the guard" || ok
+
+# --- wiring_repair: the registration half ------------------------------------------------------
+. "$HERE/../_wiring_repair.sh"
+slots_of() { _wiring_slots "$1" | sed 's/\t.*//' | sort | tr '\n' ' '; }
+
+# ADAPTED FROM THE BRIEF: wire_fixture (above) returns the KIT path
+# ($dir/.claude/skills/hektor-flaky-triage), not the project root, so the settings file this block
+# reads and mutates lives at "$R/.claude/settings.json" (R is the project root passed INTO
+# wire_fixture), never at "$W/.claude/settings.json" (W is wire_fixture's return value, the kit
+# path itself). The brief's snippet assumed the opposite convention; every R/W usage below is
+# adjusted to the helper's real contract instead of introducing a second fixture.
+
+# unregistered -> all three slots written, at every tier.
+for T in hardened stale degraded unprotected unlocked; do
+  R="$(mktemp -d)"; W="$(wire_fixture "$R")"; echo '{}' > "$R/.claude/settings.json"
+  wiring_repair "$W" "$T" unregistered >/dev/null 2>&1
+  case "$(slots_of "$R/.claude/settings.json")" in
+    *PreToolUse:Bash*) ok ;; *) bad "$T: repair must register the Bash slot" ;;
+  esac
+  case "$(slots_of "$R/.claude/settings.json")" in
+    *PreToolUse:Write*) ok ;; *) bad "$T: repair must register the Write slot" ;;
+  esac
+  case "$(slots_of "$R/.claude/settings.json")" in
+    *PreToolUse:Edit*) ok ;; *) bad "$T: repair must register the Edit slot" ;;
+  esac
+  rm -rf "$R"
+done
+
+# partial -> only the missing slot is added, and the present one is not duplicated.
+R="$(mktemp -d)"; W="$(wire_fixture "$R")"
+jq 'del(.hooks.PreToolUse[] | select(.matcher=="Bash"))' "$R/.claude/settings.json" > "$R/s" && mv "$R/s" "$R/.claude/settings.json"
+wiring_repair "$W" degraded partial >/dev/null 2>&1
+[ "$(jq '[.hooks.PreToolUse[] | select(.matcher=="Write|Edit")] | length' "$R/.claude/settings.json")" = 1 ] \
+  && ok || bad "repair must not duplicate a matcher that is already registered"
+# The assertion above only pins the MATCHER BLOCK count, already guarded by
+# `any(.hooks.PreToolUse[]?; .matcher==$m)`. It stays 1 even if the COMMAND-level guard
+# (`any(.hooks[]?; .command==$c)`) is dropped, because that mutation adds a second entry
+# INSIDE the existing block's .hooks array rather than a second block — confirmed by mutation:
+# dropping the command-level guard left this file green. Pinned here instead, at the level the
+# guard actually operates on.
+[ "$(jq '[.hooks.PreToolUse[] | select(.matcher=="Write|Edit")][0].hooks | length' "$R/.claude/settings.json")" = 1 ] \
+  && ok || bad "repair must not duplicate the command already registered inside an existing matcher block"
+case "$(slots_of "$R/.claude/settings.json")" in *PreToolUse:Bash*) ok ;; *) bad "partial: the missing slot must be added" ;; esac
+rm -rf "$R"
+
+# foreign is NEVER written to. The file must come back byte-identical.
+R="$(mktemp -d)"; W="$(wire_fixture "$R")"
+cp "$R/.claude/settings.json" "$R/before.json"
+wiring_repair "$W" hardened foreign >/dev/null 2>&1
+cmp -s "$R/before.json" "$R/.claude/settings.json" && ok || bad "foreign must never be repaired — a stranger's gate is not ours to overwrite"
+rm -rf "$R"
+
+# wired and absent do nothing.
+for V in wired absent; do
+  R="$(mktemp -d)"; W="$(wire_fixture "$R")"; cp "$R/.claude/settings.json" "$R/before.json"
+  wiring_repair "$W" degraded "$V" >/dev/null 2>&1
+  cmp -s "$R/before.json" "$R/.claude/settings.json" && ok || bad "$V must not touch the settings file"
+  rm -rf "$R"
+done
+
+# The repair is ADDITIVE: unrelated keys survive untouched.
+R="$(mktemp -d)"; W="$(wire_fixture "$R")"
+jq '.permissions = {allow:["Bash(ls:*)"]} | .env = {FOO:"bar"} | .model = "sonnet"' "$R/.claude/settings.json" > "$R/s" && mv "$R/s" "$R/.claude/settings.json"
+jq 'del(.hooks.PreToolUse[] | select(.matcher=="Bash"))' "$R/.claude/settings.json" > "$R/s" && mv "$R/s" "$R/.claude/settings.json"
+wiring_repair "$W" degraded partial >/dev/null 2>&1
+[ "$(jq -r '.permissions.allow[0]' "$R/.claude/settings.json")" = "Bash(ls:*)" ] && ok || bad "repair must leave permissions untouched"
+[ "$(jq -r '.env.FOO' "$R/.claude/settings.json")" = "bar" ] && ok || bad "repair must leave env untouched"
+[ "$(jq -r '.model' "$R/.claude/settings.json")" = "sonnet" ] && ok || bad "repair must leave model untouched"
+rm -rf "$R"
+
+# Not an installed layout -> nothing is written anywhere. Running the suite from the source tree
+# must never mutate a settings file.
+R="$(mktemp -d)"; mkdir -p "$R/notakit/core"
+wiring_repair "$R/notakit" degraded unregistered >/dev/null 2>&1
+[ -z "$(find "$R" -name 'settings*.json' 2>/dev/null)" ] && ok || bad "a non-installed layout must never be written to"
+rm -rf "$R"
+
+# It narrates on stderr and nothing reaches stdout — four entrypoints emit a contract there.
+R="$(mktemp -d)"; W="$(wire_fixture "$R")"; echo '{}' > "$R/.claude/settings.json"
+[ -z "$(wiring_repair "$W" degraded unregistered 2>/dev/null)" ] \
+  && ok || bad "wiring_repair must never write to stdout"
+case "$(wiring_repair "$W" degraded unregistered 2>&1 >/dev/null)" in
+  *REPAIRED*) ok ;; *) bad "a repair must say so on stderr" ;;
+esac
+rm -rf "$R"
+
+# No environment override may enter the repair unit either — with ONE excluded name.
+# CLAUDE_PROJECT_DIR appears in this file as a LITERAL inside single quotes: it is the text written
+# into the settings file, which the harness expands when it later runs the gate. Bash never expands
+# it here, so it is not a read and the property the constraint protects is untouched. grep cannot
+# tell a read from a literal, so the exclusion is by name and the assertion below closes it by
+# behaviour instead — which is stronger than the grep it replaces.
+grep -v '^[[:space:]]*#' "$HERE/../_wiring_repair.sh" | grep -v 'CLAUDE_PROJECT_DIR' \
+  | grep -qE '(^|[^\\])\$\{?[A-Z][A-Z0-9_]*' \
+  && bad "no environment override may enter _wiring_repair.sh" || ok
+
+# The excluded name is genuinely a literal: set it in the environment to something else and the
+# written command must still carry the unexpanded text, never the hijacked path. If this ever fails,
+# the exclusion above has stopped being safe and the grep is no longer the thing to fix.
+R="$(mktemp -d)"; W="$(wire_fixture "$R")"; echo '{}' > "$R/.claude/settings.json"
+CLAUDE_PROJECT_DIR=/tmp/hijack-me wiring_repair "$W" degraded unregistered >/dev/null 2>&1
+grep -q 'CLAUDE_PROJECT_DIR' "$R/.claude/settings.json" && ok || bad "the registered command must keep \$CLAUDE_PROJECT_DIR unexpanded"
+grep -q '/tmp/hijack-me' "$R/.claude/settings.json" && bad "the registered command must not expand CLAUDE_PROJECT_DIR from the caller's environment" || ok
+rm -rf "$R"
 
 echo "integrity-test: $pass passed, $fail failed"
 [ "$fail" -eq 0 ]
