@@ -620,7 +620,16 @@ esac
 # SHAPE — any uppercase parameter read outside a comment. The `[^\\]` guard lets _wiring_resolve's
 # escaped \$CLAUDE_PROJECT_DIR literals through, because those are text substituted into a registered
 # command string, not a read of the caller's environment.
-grep -v '^[[:space:]]*#' "$HERE/../_integrity.sh" | grep -qE '(^|[^\\])\$\{?[A-Z][A-Z0-9_]*' \
+#
+# BASH_SOURCE is excluded by NAME (Task 4), the same way _wiring_repair.sh's own scan below excludes
+# CLAUDE_PROJECT_DIR — and it is a STRONGER exclusion than that one: bash maintains the array itself
+# and overwrites element 0 on every source and function entry, so no caller can preset it to a value
+# this file would read back, and "a caller who can set a variable silences the guard" — the exact
+# threat this assertion exists to catch — does not apply to it. Unlike CLAUDE_PROJECT_DIR's
+# exclusion, which needed the hijack-attempt behavioural assertion further down to be trusted, no
+# such backstop is possible or necessary here: there is no value for anything to hijack.
+grep -v '^[[:space:]]*#' "$HERE/../_integrity.sh" | grep -v 'BASH_SOURCE' \
+  | grep -qE '(^|[^\\])\$\{?[A-Z][A-Z0-9_]*' \
   && bad "no environment override may enter _integrity.sh — a caller who can set a variable silences the guard" || ok
 
 # --- wiring_repair: the registration half ------------------------------------------------------
@@ -1094,6 +1103,73 @@ rm -rf "$R"
 [ "$(grep -o 'integrity_guard "' "$HERE"/../*.sh | wc -l | tr -d '[:space:]')" -eq 13 ] \
   && ok || bad "integrity_guard call sites must not have moved (expected 13)"
 
+# --- review Critical 1: pin that the two production lines (the sourcing line and its no-op
+# --- fallback) actually MATTER, not just that integrity_guard calls wiring_repair -----------------
+# Every fixture above reaches integrity_guard with `wiring_repair` ALREADY defined for real, because
+# THIS test file sources _integrity.sh — and therefore, at load time, _wiring_repair.sh from THIS
+# repo's own core/ — once at the top. wire_fixture() never places a copy of _wiring_repair.sh under
+# its own core/, so nothing above ever exercises _integrity.sh's own lookup or its no-op fallback
+# when that lookup fails. Confirmed by mutation (recorded in the task report): deleting either the
+# sourcing line or the fallback line in _integrity.sh left the WHOLE suite green, all 11 files,
+# 722/0 — the exact inert state this task exists to end.
+#
+# Driven in a genuinely FRESH bash PROCESS, which starts with no functions defined at all (functions
+# do not cross a process boundary the way they cross a subshell), against a fixture whose OWN core/
+# carries a copy of _integrity.sh (and, for the first case, _wiring_repair.sh too) — so
+# `${BASH_SOURCE[0]}` inside THAT copy of _integrity.sh resolves to the FIXTURE's own core/, not this
+# repository's, and it is the lookup this task added that has to find it, not a load that already
+# happened somewhere else.
+DRIVER="$(mktemp)"
+cat > "$DRIVER" <<'DRV'
+. "$1/core/_integrity.sh"
+integrity_guard "$1"
+DRV
+
+R="$(mktemp -d)"; K="$(wire_fixture "$R")"
+cp "$CORE/_integrity.sh" "$CORE/_wiring_repair.sh" "$K/core/"
+echo '{}' > "$R/.claude/settings.json"          # registration gone: unregistered
+bash "$DRIVER" "$K" >/dev/null 2>&1
+case "$(slots_of "$R/.claude/settings.json")" in
+  *PreToolUse:Bash*) ok ;; *) bad "a FRESH process, with wiring_repair defined nowhere yet, must still find and run the repair via _integrity.sh's own lookup — the registration was not repaired" ;;
+esac
+rm -rf "$R"
+
+# Now the SAME shape with _wiring_repair.sh deliberately absent: the no-op fallback must hold. The
+# guard must still return a SANE rc (0 or 76, never a crash or a hang) and keep stdout clean, even
+# when the repair unit this task wires in is itself missing — the "never wedge a caller" contract
+# thirteen entrypoints depend on, exercised here instead of only asserted in a comment.
+R="$(mktemp -d)"; K="$(wire_fixture "$R")"
+cp "$CORE/_integrity.sh" "$K/core/"                     # _wiring_repair.sh deliberately NOT copied
+echo '{}' > "$R/.claude/settings.json"
+OUT="$(bash "$DRIVER" "$K" 2>/dev/null)"; RC=$?
+[ -z "$OUT" ] && ok || bad "a missing _wiring_repair.sh must not leak anything to stdout — got: $OUT"
+case "$RC" in 0|76) ok ;; *) bad "a missing _wiring_repair.sh must still return a sane rc (0 or 76), not wedge the caller (got $RC)" ;; esac
+
+# The rc/stdout pair above does NOT, by itself, distinguish "the fallback defined a no-op" from "the
+# fallback is gone and wiring_repair is simply undefined": integrity_guard's LAST command is always
+# integrity_report, so ITS rc is what the function returns regardless of whether the earlier call to
+# `wiring_repair` inside it succeeded, silently no-op'd, or hit bash's own "command not found" (127)
+# on an undefined name — verified directly: deleting the `|| wiring_repair() { return 0; }` clause
+# and keeping only the sourcing half left the two assertions above (and every other assertion in
+# this file) green. So the fallback's existence has to be probed DIRECTLY: source the same
+# fixture and call `wiring_repair` itself, not just integrity_guard, and check both that it returns 0
+# and that bash never reports it as an unknown command.
+DRIVER2="$(mktemp)"
+cat > "$DRIVER2" <<'DRV'
+. "$1/core/_integrity.sh"
+wiring_repair a b c
+printf 'wr_rc=%s\n' "$?"
+DRV
+OUT2="$(bash "$DRIVER2" "$K" 2>&1)"
+case "$OUT2" in
+  *wr_rc=0*) ok ;; *) bad "with _wiring_repair.sh missing, wiring_repair must still be callable and return 0 via the no-op fallback — got: $OUT2" ;;
+esac
+case "$OUT2" in
+  *"not found"*) bad "with _wiring_repair.sh missing and no fallback, wiring_repair is an UNDEFINED command — got: $OUT2" ;; *) ok ;;
+esac
+rm -rf "$R"
+rm -f "$DRIVER" "$DRIVER2"
+
 # The ordering — repair, then report the PRE-repair value — is pinned by BEHAVIOUR, not by a grep for
 # how the call is spelled: a hardened tree that lost its registration must still refuse (76) on the
 # very call that repairs it. Real root ownership needs a password this suite cannot supply, so a
@@ -1133,6 +1209,21 @@ printf 'claude\n' > "$K/core/.harness"
 printf '{"tier":"hardened","at":"x"}\n' > "$K/core/.lock-state"
 echo '{}' > "$R/.claude/settings.json"          # the registration is gone: unregistered
 GATE="$R/.claude/hooks/flaky-kit-self-protection-gate.sh"
+
+# CONTROL, required (review Critical 2): prove the shim actually lands this fixture on `hardened`
+# BEFORE trusting the rc below — this file's own rule, stated at the K1 CONTROL earlier in this file
+# ("the fixture must reach a non-absent wiring state, or every assertion below is vacuous"), applies
+# here too. Without this, a shim that silently fails to fire (STAT_TARGETS mistyped, PATH not
+# actually picked up, the shim script itself broken) leaves integrity_owner_uid reporting the REAL
+# uid, and the tier becomes `mismatch` instead (recorded hardened, not actually root-owned) — which
+# ALSO refuses with 76 AND ALSO still runs the repair, so both assertions below would stay green
+# against a tier they do not name, and the decisive mutation would no longer distinguish anything
+# either, because `mismatch` refuses regardless of wiring.
+CONTROL_TIER="$(export STAT_TARGETS="$K/core:$GATE" PATH="$SHIM:$PATH"
+  integrity_tier "$(integrity_owner_uid "$K/core")" "$(integrity_state "$K")")"
+[ "$CONTROL_TIER" = hardened ] \
+  && ok || bad "CONTROL: the shim must make this fixture read as hardened, or the rc check below is vacuous (got $CONTROL_TIER)"
+
 RC="$(STAT_TARGETS="$K/core:$GATE" PATH="$SHIM:$PATH" integrity_guard "$K" >/dev/null 2>&1; echo $?)"
 [ "$RC" = 76 ] && ok \
   || bad "a hardened tree that lost its registration must still refuse (76) on the very call that repairs it — reporting the post-repair value would let the call that found the breakage proceed as though it never happened (got $RC)"
