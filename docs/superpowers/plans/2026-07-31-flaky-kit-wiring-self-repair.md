@@ -110,16 +110,20 @@ changed before reading the result.
 | Mutation | Must redden, and only it |
 |---|---|
 | the gate-src `cp` reads a different existing file (point its source at the cursor gate) | the `cmp -s` byte-identity assertion |
-| the gate-src `cp` becomes `cat "$src" > "$dst"` — a copy that does **not** preserve mode bits | the `-x` assertion |
+| the gate-src `cp` becomes `cat "$src" > "$dst"` **and the `chmod +x` on the next line is neutered** — both, or the result is green | the `-x` assertion |
 | the `vendor` call for `gate-src/claude/lib/audit.sh` is removed | the `lib/audit.sh` assertion |
 | the gate-src `cp` source points at a nonexistent path | the `-f` assertion (and, unavoidably, the three above it) |
 
-The second one is the reason this table exists. `cp` preserves the source's mode, and the adapter gate
-is tracked `100755`, so the explicit `chmod +x` is redundant in practice and a mutation that deletes it
-leaves the suite green. That does not make the assertion worthless — it guards against a future change
-to a copy mechanism that drops the bit, which is exactly what the `cat >` mutation stands in for — but
-it does mean the mutation must target the *copy*, not the `chmod`. Do not record an assertion as
-load-bearing on the strength of a mutation that never targeted the line it guards.
+The second row is the reason this table exists, and it needs both halves. `cp` preserves the source's
+mode and the adapter gate is tracked `100755`, so neutering the `chmod +x` alone leaves the suite green
+— the copy already arrived executable. Replacing the `cp` with `cat >` alone also leaves it green — the
+`chmod +x` on the next line puts the bit back. Only both together produce a file that exists, matches
+byte for byte, and is not executable, which is the one state this assertion exists to catch.
+
+That redundancy does not make the assertion worthless: it guards against a future change to a copy
+mechanism that drops the bit, and the `chmod +x` mirrors the existing pattern at `install.sh:154`. What
+it does mean is that an assertion is not load-bearing on the strength of a mutation that never produced
+the state it names. Run each row and read only what it isolates.
 
 - [ ] **Step 6: Run the whole suite and commit**
 
