@@ -78,7 +78,7 @@ grep -qF '.claude/hooks/flaky-kit-self-protection-gate.sh' "$P/.claude/settings.
 # Task 3 restores a deleted gate from here. It lives under core/ deliberately: harden_targets
 # chowns that directory, so at a root-owned tier the restore source is root-owned and an agent
 # cannot poison what would be restored.
-GS="$P/.claude/skills/hektor-flaky-triage/core/gate-src/claude"
+GS="$SKILL_DIR/core/gate-src/claude"
 [ -f "$GS/flaky-kit-self-protection-gate.sh" ] && ok || bad "install must ship the claude gate restore source"
 [ -x "$GS/flaky-kit-self-protection-gate.sh" ] && ok || bad "the restore source must stay executable"
 [ -f "$GS/lib/audit.sh" ] && ok || bad "install must ship the audit lib beside the restore source"
@@ -86,6 +86,20 @@ GS="$P/.claude/skills/hektor-flaky-triage/core/gate-src/claude"
 # gate than the one the install registered.
 cmp -s "$GS/flaky-kit-self-protection-gate.sh" "$P/.claude/hooks/flaky-kit-self-protection-gate.sh" \
   && ok || bad "the restore source must be byte-identical to the installed gate"
+
+# --- the same, for Cursor -----------------------------------------------------------------------
+# install.sh writes gate-src/cursor/ symmetrically to gate-src/claude/ above, but nothing had ever
+# installed --harness cursor in this file, so that half rested on by-eye symmetry alone. Task 3
+# restores the Cursor gate from this path too.
+P2="$TMP/proj-cursor"; mkdir -p "$P2"; git -C "$P2" init -q
+SKILL_DIR2="$P2/.claude/skills/hektor-flaky-triage"
+"$KITSRC/install.sh" --harness cursor --project "$P2" >/dev/null 2>&1
+GSC="$SKILL_DIR2/core/gate-src/cursor"
+[ -f "$GSC/flaky-kit-self-protection-gate.sh" ] && ok || bad "install must ship the cursor gate restore source"
+[ -x "$GSC/flaky-kit-self-protection-gate.sh" ] && ok || bad "the cursor restore source must stay executable"
+[ -f "$GSC/lib/audit.sh" ] && ok || bad "install must ship the audit lib beside the cursor restore source"
+cmp -s "$GSC/flaky-kit-self-protection-gate.sh" "$P2/.cursor/hooks/flaky-kit-self-protection-gate.sh" \
+  && ok || bad "the cursor restore source must be byte-identical to the installed gate"
 
 echo "install-guard-test: $pass passed, $fail failed"
 [ "$fail" -eq 0 ]

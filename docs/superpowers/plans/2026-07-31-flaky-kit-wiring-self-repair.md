@@ -102,13 +102,24 @@ Expected: PASS. State the file's new total.
 
 - [ ] **Step 5: Prove the assertions are load-bearing**
 
-```bash
-cp install.sh /tmp/install.bak
-sed -i '' 's|  mkdir -p "$SKILL_DIR/core/gate-src/claude/lib"|  : # mutated|' install.sh
-diff -q /tmp/install.bak install.sh >/dev/null && echo "MUTATION DID NOT APPLY — the result below proves nothing"
-bash core/tests/install-guard-test.sh   # expected: RED on the restore-source assertions
-cp /tmp/install.bak install.sh && rm /tmp/install.bak
-```
+Each assertion needs a mutation that **isolates** it. A mutation that removes the file altogether fails
+`-f`, `-x` and `cmp` together and therefore distinguishes none of them; it shows only that something
+in the block matters. Work on a scratch copy of the kit, and for each one assert the file actually
+changed before reading the result.
+
+| Mutation | Must redden, and only it |
+|---|---|
+| the gate-src `cp` reads a different existing file (point its source at the cursor gate) | the `cmp -s` byte-identity assertion |
+| the gate-src `cp` becomes `cat "$src" > "$dst"` — a copy that does **not** preserve mode bits | the `-x` assertion |
+| the `vendor` call for `gate-src/claude/lib/audit.sh` is removed | the `lib/audit.sh` assertion |
+| the gate-src `cp` source points at a nonexistent path | the `-f` assertion (and, unavoidably, the three above it) |
+
+The second one is the reason this table exists. `cp` preserves the source's mode, and the adapter gate
+is tracked `100755`, so the explicit `chmod +x` is redundant in practice and a mutation that deletes it
+leaves the suite green. That does not make the assertion worthless — it guards against a future change
+to a copy mechanism that drops the bit, which is exactly what the `cat >` mutation stands in for — but
+it does mean the mutation must target the *copy*, not the `chmod`. Do not record an assertion as
+load-bearing on the strength of a mutation that never targeted the line it guards.
 
 - [ ] **Step 6: Run the whole suite and commit**
 
