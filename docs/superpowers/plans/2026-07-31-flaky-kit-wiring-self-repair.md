@@ -4,7 +4,7 @@
 
 **Goal:** When the kit runs, it repairs its own gate registration instead of only reporting that it is broken.
 
-**Architecture:** A new unit `core/_wiring_repair.sh` holds the mutation; `core/_integrity.sh` keeps its detector functions pure and calls the repair from `integrity_guard` between detection and reporting. The registration is repaired at every tier; the gate *file* is restored only where the tree is not root-owned, from a copy `install.sh` ships inside `core/`. A repair arms on the next session, so the verdict passed to `integrity_report` is the pre-repair one and a root-owned tree still refuses.
+**Architecture:** A new unit `core/_wiring_repair.sh` holds the mutation; `core/_integrity.sh` keeps its detector functions pure and calls the repair from `integrity_guard` between detection and reporting. The registration and the gate *file* are both repaired only where the tree is not root-owned, from a copy `install.sh` ships inside `core/` — see "Correction taken during Task 5" below, which supersedes an earlier version of this line that repaired the registration at every tier. Where the tree is root-owned, `wiring_repair` writes nothing at all, so the pre-repair verdict `integrity_report` receives is also what every subsequent call keeps producing, not merely the first one's.
 
 **Tech Stack:** bash 3.2-compatible shell, `jq`, POSIX `stat`, the kit's plain-bash test suites (`core/tests/*.sh`, `ok()`/`bad()` counters, exit on `$fail -eq 0`).
 

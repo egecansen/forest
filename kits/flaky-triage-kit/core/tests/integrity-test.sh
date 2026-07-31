@@ -1238,7 +1238,10 @@ STATSH
   printf '{"tier":"%s","at":"x"}\n' "$T" > "$K/core/.lock-state"
   echo '{}' > "$R/.claude/settings.json"          # the registration is gone: unregistered
   GATE="$R/.claude/hooks/flaky-kit-self-protection-gate.sh"
-  BEFORE="$(cat "$R/.claude/settings.json")"
+  # A literal byte copy, not `$(cat …)` captured into a variable: command substitution strips
+  # trailing newlines, so a variable-based comparison would only prove "identical up to trailing
+  # newlines" rather than the byte-identical claim this assertion makes.
+  cp "$R/.claude/settings.json" "$R/.claude/settings.json.before"
 
   # CONTROL, required (review Critical 2 in Task 4's cycle, same reasoning applies here): prove the
   # shim actually lands this fixture on $T BEFORE trusting anything below — this file's own rule,
@@ -1257,9 +1260,8 @@ STATSH
   [ "$RC1" = 76 ] && ok \
     || bad "$T: a tree that lost its registration must refuse (76) on the FIRST call (got $RC1)"
 
-  AFTER="$(cat "$R/.claude/settings.json")"
-  [ "$AFTER" = "$BEFORE" ] && ok \
-    || bad "$T: the settings file must be BYTE-IDENTICAL after a root-owned repair call — nothing may be written here at all (before=[$BEFORE] after=[$AFTER])"
+  cmp -s "$R/.claude/settings.json" "$R/.claude/settings.json.before" && ok \
+    || bad "$T: the settings file must be BYTE-IDENTICAL after a root-owned repair call — nothing may be written here at all"
   case "$(slots_of "$R/.claude/settings.json")" in
     *PreToolUse:Bash*) bad "$T: the registration must NOT have been repaired — a write here is exactly what let the second call read wired" ;; *) ok ;;
   esac

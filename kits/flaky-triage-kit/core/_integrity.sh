@@ -412,9 +412,11 @@ integrity_guard() {
   local kit="${1:-}" tier wiring
   tier="$(integrity_tier "$(integrity_owner_uid "$kit/core")" "$(integrity_state "$kit")")"
   wiring="$(integrity_wiring "$kit" "$tier")"
-  # Repair first, report the PRE-repair verdict. A written registration does not arm a running
-  # session — the harness reads hook config at startup — so where the tree is root-owned this still
-  # refuses, and it should: the protection the tier records is not in place for this session.
+  # Repair first, report the PRE-repair verdict. Below root ownership `wiring_repair` may write the
+  # registration and the gate file; where the tree is root-owned it writes NOTHING — a registration
+  # written there would read as `wired` on the very next entrypoint (this recomputes from disk every
+  # call), so the refusal would hold for exactly one call and then silently stop. The refusal here
+  # does not depend on anything the repair did; it depends on nothing having changed.
   wiring_repair "$kit" "$tier" "$wiring"
   integrity_report "$tier" "$wiring"
 }

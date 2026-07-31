@@ -121,9 +121,11 @@
 #      configuration tree", which is a different promise with its own false-positive cost, and it
 #      needs its own design round rather than a line appended to a fix wave.
 #
-# Since 2026-07-31 the kit REPAIRS a broken wiring rather than only reporting it
-# (`core/_wiring_repair.sh`, called from `integrity_guard` between detection and reporting). That
-# narrows some of the above but opens residuals of its own, listed here rather than left implicit:
+# Since 2026-07-31 the kit REPAIRS a broken wiring below root ownership — `core/_wiring_repair.sh`,
+# called from `integrity_guard` between detection and reporting — rather than only reporting it. At
+# `hardened`/`stale` it writes NOTHING at all: repairing nothing there PRESERVES this tier's guarantee
+# rather than leaving a gap in it, so items 10-13 below describe the repair that runs everywhere else,
+# not this tier:
 #
 #  10. A repair arms on the next session, never the one that made it. The harness reads hook config
 #      at startup, so between the repair and a restart the gate is registered and not running.
@@ -131,23 +133,15 @@
 #      noise in the observed case — is not the kit's to fix and is not fixed.
 #  12. Below a root-owned tree the restore source has no more protection than anything else, so a
 #      poisoned source restores a poisoned gate. That is what the lower tiers already mean.
-#  13. The registration repair is purely ADDITIVE — it merges a slot in when absent, never removes
-#      one. `install.sh` purges a pre-relocation in-tree gate command before merging on install or
-#      upgrade; the repair has no equivalent purge, so a dead command, once registered, stays
-#      registered alongside whatever the repair adds, permanently. That dead entry does NOT gate
-#      whether the wiring axis converges, in EITHER direction — verified directly, not assumed:
-#      `_wiring_slots` sorts same-tool commands (jq `unique`) and `_wiring_cover`
-#      (`core/_integrity.sh:134-147`) returns the first of them, and the relocated path
-#      (`.claude/hooks/...`) sorts before the pre-relocation one (`.claude/skills/.../hooks/...`)
-#      UNCONDITIONALLY — with or without the dead entry present, with or without `core/gate-src`
-#      ever having been vendored for this project. What decides `wired` vs `dangling` is solely
-#      whether a file exists at the resolved (relocated) path; the dead entry is never even `stat`'d.
-#      The residual this actually leaves: once that file exists — by this repair restoring it, or by
-#      any other means — the axis reads `wired` while a harness that loads every hook registered
-#      under a matcher, not only the one this axis checks, still attempts the dead command on every
-#      matching tool call. That is the original `dangling` symptom this whole axis exists to surface,
-#      now permanently invisible to it. Re-running the kit installer, which purges the dead entry, is
-#      the only real fix; the repair alone never removes it.
+#  13. The registration repair is purely ADDITIVE, never a purge — `install.sh` drops a pre-relocation
+#      gate command before merging; the repair does not, so a dead command stays registered forever
+#      alongside whatever the repair adds. It does not block convergence: `_wiring_cover`
+#      (`core/_integrity.sh:134-147`) returns the FIRST of two same-tool commands after `_wiring_slots`
+#      sorts them, and the relocated path always sorts ahead of the dead one within one settings file
+#      (not guaranteed split across `settings.json`/`settings.local.json`, though nothing that writes
+#      either file today produces that split). Once the relocated file exists the axis reads `wired`
+#      while a harness still runs the dead hook on every matching call, invisibly. Re-running the
+#      installer, which purges it, is the real fix.
 #
 # Closed since this list was first written, recorded here so the change stays legible instead of
 # quietly vanishing: `core/shell-guard.py` honoured `HEKTOR_FK_SURFACE` by REPLACING its surface

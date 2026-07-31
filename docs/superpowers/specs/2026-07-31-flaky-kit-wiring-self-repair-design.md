@@ -24,7 +24,7 @@ project having done the right thing.
 | Trigger | **Automatic.** Any entrypoint whose guard sees a repairable wiring state repairs it |
 | Registration | Repaired **only where the tree is not root-owned** — see §4, which corrects an earlier draft that repaired at every tier |
 | Gate file | Restored **only where the tree is not root-owned**, from a copy installed inside `core/` |
-| After repairing where the tree is root-owned | **Still refuses.** The gate arms on the next session; the message says so and the exit is a restart |
+| Where the tree is root-owned | **Nothing is repaired at all** — not the registration, not the gate file. See §4, which corrects an earlier draft that repaired the registration and reasoned the refusal would hold anyway; measured, that held for exactly one call |
 | Neighbouring hooks | Out of scope. The kit repairs its own registration, not the project's other packs' |
 
 ## 1. What is repairable, and what is not
@@ -33,20 +33,23 @@ project having done the right thing.
 
 | Wiring | Action |
 |---|---|
-| `unregistered` | **Repair.** Write the kit's registration into the harness settings file |
-| `partial` | **Repair.** Write whichever required slots are missing |
-| `dangling` | **Repair where the tree is not root-owned** by restoring the gate file, then the registration. At `hardened`/`stale`, report and refuse — see §2 |
+| `unregistered` | **Repair where the tree is not root-owned** by writing the kit's registration into the harness settings file. At `hardened`/`stale`, report and refuse — see §4 |
+| `partial` | **Repair where the tree is not root-owned** by writing whichever required slots are missing. At `hardened`/`stale`, report and refuse — see §4 |
+| `dangling` | **Repair where the tree is not root-owned** by restoring the gate file, then the registration. At `hardened`/`stale`, report and refuse — see §2 and §4 |
 | `foreign` | **Never repair.** A gate that is not this kit's is someone else's; overwriting it would be this kit deciding it wins a conflict it cannot see the other side of |
 | `wired`, `absent` | Nothing to do |
 
-Repair is idempotent and additive: it writes slots that are missing and leaves everything else in the
-settings file untouched, the same merge `install.sh` already performs. Running it twice changes
-nothing the second time.
+Below root ownership, repair is idempotent and additive: it writes slots that are missing and leaves
+everything else in the settings file untouched, the same merge `install.sh` already performs. Running
+it twice changes nothing the second time. Where the tree is root-owned, nothing is written at all —
+see §4.
 
 ## 2. Tier coupling, and why the gate file is different from the registration
 
 The registration lives in `.claude/settings.json`, which `harden_targets` does not chown at any tier
-— that is already a stated residual — so the kit can rewrite it as the user, at every tier.
+— that is already a stated residual — so the kit *could* rewrite it as the user at every tier. §4
+explains why it deliberately does not: at `hardened`/`stale` a rewrite would be read as `wired` by the
+very next entrypoint and silence the refusal this tier exists to keep.
 
 The gate file is the opposite. Where the tree is root-owned,
 `.claude/hooks/flaky-kit-self-protection-gate.sh` is **root-owned by design**, and that ownership is
@@ -164,8 +167,9 @@ decoration or as damage:
 3. **The repair is additive.** A settings file carrying unrelated permissions, env and model keys must
    still carry them, unchanged, after a repair — asserted by comparing everything except the kit's own
    slots.
-4. **The refusal survives the repair where the tree is root-owned.** A repair that quietly turned 76
-   into 0 would hand every miswired hardened install a free pass, which is the opposite of the point.
+4. **The refusal survives repeated calls where the tree is root-owned** — not only the one that first
+   found the break. A registration quietly written there would turn 76 into 0 on the very next call,
+   handing every miswired hardened install a silent free pass, which is the opposite of the point.
 
 Every new assertion must be shown to fail when what it names regresses, and every mutation must be
 shown to have actually applied before its result is read.
