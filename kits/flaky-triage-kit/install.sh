@@ -153,6 +153,12 @@ if [ "$do_claude" = 1 ]; then
   cp "$HERE/adapters/claude/flaky-kit-self-protection-gate.sh" "$PROJ/.claude/hooks/flaky-kit-self-protection-gate.sh"
   chmod +x "$PROJ/.claude/hooks/flaky-kit-self-protection-gate.sh" 2>/dev/null || true
   vendor "$HERE/adapters/_lib/audit.sh" "$PROJ/.claude/hooks/lib/audit.sh"
+  # The restore source for core/_wiring_repair.sh. Under core/ so harden_targets covers it: at a
+  # root-owned tier the file a repair would copy from cannot be rewritten by an agent.
+  mkdir -p "$SKILL_DIR/core/gate-src/claude/lib"
+  cp "$HERE/adapters/claude/flaky-kit-self-protection-gate.sh" "$SKILL_DIR/core/gate-src/claude/flaky-kit-self-protection-gate.sh"
+  chmod +x "$SKILL_DIR/core/gate-src/claude/flaky-kit-self-protection-gate.sh" 2>/dev/null || true
+  vendor "$HERE/adapters/_lib/audit.sh" "$SKILL_DIR/core/gate-src/claude/lib/audit.sh"
   S="$PROJ/.claude/settings.json"; [ -f "$S" ] || echo '{}' > "$S"
   C='"$CLAUDE_PROJECT_DIR/.claude/hooks/flaky-kit-self-protection-gate.sh"'
   # Drop any registration of the PRE-RELOCATION in-tree gate path FIRST. The jq below only ever
@@ -186,6 +192,12 @@ if [ "$do_cursor" = 1 ]; then
   cp "$HERE/adapters/cursor/hektor-flaky-triage.mdc" "$PROJ/.cursor/rules/hektor-flaky-triage.mdc"
   vendor "$HERE/adapters/cursor/lib/cursor-compat.sh" "$PROJ/.cursor/hooks/lib/cursor-compat.sh"
   vendor "$HERE/adapters/_lib/audit.sh" "$PROJ/.cursor/hooks/lib/audit.sh"
+  # The restore source for core/_wiring_repair.sh. Under core/ so harden_targets covers it: at a
+  # root-owned tier the file a repair would copy from cannot be rewritten by an agent.
+  mkdir -p "$SKILL_DIR/core/gate-src/cursor/lib"
+  cp "$HERE/adapters/cursor/flaky-kit-self-protection-gate.sh" "$SKILL_DIR/core/gate-src/cursor/flaky-kit-self-protection-gate.sh"
+  chmod +x "$SKILL_DIR/core/gate-src/cursor/flaky-kit-self-protection-gate.sh" 2>/dev/null || true
+  vendor "$HERE/adapters/_lib/audit.sh" "$SKILL_DIR/core/gate-src/cursor/lib/audit.sh"
   H="$PROJ/.cursor/hooks.json"; [ -f "$H" ] || echo '{"version":1,"hooks":{}}' > "$H"
   C=".cursor/hooks/flaky-kit-self-protection-gate.sh"
   t="$(mktemp)"; jq --arg c "$C" '

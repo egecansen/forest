@@ -74,5 +74,18 @@ grep -qF '.claude/hooks/flaky-kit-self-protection-gate.sh' "$P/.claude/settings.
 [ "$(jq '[.hooks.PreToolUse[].hooks[].command] | map(select(contains("flaky-kit"))) | length' "$P/.claude/settings.json")" = 2 ] \
   && ok || bad "exactly two flaky-kit registrations must remain (Write|Edit + Bash), one per matcher"
 
+# --- the restore source ships with the engine ------------------------------------------------
+# Task 3 restores a deleted gate from here. It lives under core/ deliberately: harden_targets
+# chowns that directory, so at a root-owned tier the restore source is root-owned and an agent
+# cannot poison what would be restored.
+GS="$P/.claude/skills/hektor-flaky-triage/core/gate-src/claude"
+[ -f "$GS/flaky-kit-self-protection-gate.sh" ] && ok || bad "install must ship the claude gate restore source"
+[ -x "$GS/flaky-kit-self-protection-gate.sh" ] && ok || bad "the restore source must stay executable"
+[ -f "$GS/lib/audit.sh" ] && ok || bad "install must ship the audit lib beside the restore source"
+# It must be the SAME file the gate was installed from, or a restore would install a different
+# gate than the one the install registered.
+cmp -s "$GS/flaky-kit-self-protection-gate.sh" "$P/.claude/hooks/flaky-kit-self-protection-gate.sh" \
+  && ok || bad "the restore source must be byte-identical to the installed gate"
+
 echo "install-guard-test: $pass passed, $fail failed"
 [ "$fail" -eq 0 ]
