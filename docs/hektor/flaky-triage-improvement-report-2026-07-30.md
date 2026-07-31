@@ -2,6 +2,9 @@
 
 **Date:** 2026-07-30 · **Scope:** `kits/flaky-triage-kit` · **Branch:** `worktree-kit-wiring-self-check`
 **Status:** Tasks 1–4 merged into the branch and reviewed clean; Task 5 (this document, plus the residual sweep) in progress.
+**2026-07-31 addendum below:** a follow-on branch (`worktree-kit-wiring-self-repair`) turned the wiring
+check this report describes into a repair. See the addendum at the end of this document before
+treating anything below as the current state of the wiring axis.
 
 ## What this covers
 
@@ -186,6 +189,7 @@ These remain open, each with a ruling rather than a fix:
 ## Next
 
 **Enforce `hedge-scan` as a Stop hook.** Selected as the next piece of work once this run completes.
+*(2026-07-31: it was not next — see the addendum below.)*
 
 Everything above hardens the kit's *perimeter* — its files, its lock, its wiring, its registration.
 None of it touches the kit's actual job, which is stopping a final message that rationalises away a
@@ -211,3 +215,43 @@ requirement that `.claude/hooks` (nested inside `.claude/`) stay user-writable f
 installer. What's there — the CLI gate's Bash mutation-deny and Write/Edit outcome-check — is
 already the limit of what this residual can close without taking away the harness's own write
 access to its own settings.
+
+## Addendum (2026-07-31) — the wiring self-repair
+
+Everything above describes the wiring axis as a detector only: it asks whether the gate will run and
+says so when it will not. A follow-on branch (`worktree-kit-wiring-self-repair`) closed that gap —
+`integrity_guard` now repairs what it detects, not only reports it. `core/_wiring_repair.sh` is sourced
+by `core/_integrity.sh` at load time from its own directory, and `integrity_guard` calls
+`wiring_repair <kit_root> <tier> <wiring>` between computing the wiring verdict and reporting it. The
+report still describes the **pre-repair** state: a registration rewritten this call does not arm the
+session that is already running — the harness reads hook config at startup — so a root-owned tree
+still refuses (exit 76) after the repair runs, and still says to restart.
+
+**What it repairs.** The registration, at every tier — `unregistered` and `partial` alike — additively
+and idempotently, with the same jq merge `install.sh` performs. The gate FILE is restored from a copy
+vendored into `core/gate-src/<harness>/` (installed by `install.sh`, so at a root-owned tier that copy
+is root-owned too and cannot be poisoned), but only where the tree is **not** root-owned — at
+`hardened`/`stale` that path must hold a root-owned file, and a repair running as the user would turn a
+`dangling` into a `foreign`, which is worse than what it replaces. `foreign` is never repaired at all.
+
+This narrows nothing in the "What this still does not cover" list above — none of those five residuals
+is about writing — and opens four more of its own, now the authoritative list in `core/lock-kit.sh`'s
+header (items 10–13; that file, `core/README.md`, and `kernel.md`'s P4 row are the living description,
+this document is not). The sharpest of the four, verified directly against the shipped code rather than
+assumed: the repair's registration merge is additive-only, the same way `install.sh`'s own merge is,
+except that `install.sh` also purges a pre-relocation registration before merging and the repair does
+not. Whether that leaves the wiring axis stuck on `dangling` forever — looping REPAIRED on every
+entrypoint without ever converging — or self-heals to `wired` while leaving the dead entry behind as
+permanent cruft depends on whether this project's `core/gate-src` has ever been vendored: an accident
+of how two same-tool registrations are de-duplicated, not a designed convergence. Either way the dead
+entry is never removed; re-running the installer is.
+
+That corrects the "Repairing the stale registration" item under Pending above: the automatic repair is
+not a substitute for it. The worktree named there was last touched before `core/gate-src` existed to be
+vendored, so — unverified against that specific worktree, but consistent with everything above — it
+most likely stays `dangling` under the automatic repair alone. Re-running the installer remains the
+actual fix, exactly as that Pending line already said.
+
+The "Next" section above named `hedge-scan` as a Stop hook as the next selected piece of work. It ran
+second, not first: this wiring-self-repair branch is what actually followed. `hedge-scan`-as-Stop-hook
+remains unbuilt and still worth doing — it was simply not next.

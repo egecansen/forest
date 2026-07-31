@@ -121,6 +121,31 @@
 #      configuration tree", which is a different promise with its own false-positive cost, and it
 #      needs its own design round rather than a line appended to a fix wave.
 #
+# Since 2026-07-31 the kit REPAIRS a broken wiring rather than only reporting it
+# (`core/_wiring_repair.sh`, called from `integrity_guard` between detection and reporting). That
+# narrows some of the above but opens residuals of its own, listed here rather than left implicit:
+#
+#  10. A repair arms on the next session, never the one that made it. The harness reads hook config
+#      at startup, so between the repair and a restart the gate is registered and not running.
+#  11. The kit repairs its OWN registration only. A neighbouring pack's stale registration — the
+#      noise in the observed case — is not the kit's to fix and is not fixed.
+#  12. Below a root-owned tree the restore source has no more protection than anything else, so a
+#      poisoned source restores a poisoned gate. That is what the lower tiers already mean.
+#  13. The registration repair is purely ADDITIVE — it merges a slot in when absent, never removes
+#      one. `install.sh` purges a pre-relocation in-tree gate command before merging on install or
+#      upgrade; the repair has no equivalent purge, so that dead command is never removed — it stays
+#      registered alongside whatever the repair adds, permanently. Whether the wiring axis still
+#      reads `dangling` afterwards is NOT something this repair controls either way: `_wiring_slots`
+#      sorts and dedupes same-tool commands, so which of two registered commands a tool resolves to
+#      is decided by string order, not by staleness. If item 12's gate-file restore can also succeed
+#      (needs `core/gate-src` already vendored for this project), the newly-registered command can
+#      end up sorting ahead of the dead one and the axis reads `wired` — an accident of that sort
+#      order, not a purge. Where it cannot (an older project whose `gate-src` was never vendored —
+#      the shape of the case first observed), the dead command keeps winning, the axis stays
+#      `dangling`, and the repair re-runs and re-reports REPAIRED on every entrypoint without ever
+#      converging. Re-running the kit installer, which DOES purge the stale entry, is the actual fix
+#      either way; the repair alone is not.
+#
 # Closed since this list was first written, recorded here so the change stays legible instead of
 # quietly vanishing: `core/shell-guard.py` honoured `HEKTOR_FK_SURFACE` by REPLACING its surface
 # pattern wholesale, so any value matching nothing (`HEKTOR_FK_SURFACE=/definitely/nowhere`) turned

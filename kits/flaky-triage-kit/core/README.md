@@ -21,7 +21,8 @@ and calls these; it MUST NOT mutate state except through them (kernel P2).
 | `hedge-scan` | fixer's own summary text → clean (0) / HEDGED + matched phrases (2) | cheap deterministic pre-screen: self-reported uncertainty ("should work", "only ran once") is not a green — catch it before spending a reviewer call |
 | `apply` | a fix patch → applied in the working tree (git-tracked, clean-tree check) + diff | **I3** confined to `source_roots`, git-reversible, kit never commits · **I10** rev-pin |
 | `ledger` | read/write run state via validated subcommands (v2: cluster-upsert / cluster-state / event / validate · cluster-vrt) | **I5** re-derive "applied" from source, never trust ledger for safety · **I11** `validate --final` gates session end |
-| `_integrity` *(sourced)* | kit root → tier (`hardened`/`unlocked`/`degraded`/`unprotected`/`mismatch`/`stale`) **and** wiring (`wired`/`unregistered`/`dangling`/`foreign`/`partial`/`absent`) | **P4** both are asserted at every entrypoint, not assumed. Refuses (76) on a tier `mismatch`, or when a `hardened`/`stale` tier's wiring is `dangling`/`unregistered`/`partial`/`foreign` |
+| `_integrity` *(sourced)* | kit root → tier (`hardened`/`unlocked`/`degraded`/`unprotected`/`mismatch`/`stale`) **and** wiring (`wired`/`unregistered`/`dangling`/`foreign`/`partial`/`absent`) | **P4** both are asserted at every entrypoint, not assumed. Refuses (76) on a tier `mismatch`, or when a `hardened`/`stale` tier's wiring is `dangling`/`unregistered`/`partial`/`foreign`. **2026-07-31:** `integrity_guard` now writes, not just reads — it detects the wiring, repairs it (`wiring_repair`), then reports the **pre-repair** verdict, so a registration rewritten this call does not read as fixed until the harness restarts |
+| `_wiring_repair` *(sourced)* | re-asserts the kit's own gate registration when the guard finds it missing or dangling | registration at every tier · the gate FILE only where the tree is not root-owned · `foreign` never |
 | `lock-kit` | `lock`/`unlock`/`status` → OS-level tier on the safety surface | **P4** hardened = root-owned safety surface **including the kit root** (reopen needs a password); degrades to chmod-only and names the tier it actually reached |
 | `summary` | ledger → convergence report | **I7** allowlist emitted fields (no raw stackTrace / PII / tokens) |
 
@@ -75,5 +76,8 @@ no-prompt reopen window that `lock` itself created. Without `sudo` the tier **de
 chmod-a-w-only behaviour, which the same user can reverse. `core/_integrity.sh` asserts both the
 tier and the gate's wiring that are actually there at every entrypoint (tier: 2026-07-29; wiring:
 2026-07-30), so a silent slip from hardened to degraded, or a registration that stopped resolving,
-can't pass as still-protected. What the hardened tier does **not** cover is listed in full in
+can't pass as still-protected. Since 2026-07-31 a broken wiring is also repaired, not only asserted
+(`core/_wiring_repair.sh`) — the registration additively, at every tier; the gate FILE only where the
+tree is not root-owned. The repair still arms on the NEXT session, never the one that made it, so a
+root-owned tree keeps refusing right after a successful repair. What the hardened tier does **not** cover is listed in full in
 `core/lock-kit.sh`'s header — read that list before calling this kit protected.

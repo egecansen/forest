@@ -86,9 +86,15 @@ branches ask different questions about them, deliberately:
   denied. A settings file that carries no registration today is not this kit's business at all.
 
 `core/_integrity.sh` asks the second question — *will the gate actually run?* — from the same slot
-model, so the two never disagree about what a valid registration is. At the **hardened** and **stale**
-tiers a broken registration is a refusal (exit 76) from every entrypoint, and repairing it means
-unlocking first: the installer refuses to overwrite a root-owned tree.
+model, so the two never disagree about what a valid registration is. Since 2026-07-31 it also REPAIRS
+what it finds broken (`core/_wiring_repair.sh`, called between detection and reporting): the
+registration is rewritten additively at **every** tier — `unregistered` and `partial` alike, with the
+same jq merge `install.sh` itself performs — and the gate FILE is restored from the engine's own vendored
+copy, but only where the tree is **not** root-owned; `foreign` is never touched. At the **hardened** and
+**stale** tiers a broken registration is still a refusal (exit 76) from every entrypoint even after the
+repair runs: a registration rewritten this call does not arm the session that is already running — the
+harness reads hook config at startup — so the printed advice there is still to unlock, reinstall, and
+lock. The repair narrows how often a reader reaches that advice; it does not remove the need for it.
 
 The wall, where there is one, is underneath: `lock-kit.sh` reaches for an OS-level tier. **hardened** —
 `core/**`, `SKILL.md`, the gate scripts, the vendored libs and the kit root itself chown'd to root, so
@@ -97,8 +103,8 @@ Without `sudo` it **degrades** to a chmod-only read-only bit the same user (and 
 running as them) can reverse — friction, not a wall. `lock-kit.sh status` names the tier actually in
 effect and prints the OWNER of every surface path, which is the only way to spot a `chown` that applied
 to some paths and not others. **Read `core/lock-kit.sh`'s header before calling a kit protected:** it
-is the authoritative list of what the hardened tier does not cover, and it currently has nine entries.
-All nine, so this page does not under-describe the tier the way it used to:
+is the authoritative list of what the hardened tier does not cover, and it currently has thirteen entries.
+All thirteen, so this page does not under-describe the tier the way it used to:
 
 1. **Shadowing** — `mv` the kit dir aside and replace it. Detected via the out-of-tree record, not prevented.
 2. **That record is itself deletable** — its directory must stay user-owned, so the same actor can erase the expectation.
@@ -109,6 +115,10 @@ All nine, so this page does not under-describe the tier the way it used to:
 7. **The harness settings files are not chown'd at any tier**, hardened included — the harness keeps editing them for its own reasons. Their only protection is the PreToolUse gate described above: a heuristic policy layer with no ownership floor under it.
 8. **The wiring check reads the same settings files an agent can write.** It proves a registration is present and, where the tree is root-owned, that it points at a file this kit still owns. It cannot prove the harness will *honour* that registration at any tier.
 9. **A bare `.claude` operand matches no surface pattern**, so `rm -rf .claude` is allowed — and at the hardened tier it unlinks the root-owned gate, the audit lib, `.flaky-kit-expect` and the registration itself. Pre-existing and scheduled as separate work: widening the pattern to a bare `.claude` changes the surface from "the kit's files" to "the harness's entire configuration tree" and needs its own design round.
+10. **A repair arms on the next session, never the one that made it.** The harness reads hook config at startup, so between the repair and a restart the gate is registered and not running.
+11. **The kit repairs its own registration only.** A neighbouring pack's stale registration is not the kit's to fix and is not fixed.
+12. **Below a root-owned tree the restore source has no more protection than anything else** — a poisoned `core/gate-src` restores a poisoned gate. That is what the lower tiers already mean.
+13. **The registration repair is purely additive, never a purge.** `install.sh` drops a pre-relocation registration before merging; the repair does not, so a stale command it finds is never removed — only whether the wiring axis still reads it depends on an incidental sort order, not on anything the repair controls. Re-running the installer, which does purge it, is the actual fix.
 ```bash
 core/lock-kit.sh lock        # hardens (chown to root) when sudo is available; degrades to a
                               # chmod-only read-only bit otherwise. Ends with `sudo -k`, so the
