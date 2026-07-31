@@ -133,18 +133,21 @@
 #      poisoned source restores a poisoned gate. That is what the lower tiers already mean.
 #  13. The registration repair is purely ADDITIVE — it merges a slot in when absent, never removes
 #      one. `install.sh` purges a pre-relocation in-tree gate command before merging on install or
-#      upgrade; the repair has no equivalent purge, so that dead command is never removed — it stays
-#      registered alongside whatever the repair adds, permanently. Whether the wiring axis still
-#      reads `dangling` afterwards is NOT something this repair controls either way: `_wiring_slots`
-#      sorts and dedupes same-tool commands, so which of two registered commands a tool resolves to
-#      is decided by string order, not by staleness. If item 12's gate-file restore can also succeed
-#      (needs `core/gate-src` already vendored for this project), the newly-registered command can
-#      end up sorting ahead of the dead one and the axis reads `wired` — an accident of that sort
-#      order, not a purge. Where it cannot (an older project whose `gate-src` was never vendored —
-#      the shape of the case first observed), the dead command keeps winning, the axis stays
-#      `dangling`, and the repair re-runs and re-reports REPAIRED on every entrypoint without ever
-#      converging. Re-running the kit installer, which DOES purge the stale entry, is the actual fix
-#      either way; the repair alone is not.
+#      upgrade; the repair has no equivalent purge, so a dead command, once registered, stays
+#      registered alongside whatever the repair adds, permanently. That dead entry does NOT gate
+#      whether the wiring axis converges, in EITHER direction — verified directly, not assumed:
+#      `_wiring_slots` sorts same-tool commands (jq `unique`) and `_wiring_cover`
+#      (`core/_integrity.sh:134-147`) returns the first of them, and the relocated path
+#      (`.claude/hooks/...`) sorts before the pre-relocation one (`.claude/skills/.../hooks/...`)
+#      UNCONDITIONALLY — with or without the dead entry present, with or without `core/gate-src`
+#      ever having been vendored for this project. What decides `wired` vs `dangling` is solely
+#      whether a file exists at the resolved (relocated) path; the dead entry is never even `stat`'d.
+#      The residual this actually leaves: once that file exists — by this repair restoring it, or by
+#      any other means — the axis reads `wired` while a harness that loads every hook registered
+#      under a matcher, not only the one this axis checks, still attempts the dead command on every
+#      matching tool call. That is the original `dangling` symptom this whole axis exists to surface,
+#      now permanently invisible to it. Re-running the kit installer, which purges the dead entry, is
+#      the only real fix; the repair alone never removes it.
 #
 # Closed since this list was first written, recorded here so the change stays legible instead of
 # quietly vanishing: `core/shell-guard.py` honoured `HEKTOR_FK_SURFACE` by REPLACING its surface

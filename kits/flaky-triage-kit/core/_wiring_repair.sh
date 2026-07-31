@@ -118,6 +118,12 @@ _wr_register_cursor() {
 # claiming to heal it. `stale` is included with `hardened` because it means the tree IS root-owned and
 # only .lock-state disagrees; keying this on the recorded tier while the identity test keys on
 # ownership would split one property across two conditions.
+#
+# This tier arm is UNREACHABLE through `wiring_repair` below — that function now returns before ever
+# calling here when the tree is root-owned (see its own root-owned guard, added when Task 5's review
+# found the registration half of this same story). Left in place as defence in depth for any future
+# caller of this function directly, and documented here rather than deleted so a later reader does not
+# mistake dead code for an oversight.
 _wr_restore_gate() {
   local kit="$1" root="$2" tier="$3" harness="$4" dest="$5" src="$kit/core/gate-src/$4"
   case "$tier" in
@@ -164,6 +170,19 @@ wiring_repair() {
     unregistered|partial|dangling) : ;;
     *) return 0 ;;                      # wired, absent, foreign: nothing to do or nothing that is ours
   esac
+
+  # Root-owned tree: detect and say so, repair nothing. A registration written here would be read as
+  # `wired` by the very next entrypoint — the guard recomputes from disk every call — so the tier
+  # would stop refusing while this session's harness still has no gate loaded. One call would refuse
+  # and every call after it would proceed unprotected, which is the silent loss this axis exists to
+  # catch. The refusal is worth more here than the repair: the protection at this tier is real, and a
+  # registration this session cannot use buys nothing while destroying the only signal.
+  case "$tier" in
+    hardened|stale)
+      echo "integrity: not repairing — this tree is root-owned, so a repair would silence the refusal on the next entrypoint without arming anything. Unlock, re-run the installer, and lock." >&2
+      return 0 ;;
+  esac
+
   root="$(integrity_project_root "$kit")"
   [ -n "$root" ] || return 0
   command -v jq >/dev/null 2>&1 || return 0

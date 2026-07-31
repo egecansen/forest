@@ -222,35 +222,50 @@ Everything above describes the wiring axis as a detector only: it asks whether t
 says so when it will not. A follow-on branch (`worktree-kit-wiring-self-repair`) closed that gap —
 `integrity_guard` now repairs what it detects, not only reports it. `core/_wiring_repair.sh` is sourced
 by `core/_integrity.sh` at load time from its own directory, and `integrity_guard` calls
-`wiring_repair <kit_root> <tier> <wiring>` between computing the wiring verdict and reporting it. The
-report still describes the **pre-repair** state: a registration rewritten this call does not arm the
-session that is already running — the harness reads hook config at startup — so a root-owned tree
-still refuses (exit 76) after the repair runs, and still says to restart.
+`wiring_repair <kit_root> <tier> <wiring>` between computing the wiring verdict and reporting it.
 
-**What it repairs.** The registration, at every tier — `unregistered` and `partial` alike — additively
-and idempotently, with the same jq merge `install.sh` performs. The gate FILE is restored from a copy
-vendored into `core/gate-src/<harness>/` (installed by `install.sh`, so at a root-owned tier that copy
-is root-owned too and cannot be poisoned), but only where the tree is **not** root-owned — at
-`hardened`/`stale` that path must hold a root-owned file, and a repair running as the user would turn a
-`dangling` into a `foreign`, which is worse than what it replaces. `foreign` is never repaired at all.
+**What it repairs — and the one place it deliberately repairs nothing.** Below root ownership: the
+registration, additively and idempotently, with the same jq merge `install.sh` performs, across
+`unregistered`, `partial`, and `dangling` alike; and the gate FILE, restored from a copy vendored into
+`core/gate-src/<harness>/`. `foreign` is never touched. **Where the tree is root-owned — `hardened` and
+`stale` — `wiring_repair` writes nothing at all, registration included.** The first version of this work
+repaired the registration there too, on the reasoning that a rewritten registration doesn't arm the
+session that wrote it, so the tier's refusal would hold regardless. Measured, that reasoning held for
+exactly **one call**: `integrity_guard` recomputes both axes from the filesystem every time, so the
+registration the repair had just written was read as `wired` by the very next entrypoint, which returned
+0 while that session's harness still had no gate loaded. One call refused; every call after it proceeded
+unprotected — the exact silent loss of protection this axis exists to catch, reintroduced by the repair
+meant to help. Corrected: at those two tiers the guard detects, says what is wrong, and returns without
+touching disk, so the refusal holds on every call because nothing on disk ever changes.
 
 This narrows nothing in the "What this still does not cover" list above — none of those five residuals
-is about writing — and opens four more of its own, now the authoritative list in `core/lock-kit.sh`'s
-header (items 10–13; that file, `core/README.md`, and `kernel.md`'s P4 row are the living description,
-this document is not). The sharpest of the four, verified directly against the shipped code rather than
-assumed: the repair's registration merge is additive-only, the same way `install.sh`'s own merge is,
-except that `install.sh` also purges a pre-relocation registration before merging and the repair does
-not. Whether that leaves the wiring axis stuck on `dangling` forever — looping REPAIRED on every
-entrypoint without ever converging — or self-heals to `wired` while leaving the dead entry behind as
-permanent cruft depends on whether this project's `core/gate-src` has ever been vendored: an accident
-of how two same-tool registrations are de-duplicated, not a designed convergence. Either way the dead
-entry is never removed; re-running the installer is.
+is about writing — and opens residuals of its own, the authoritative list now in `core/lock-kit.sh`'s
+header (items 10–13; that file, `kits/flaky-triage-kit/README.md`, `core/README.md`, and `kernel.md`'s
+P4 row are the living description, this document is not). One of the four is worth stating precisely
+here because an earlier draft of this addendum got its mechanism wrong: the registration repair is
+additive-only, the same way `install.sh`'s own merge is, except that `install.sh` also purges a
+pre-relocation registration before merging and the repair does not — so a dead command, once registered,
+stays registered forever. That dead entry does **not** gate whether the wiring axis converges, in either
+direction: `_wiring_slots` sorts same-tool commands (jq `unique`) and `_wiring_cover`
+(`core/_integrity.sh:134-147`) returns the first of them, and the relocated path (`.claude/hooks/...`)
+sorts before the pre-relocation one (`.claude/skills/.../hooks/...`) **unconditionally** — with or
+without the dead entry present, with or without `core/gate-src` ever having been vendored. What decides
+`wired` vs `dangling` is solely whether a file exists at the resolved (relocated) path; the dead entry is
+never even `stat`'d. The residual this leaves, stated precisely: once that file exists — by this repair
+restoring it, or by any other means — the axis reads `wired` while a harness that loads every hook
+registered under a matcher, not only the one this axis happens to check, still attempts the dead command
+on every matching tool call. That is the original "No such file" symptom the whole self-check arc was
+built to surface, now permanently invisible to it. Re-running the kit installer, which purges the dead
+entry, is the only real fix; the automatic repair alone never removes it.
 
 That corrects the "Repairing the stale registration" item under Pending above: the automatic repair is
-not a substitute for it. The worktree named there was last touched before `core/gate-src` existed to be
-vendored, so — unverified against that specific worktree, but consistent with everything above — it
-most likely stays `dangling` under the automatic repair alone. Re-running the installer remains the
-actual fix, exactly as that Pending line already said.
+not a substitute for it. Whether the worktree named there converges to `wired` (if the relocated gate
+file can be restored — it needs `core/gate-src` already vendored there) or stays `dangling` forever
+(if it cannot), the dead pre-relocation entry itself is never removed either way, and — in the
+converges-to-`wired` case — the axis stops saying anything is wrong even though the harness keeps
+attempting the dead hook on every call. Re-running the installer remains the actual fix, exactly as
+that Pending line already said, and for a stronger reason than "the automatic repair hasn't reached it
+yet".
 
 The "Next" section above named `hedge-scan` as a Stop hook as the next selected piece of work. It ran
 second, not first: this wiring-self-repair branch is what actually followed. `hedge-scan`-as-Stop-hook

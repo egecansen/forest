@@ -87,14 +87,19 @@ branches ask different questions about them, deliberately:
 
 `core/_integrity.sh` asks the second question — *will the gate actually run?* — from the same slot
 model, so the two never disagree about what a valid registration is. Since 2026-07-31 it also REPAIRS
-what it finds broken (`core/_wiring_repair.sh`, called between detection and reporting): the
-registration is rewritten additively at **every** tier — `unregistered` and `partial` alike, with the
-same jq merge `install.sh` itself performs — and the gate FILE is restored from the engine's own vendored
-copy, but only where the tree is **not** root-owned; `foreign` is never touched. At the **hardened** and
-**stale** tiers a broken registration is still a refusal (exit 76) from every entrypoint even after the
-repair runs: a registration rewritten this call does not arm the session that is already running — the
-harness reads hook config at startup — so the printed advice there is still to unlock, reinstall, and
-lock. The repair narrows how often a reader reaches that advice; it does not remove the need for it.
+what it finds broken (`core/_wiring_repair.sh`, called between detection and reporting) — but only
+where the tree is **not** root-owned: the registration is rewritten additively — `unregistered`,
+`partial`, and `dangling` alike, with the same jq merge `install.sh` itself performs — and the gate
+FILE is restored from the engine's own vendored copy; `foreign` is never touched either way. **At the
+hardened and stale tiers nothing is written at all — not the gate file, not the registration.** An
+earlier version repaired the registration there too, on the theory that a rewritten registration
+doesn't arm the session that wrote it, so the refusal would hold anyway. Measured, that held for
+exactly one call: `integrity_guard` recomputes both axes from the filesystem every time, so the next
+entrypoint read the registration it had just written, saw `wired`, and returned 0 — one call refusing,
+every call after it silently unprotected. Corrected: at those two tiers the guard detects, says what is
+wrong, and writes nothing, so the refusal (exit 76) holds on every entrypoint because nothing on disk
+ever changes. The printed advice there is still to unlock, reinstall, and lock — the only path that
+actually changes anything at that tier.
 
 The wall, where there is one, is underneath: `lock-kit.sh` reaches for an OS-level tier. **hardened** —
 `core/**`, `SKILL.md`, the gate scripts, the vendored libs and the kit root itself chown'd to root, so
@@ -118,7 +123,7 @@ All thirteen, so this page does not under-describe the tier the way it used to:
 10. **A repair arms on the next session, never the one that made it.** The harness reads hook config at startup, so between the repair and a restart the gate is registered and not running.
 11. **The kit repairs its own registration only.** A neighbouring pack's stale registration is not the kit's to fix and is not fixed.
 12. **Below a root-owned tree the restore source has no more protection than anything else** — a poisoned `core/gate-src` restores a poisoned gate. That is what the lower tiers already mean.
-13. **The registration repair is purely additive, never a purge.** `install.sh` drops a pre-relocation registration before merging; the repair does not, so a stale command it finds is never removed — only whether the wiring axis still reads it depends on an incidental sort order, not on anything the repair controls. Re-running the installer, which does purge it, is the actual fix.
+13. **The registration repair is purely additive, never a purge.** `install.sh` drops a pre-relocation registration before merging; the repair does not, so a dead command it finds stays registered forever alongside whatever the repair adds. It does not block convergence — the relocated path always sorts ahead of the pre-relocation one, regardless of the dead entry — so once the relocated gate file exists the axis reads `wired` while a harness that runs every registered hook, not only the one this axis checks, still attempts the dead command on every matching call: the original symptom, now invisible to the axis that used to catch it. Re-running the installer, which does purge it, is the actual fix.
 ```bash
 core/lock-kit.sh lock        # hardens (chown to root) when sudo is available; degrades to a
                               # chmod-only read-only bit otherwise. Ends with `sudo -k`, so the

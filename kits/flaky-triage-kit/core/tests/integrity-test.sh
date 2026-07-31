@@ -677,8 +677,8 @@ wiring_repair "$W" degraded unregistered >/dev/null 2>&1
   && ok || bad "a from-scratch hooks.json must still register beforeShellExecution"
 rm -rf "$R"
 
-# unregistered -> all three slots written, at every tier.
-for T in hardened stale degraded unprotected unlocked; do
+# unregistered -> all three slots written, but ONLY where the tree is not root-owned.
+for T in degraded unprotected unlocked; do
   R="$(mktemp -d)"; W="$(wire_fixture "$R")"; echo '{}' > "$R/.claude/settings.json"
   wiring_repair "$W" "$T" unregistered >/dev/null 2>&1
   case "$(slots_of "$R/.claude/settings.json")" in
@@ -690,6 +690,25 @@ for T in hardened stale degraded unprotected unlocked; do
   case "$(slots_of "$R/.claude/settings.json")" in
     *PreToolUse:Edit*) ok ;; *) bad "$T: repair must register the Edit slot" ;;
   esac
+  rm -rf "$R"
+done
+
+# Task 5 review correction: at hardened and stale NOTHING is written, registration included — not just
+# the gate file. A registration written here would read as `wired` on the very next entrypoint call
+# (integrity_guard recomputes from disk every time), so the tier would stop refusing while the
+# session's harness still has no gate loaded. See the fuller two-call/byte-identical proof at the
+# bottom of this file; this is the narrow "no slot lands" companion to it.
+for T in hardened stale; do
+  R="$(mktemp -d)"; W="$(wire_fixture "$R")"; echo '{}' > "$R/.claude/settings.json"
+  wiring_repair "$W" "$T" unregistered >/dev/null 2>&1
+  case "$(slots_of "$R/.claude/settings.json")" in
+    *PreToolUse:Bash*) bad "$T: the Bash slot must NOT be registered — nothing may be written at this tier" ;; *) ok ;;
+  esac
+  case "$(slots_of "$R/.claude/settings.json")" in
+    *PreToolUse:Write*) bad "$T: the Write slot must NOT be registered — nothing may be written at this tier" ;; *) ok ;;
+  esac
+  [ "$(cat "$R/.claude/settings.json")" = '{}' ] \
+    && ok || bad "$T: settings.json must be untouched (still '{}') when the tree is root-owned"
   rm -rf "$R"
 done
 
@@ -1170,21 +1189,32 @@ esac
 rm -rf "$R"
 rm -f "$DRIVER" "$DRIVER2"
 
-# The ordering — repair, then report the PRE-repair value — is pinned by BEHAVIOUR, not by a grep for
-# how the call is spelled: a hardened tree that lost its registration must still refuse (76) on the
-# very call that repairs it. Real root ownership needs a password this suite cannot supply, so a
-# PATH-shimmed `stat` reports uid 0 for exactly this fixture's core/ dir AND its (still user-owned)
-# gate file — the same technique core/tests/lock-tier-test.sh already uses to drive its own hardened
-# branch without sudo, extended to a colon-separated STAT_TARGETS the same way that file's own
-# STAT_TARGETS does, so BOTH root-ownership checks integrity_guard can reach (the tier's own
-# integrity_owner_uid call, and integrity_wiring's identity check on the resolved gate path) see a
-# root-owned tree, not just the first one a narrower fixture happened to need. Only the numeric `%u`
-# query is intercepted, matching that file's own rule; anything else, or a `%u` query against any
-# other path, falls straight through to the real stat.
+# Task 5 review, Important: a hardened tree that lost its registration refusing (76) on the VERY CALL
+# that repairs it is not the property that matters — `integrity_guard` recomputes both axes from the
+# filesystem on EVERY call, so if that repair had written the registration to disk, the very NEXT call
+# would read `wired` and return 0 while the session's harness still has no gate loaded. One call
+# refusing and every call after it proceeding unprotected is the silent loss of protection this whole
+# axis exists to catch — measured directly (`integrity_report hardened unregistered` -> 76,
+# `integrity_report hardened wired` -> 0) before the fix. The correction: `wiring_repair` writes
+# NOTHING where the tree is root-owned, so nothing on disk ever changes and the SECOND consecutive
+# call must refuse exactly like the first. That is the assertion the old version of this test did not
+# make, and it is the one that would have caught the defect. Asserted at BOTH hardened and stale, the
+# same "a rule that read the recorded tier instead of ownership would pass the first and fail the
+# second" concern this file already applies to the gate-file restore above.
+#
+# Real root ownership needs a password this suite cannot supply, so a PATH-shimmed `stat` reports uid
+# 0 for exactly this fixture's core/ dir AND its (still user-owned) gate file — the same technique
+# core/tests/lock-tier-test.sh already uses to drive its own hardened branch without sudo, extended to
+# a colon-separated STAT_TARGETS the same way that file's own STAT_TARGETS does, so BOTH root-ownership
+# checks integrity_guard can reach (the tier's own integrity_owner_uid call, and integrity_wiring's
+# identity check on the resolved gate path) see a root-owned tree, not just the first one a narrower
+# fixture happened to need. Only the numeric `%u` query is intercepted, matching that file's own rule;
+# anything else, or a `%u` query against any other path, falls straight through to the real stat.
 REAL_STAT="$(command -v stat)"
 export REAL_STAT
-SHIM="$(mktemp -d)"
-cat > "$SHIM/stat" <<'STATSH'
+for T in hardened stale; do
+  SHIM="$(mktemp -d)"
+  cat > "$SHIM/stat" <<'STATSH'
 #!/bin/bash
 case " $* " in *" %u "*) ;; *) exec "$REAL_STAT" "$@" ;; esac
 IFS=:
@@ -1194,43 +1224,57 @@ done
 unset IFS
 exec "$REAL_STAT" "$@"
 STATSH
-chmod +x "$SHIM/stat"
+  chmod +x "$SHIM/stat"
 
-# `pwd -P` immediately after mktemp, same reason as the PR fixture above and lock-tier-test.sh /
-# install-guard-test.sh: on macOS mktemp -d hands back a /var/folders/... path whose /var is a
-# symlink to /private/var, and integrity_project_root resolves the PHYSICAL path via `cd ... && pwd
-# -P`. Comparing the shim's target against the un-resolved $R silently misses every match: the gate
-# path integrity_wiring actually stats is the /private/var/... form, so a naive STAT_TARGETS built
-# from the raw mktemp path never fires there and the mutation drill below stays green for the wrong
-# reason (a resolution miss, not the ordering being right) — caught by cross-checking this fixture's
-# own POST-repair wiring against the same shim before trusting the rc it produces.
-R="$(mktemp -d)"; R="$(cd "$R" && pwd -P)"; K="$(wire_fixture "$R")"
-printf 'claude\n' > "$K/core/.harness"
-printf '{"tier":"hardened","at":"x"}\n' > "$K/core/.lock-state"
-echo '{}' > "$R/.claude/settings.json"          # the registration is gone: unregistered
-GATE="$R/.claude/hooks/flaky-kit-self-protection-gate.sh"
+  # `pwd -P` immediately after mktemp, same reason as the PR fixture above and lock-tier-test.sh /
+  # install-guard-test.sh: on macOS mktemp -d hands back a /var/folders/... path whose /var is a
+  # symlink to /private/var, and integrity_project_root resolves the PHYSICAL path via `cd ... && pwd
+  # -P`. Comparing the shim's target against the un-resolved $R silently misses every match: the gate
+  # path integrity_wiring actually stats is the /private/var/... form, so a naive STAT_TARGETS built
+  # from the raw mktemp path never fires there and the checks below would stay green for the wrong
+  # reason (a resolution miss, not the fix being right) — caught by the CONTROL below.
+  R="$(mktemp -d)"; R="$(cd "$R" && pwd -P)"; K="$(wire_fixture "$R")"
+  printf 'claude\n' > "$K/core/.harness"
+  printf '{"tier":"%s","at":"x"}\n' "$T" > "$K/core/.lock-state"
+  echo '{}' > "$R/.claude/settings.json"          # the registration is gone: unregistered
+  GATE="$R/.claude/hooks/flaky-kit-self-protection-gate.sh"
+  BEFORE="$(cat "$R/.claude/settings.json")"
 
-# CONTROL, required (review Critical 2): prove the shim actually lands this fixture on `hardened`
-# BEFORE trusting the rc below — this file's own rule, stated at the K1 CONTROL earlier in this file
-# ("the fixture must reach a non-absent wiring state, or every assertion below is vacuous"), applies
-# here too. Without this, a shim that silently fails to fire (STAT_TARGETS mistyped, PATH not
-# actually picked up, the shim script itself broken) leaves integrity_owner_uid reporting the REAL
-# uid, and the tier becomes `mismatch` instead (recorded hardened, not actually root-owned) — which
-# ALSO refuses with 76 AND ALSO still runs the repair, so both assertions below would stay green
-# against a tier they do not name, and the decisive mutation would no longer distinguish anything
-# either, because `mismatch` refuses regardless of wiring.
-CONTROL_TIER="$(export STAT_TARGETS="$K/core:$GATE" PATH="$SHIM:$PATH"
-  integrity_tier "$(integrity_owner_uid "$K/core")" "$(integrity_state "$K")")"
-[ "$CONTROL_TIER" = hardened ] \
-  && ok || bad "CONTROL: the shim must make this fixture read as hardened, or the rc check below is vacuous (got $CONTROL_TIER)"
+  # CONTROL, required (review Critical 2 in Task 4's cycle, same reasoning applies here): prove the
+  # shim actually lands this fixture on $T BEFORE trusting anything below — this file's own rule,
+  # stated at the K1 CONTROL earlier in this file ("the fixture must reach a non-absent wiring state,
+  # or every assertion below is vacuous"), applies here too. Without this, a shim that silently fails
+  # to fire (STAT_TARGETS mistyped, PATH not actually picked up, the shim script itself broken) leaves
+  # integrity_owner_uid reporting the REAL uid, and the tier becomes `mismatch` instead (recorded
+  # hardened/stale, not actually root-owned) — which ALSO refuses with 76 on every call regardless of
+  # wiring, so every assertion below would stay green against a tier it does not name.
+  CONTROL_TIER="$(export STAT_TARGETS="$K/core:$GATE" PATH="$SHIM:$PATH"
+    integrity_tier "$(integrity_owner_uid "$K/core")" "$(integrity_state "$K")")"
+  [ "$CONTROL_TIER" = "$T" ] \
+    && ok || bad "CONTROL ($T): the shim must make this fixture read as $T, or every check below is vacuous (got $CONTROL_TIER)"
 
-RC="$(STAT_TARGETS="$K/core:$GATE" PATH="$SHIM:$PATH" integrity_guard "$K" >/dev/null 2>&1; echo $?)"
-[ "$RC" = 76 ] && ok \
-  || bad "a hardened tree that lost its registration must still refuse (76) on the very call that repairs it — reporting the post-repair value would let the call that found the breakage proceed as though it never happened (got $RC)"
-case "$(slots_of "$R/.claude/settings.json")" in
-  *PreToolUse:Bash*) ok ;; *) bad "the guard must have repaired the registration even while it still refuses" ;;
-esac
-rm -rf "$R" "$SHIM"
+  RC1="$(STAT_TARGETS="$K/core:$GATE" PATH="$SHIM:$PATH" integrity_guard "$K" >/dev/null 2>&1; echo $?)"
+  [ "$RC1" = 76 ] && ok \
+    || bad "$T: a tree that lost its registration must refuse (76) on the FIRST call (got $RC1)"
+
+  AFTER="$(cat "$R/.claude/settings.json")"
+  [ "$AFTER" = "$BEFORE" ] && ok \
+    || bad "$T: the settings file must be BYTE-IDENTICAL after a root-owned repair call — nothing may be written here at all (before=[$BEFORE] after=[$AFTER])"
+  case "$(slots_of "$R/.claude/settings.json")" in
+    *PreToolUse:Bash*) bad "$T: the registration must NOT have been repaired — a write here is exactly what let the second call read wired" ;; *) ok ;;
+  esac
+
+  MSG="$(STAT_TARGETS="$K/core:$GATE" PATH="$SHIM:$PATH" wiring_repair "$K" "$T" unregistered 2>&1 >/dev/null)"
+  case "$MSG" in
+    *root-owned*) ok ;; *) bad "$T: refusing to repair must say why — got: $MSG" ;;
+  esac
+
+  RC2="$(STAT_TARGETS="$K/core:$GATE" PATH="$SHIM:$PATH" integrity_guard "$K" >/dev/null 2>&1; echo $?)"
+  [ "$RC2" = 76 ] && ok \
+    || bad "$T: must ALSO refuse (76) on the SECOND consecutive call — this is exactly the property the old write-then-recompute behaviour failed (got $RC2)"
+
+  rm -rf "$R" "$SHIM"
+done
 
 echo "integrity-test: $pass passed, $fail failed"
 [ "$fail" -eq 0 ]
