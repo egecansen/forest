@@ -634,6 +634,32 @@ slots_of() { _wiring_slots "$1" | sed 's/\t.*//' | sort | tr '\n' ' '; }
 # path itself). The brief's snippet assumed the opposite convention; every R/W usage below is
 # adjusted to the helper's real contract instead of introducing a second fixture.
 
+# The settings file may be entirely ABSENT, not merely un-registered inside it — the exact worktree
+# case cited in this file's own header comment. core/.harness must say the harness is required:
+# deletion alone gives _wiring_want no signal to go on (the same reason integrity_wiring calls that
+# combination `absent` rather than a defect), so the fixture forces the requirement explicitly.
+R="$(mktemp -d)"; W="$(wire_fixture "$R")"
+printf 'claude\n' > "$W/core/.harness"
+rm -f "$R/.claude/settings.json"
+wiring_repair "$W" degraded unregistered >/dev/null 2>&1
+[ -f "$R/.claude/settings.json" ] && ok || bad "repair must create settings.json from scratch when the harness requires it and the file is gone entirely"
+case "$(slots_of "$R/.claude/settings.json")" in
+  *PreToolUse:Bash*) ok ;; *) bad "a from-scratch settings.json must still register the Bash slot" ;;
+esac
+rm -rf "$R"
+
+# Symmetric case for Cursor: hooks.json entirely absent, core/.harness requires cursor. Checked via
+# _wiring_cover rather than a `case`/glob match on the literal string "beforeShellExecution:*" — that
+# asterisk is data here, not a wildcard, and a glob pattern is the wrong tool to compare it literally.
+R="$(mktemp -d)"; W="$(wire_fixture "$R")"
+printf 'cursor\n' > "$W/core/.harness"
+rm -f "$R/.cursor/hooks.json"
+wiring_repair "$W" degraded unregistered >/dev/null 2>&1
+[ -f "$R/.cursor/hooks.json" ] && ok || bad "repair must create hooks.json from scratch when Cursor is required and the file is gone entirely"
+[ -n "$(_wiring_cover "$(_wiring_slots "$R/.cursor/hooks.json")" beforeShellExecution '*')" ] \
+  && ok || bad "a from-scratch hooks.json must still register beforeShellExecution"
+rm -rf "$R"
+
 # unregistered -> all three slots written, at every tier.
 for T in hardened stale degraded unprotected unlocked; do
   R="$(mktemp -d)"; W="$(wire_fixture "$R")"; echo '{}' > "$R/.claude/settings.json"
