@@ -26,8 +26,29 @@
 # ownership — not exploitable by any of the thirteen current callers, since all of them pass
 # `$HERE/..`, but that is a property of the callers, not of this function, and the kind of property
 # that decays silently the moment a fourteenth caller does not.
+#
+# The shape below is `if`/`fi` + `command -v`, NOT the one-line `[ -r X ] && . X || fallback` that
+# stood here. In that form the `||` branch fires on the STATUS OF THE SOURCE, so a `_wiring_repair.sh`
+# whose last statement happened to return non-zero would load fine and then be immediately REDEFINED
+# as a no-op — the whole repair silently disabled, nothing printed, nothing failed. Proven by
+# appending a single `false` to a fixture's copy: the registration was not repaired and the run said
+# nothing. It worked only because the file happens to end on a function definition, which is a
+# property of that file today, not of this line. `command -v` asks the question the fallback actually
+# means — "is `wiring_repair` defined?" — instead of a proxy for it.
+#
+# `|| :` on the source keeps the "never wedge a caller" contract: thirteen entrypoints source this
+# file, some under `set -e`, where a non-zero `.` inside an `if` body would abort the caller outright.
+#
+# The `elif` is the third state, previously indistinguishable from the second: a file that is PRESENT
+# but unreadable (a chmod, a bad install) took the same silent no-op path as one that was never
+# installed. They are different facts and only one of them is a defect, so the one that is says so.
 _INTEGRITY_HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-[ -r "$_INTEGRITY_HERE/_wiring_repair.sh" ] && . "$_INTEGRITY_HERE/_wiring_repair.sh" || wiring_repair() { return 0; }
+if [ -r "$_INTEGRITY_HERE/_wiring_repair.sh" ]; then
+  . "$_INTEGRITY_HERE/_wiring_repair.sh" || :
+elif [ -e "$_INTEGRITY_HERE/_wiring_repair.sh" ]; then
+  echo "integrity: _wiring_repair.sh is present but unreadable — self-repair is disabled for this run." >&2
+fi
+command -v wiring_repair >/dev/null 2>&1 || wiring_repair() { return 0; }
 
 # integrity_owner_uid <path> -> numeric uid, or empty. BSD and GNU stat take different flags.
 integrity_owner_uid() {

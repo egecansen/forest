@@ -22,7 +22,7 @@ and calls these; it MUST NOT mutate state except through them (kernel P2).
 | `apply` | a fix patch → applied in the working tree (git-tracked, clean-tree check) + diff | **I3** confined to `source_roots`, git-reversible, kit never commits · **I10** rev-pin |
 | `ledger` | read/write run state via validated subcommands (v2: cluster-upsert / cluster-state / event / validate · cluster-vrt) | **I5** re-derive "applied" from source, never trust ledger for safety · **I11** `validate --final` gates session end |
 | `_integrity` *(sourced)* | kit root → tier (`hardened`/`unlocked`/`degraded`/`unprotected`/`mismatch`/`stale`) **and** wiring (`wired`/`unregistered`/`dangling`/`foreign`/`partial`/`absent`) | **P4** both are asserted at every entrypoint, not assumed. Refuses (76) on a tier `mismatch`, or when a `hardened`/`stale` tier's wiring is `dangling`/`unregistered`/`partial`/`foreign`. **2026-07-31:** `integrity_guard` now writes below root ownership — it detects the wiring, repairs it (`wiring_repair`), then reports the **pre-repair** verdict. At `hardened`/`stale` it writes **nothing**: `integrity_guard` recomputes from disk every call, so a registration written there would read `wired` on the very next call and return 0 while the session's harness still has no gate loaded — measured, then closed by repairing nothing at those two tiers instead |
-| `_wiring_repair` *(sourced)* | re-asserts the kit's own gate registration when the guard finds it missing or dangling, but only where the tree is not root-owned | registration and the gate FILE alike, only where the tree is not root-owned — nothing at all at `hardened`/`stale` · `foreign` never |
+| `_wiring_repair` *(sourced)* | re-asserts the kit's own gate registration when the guard finds it missing or dangling, but only at a tier that does not refuse the run | registration and the gate FILE alike, only where the guard proceeds — nothing at all at `hardened`/`stale`/`mismatch` · `foreign` never |
 | `lock-kit` | `lock`/`unlock`/`status` → OS-level tier on the safety surface | **P4** hardened = root-owned safety surface **including the kit root** (reopen needs a password); degrades to chmod-only and names the tier it actually reached |
 | `summary` | ledger → convergence report | **I7** allowlist emitted fields (no raw stackTrace / PII / tokens) |
 
@@ -76,10 +76,14 @@ no-prompt reopen window that `lock` itself created. Without `sudo` the tier **de
 chmod-a-w-only behaviour, which the same user can reverse. `core/_integrity.sh` asserts both the
 tier and the gate's wiring that are actually there at every entrypoint (tier: 2026-07-29; wiring:
 2026-07-30), so a silent slip from hardened to degraded, or a registration that stopped resolving,
-can't pass as still-protected. Since 2026-07-31 a broken wiring is also repaired below root ownership
-(`core/_wiring_repair.sh`) — the registration additively, and the gate FILE from the engine's own
-vendored copy. Where the tree IS root-owned — `hardened`/`stale` — nothing is written at all: a
-registration repaired there would read `wired` on the very next entrypoint (the guard recomputes from
-disk every call), so the tier would stop refusing while the session's harness still has no gate
-loaded. The refusal holds there instead, on every call, because nothing on disk ever changes. What the hardened tier does **not** cover is listed in full in
+can't pass as still-protected. Since 2026-07-31 a broken wiring is also repaired at every tier that
+lets the run proceed (`core/_wiring_repair.sh`) — the registration additively, and the gate FILE from
+the engine's own vendored copy. At every tier that REFUSES — `hardened`, `stale` and `mismatch` —
+nothing is written at all: a registration repaired there would read `wired` on the very next entrypoint
+(the guard recomputes from disk every call), so the tier would stop refusing while the session's harness
+still has no gate loaded. The refusal holds there instead, on every call, because nothing on disk ever
+changes. `mismatch` belongs on that list for the same reason and was missed once, when the rule was
+phrased "where the tree is root-owned": it is the one tier whose meaning is a recorded root ownership
+the tree does **not** have, so a repair there copied the gate out of a tree the same run calls
+untrustworthy and flipped the axis from `dangling` to `wired`. What the hardened tier does **not** cover is listed in full in
 `core/lock-kit.sh`'s header — read that list before calling this kit protected.

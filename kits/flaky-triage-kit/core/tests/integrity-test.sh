@@ -627,7 +627,15 @@ esac
 # this file would read back, and "a caller who can set a variable silences the guard" — the exact
 # threat this assertion exists to catch — does not apply to it. Unlike CLAUDE_PROJECT_DIR's
 # exclusion, which needed the hijack-attempt behavioural assertion further down to be trusted, no
-# such backstop is possible or necessary here: there is no value for anything to hijack.
+# such backstop is possible or necessary FOR BASH_SOURCE ITSELF: there is no value for anything to
+# hijack.
+#
+# The exclusion is nonetheless LINE-scoped, not name-scoped — `grep -v` drops the whole line — and
+# that residual is stated here for the same reason the CLAUDE_PROJECT_DIR one is stated below rather
+# than left implicit: a second, genuinely caller-controlled read placed on the SAME line as the
+# BASH_SOURCE reference (`core/_integrity.sh:29`, the `_INTEGRITY_HERE=` assignment) would be dropped
+# along with it and escape this check entirely. Only that one line is affected, and nothing on it
+# today reads anything but BASH_SOURCE; a future edit that crowds another expansion onto it would.
 grep -v '^[[:space:]]*#' "$HERE/../_integrity.sh" | grep -v 'BASH_SOURCE' \
   | grep -qE '(^|[^\\])\$\{?[A-Z][A-Z0-9_]*' \
   && bad "no environment override may enter _integrity.sh — a caller who can set a variable silences the guard" || ok
@@ -693,12 +701,17 @@ for T in degraded unprotected unlocked; do
   rm -rf "$R"
 done
 
-# Task 5 review correction: at hardened and stale NOTHING is written, registration included — not just
-# the gate file. A registration written here would read as `wired` on the very next entrypoint call
-# (integrity_guard recomputes from disk every time), so the tier would stop refusing while the
-# session's harness still has no gate loaded. See the fuller two-call/byte-identical proof at the
-# bottom of this file; this is the narrow "no slot lands" companion to it.
-for T in hardened stale; do
+# At EVERY REFUSING TIER nothing is written, registration included — not just the gate file. A
+# registration written here would read as `wired` on the very next entrypoint call (integrity_guard
+# recomputes from disk every time), so the tier would stop refusing while the session's harness still
+# has no gate loaded. See the fuller two-call/byte-identical proof at the bottom of this file; this is
+# the narrow "no slot lands" companion to it.
+#
+# `mismatch` is in this list because the rule is "the tier refuses", not "the tree is root-owned":
+# the first phrasing shipped, and it reached hardened and stale while missing the one tier whose whole
+# meaning is a recorded root ownership the tree does NOT have. Unlike the other two it needs no stat
+# shim — recorded `hardened` on a user-owned tree IS `mismatch`, which is any fixture's default state.
+for T in hardened stale mismatch; do
   R="$(mktemp -d)"; W="$(wire_fixture "$R")"; echo '{}' > "$R/.claude/settings.json"
   wiring_repair "$W" "$T" unregistered >/dev/null 2>&1
   case "$(slots_of "$R/.claude/settings.json")" in
@@ -786,9 +799,16 @@ esac
 rm -rf "$R"
 
 # foreign is NEVER written to. The file must come back byte-identical.
+#
+# Driven at `degraded`, NOT at `hardened`. This is the design's headline decision and it was
+# unguarded: the tier is checked before the wiring value, so a `hardened` fixture short-circuits on
+# the refusing-tier guard and never consults the `foreign` exclusion at all — the whole-branch review
+# mutated `_wiring_repair.sh`'s wiring case to `unregistered|partial|dangling|foreign) : ;;` and the
+# suite stayed 267/0. `degraded` is the weakest tier that reaches the exclusion, so the exclusion is
+# the ONLY thing standing between this call and a write.
 R="$(mktemp -d)"; W="$(wire_fixture "$R")"
 cp "$R/.claude/settings.json" "$R/before.json"
-wiring_repair "$W" hardened foreign >/dev/null 2>&1
+wiring_repair "$W" degraded foreign >/dev/null 2>&1
 cmp -s "$R/before.json" "$R/.claude/settings.json" && ok || bad "foreign must never be repaired — a stranger's gate is not ours to overwrite"
 rm -rf "$R"
 
@@ -932,22 +952,67 @@ for T in degraded unprotected unlocked; do
   rm -rf "$R"
 done
 
-# Where the tree is root-owned it is NOT restored — a user-owned file there reads as `foreign`,
-# so the repair would break the kit differently while claiming to heal it. Asserted at BOTH
-# hardened and stale: a rule that read the recorded tier instead of ownership would pass the
-# first and fail the second.
-for T in hardened stale; do
+# At a REFUSING tier the gate file is not restored either — `wiring_repair`'s own guard returns before
+# `_wr_restore_gate` is ever called. Asserted at all three: hardened and stale (the tree IS root-owned,
+# so a file written as this user would read `foreign` and break the kit differently while claiming to
+# heal it) and mismatch (the tree is NOT root-owned, and a gate copied out of a tree the same run
+# declares untrustworthy is planted exactly where a later re-lock would chown it to root and bless it).
+#
+# WHAT THESE ASSERT WAS WRONG BEFORE. `_wr_restore_gate` used to carry its own `hardened|stale` arm,
+# and these two assertions were labelled for ITS message — but the outer guard short-circuits first,
+# so the `*root-owned*` glob was matching the OUTER message and the inner arm had zero coverage
+# (deleting it outright left the suite 267/0). The arm is now gone, the rule lives in `wiring_repair`
+# alone, and the glob below names text that only the outer guard emits. The third assertion is the one
+# that makes the misattribution impossible to repeat: `_wr_restore_gate` announces every restore it
+# performs, so the ABSENCE of any "restore" line is direct evidence it was never reached.
+for T in hardened stale mismatch; do
   R="$(mktemp -d)"; K="$(wire_fixture "$R")"
   mkdir -p "$K/core/gate-src/claude/lib"
   printf '#!/bin/sh\nexit 0\n' > "$K/core/gate-src/claude/flaky-kit-self-protection-gate.sh"
   rm -f "$R/.claude/hooks/flaky-kit-self-protection-gate.sh"
-  wiring_repair "$K" "$T" dangling >/dev/null 2>&1
-  [ ! -e "$R/.claude/hooks/flaky-kit-self-protection-gate.sh" ] && ok || bad "$T: a root-owned tree must not get a user-owned gate"
-  case "$(wiring_repair "$K" "$T" dangling 2>&1 >/dev/null)" in
-    *root-owned*) ok ;; *) bad "$T: refusing to restore must say why" ;;
+  OUT="$(wiring_repair "$K" "$T" dangling 2>&1 >/dev/null)"
+  [ ! -e "$R/.claude/hooks/flaky-kit-self-protection-gate.sh" ] && ok || bad "$T: a refusing tier must not get a user-owned gate — the outer guard writes nothing"
+  case "$OUT" in
+    *"not repairing"*) ok ;; *) bad "$T: refusing to repair must say why, in the OUTER guard's own words — got: $OUT" ;;
+  esac
+  case "$OUT" in
+    *restor*) bad "$T: _wr_restore_gate must never be reached at a refusing tier — it said something about restoring: $OUT" ;; *) ok ;;
   esac
   rm -rf "$R"
 done
+
+# `_wr_restore_gate` is TIER-BLIND, and that is the design, not an oversight. Driven directly, with
+# the tier the outer guard would have refused at, it restores — because the tier is not its business
+# and is no longer one of its parameters. Two things are pinned here: that the rule has exactly ONE
+# implementation (the block above proves the outer guard enforces it; this proves the inner function
+# does not, so neither can drift from the other), and the three-argument signature itself — the
+# five-parameter version carried two never-read slots (`$root` at all, `$tier` only in the dead arm),
+# which is how a mis-ordered call gets written and never noticed.
+R="$(mktemp -d)"; K="$(wire_fixture "$R")"
+mkdir -p "$K/core/gate-src/claude/lib"
+printf '#!/bin/sh\nexit 0\n' > "$K/core/gate-src/claude/flaky-kit-self-protection-gate.sh"
+chmod +x "$K/core/gate-src/claude/flaky-kit-self-protection-gate.sh"
+rm -f "$R/.claude/hooks/flaky-kit-self-protection-gate.sh"
+OUT="$(_wr_restore_gate "$K" claude "$R/.claude/hooks" 2>&1 >/dev/null)"
+[ -x "$R/.claude/hooks/flaky-kit-self-protection-gate.sh" ] \
+  && ok || bad "_wr_restore_gate called directly must restore — it takes <kit> <harness> <dest> and knows nothing about tiers"
+case "$OUT" in
+  *"restored the claude gate"*) ok ;; *) bad "_wr_restore_gate must announce the restore it performed — got: $OUT" ;;
+esac
+rm -rf "$R"
+
+# The dead parameters are gone for real, not merely unused: a call written to the OLD five-argument
+# shape must not silently half-work. With `$root` and `$tier` still leading, `$2` (a project root) is
+# read as the harness name and `$3` (a tier string) as the destination directory, so the restore lands
+# nowhere near the gate path — the failure a five-slot signature with two dead slots invites.
+R="$(mktemp -d)"; K="$(wire_fixture "$R")"
+mkdir -p "$K/core/gate-src/claude/lib"
+printf '#!/bin/sh\nexit 0\n' > "$K/core/gate-src/claude/flaky-kit-self-protection-gate.sh"
+rm -f "$R/.claude/hooks/flaky-kit-self-protection-gate.sh"
+_wr_restore_gate "$K" "$R" hardened claude "$R/.claude/hooks" >/dev/null 2>&1
+[ ! -e "$R/.claude/hooks/flaky-kit-self-protection-gate.sh" ] \
+  && ok || bad "an old-shape five-argument call must not land a gate at the real path — the signature is three arguments"
+rm -rf "$R"
 
 # No restore source -> no restore, and it says so rather than failing silently.
 R="$(mktemp -d)"; K="$(wire_fixture "$R")"
@@ -1028,6 +1093,29 @@ chmod 755 "$R/.claude/hooks/lib"             # restore perms so cleanup below ca
 case "$OUT" in *"still runs, unaudited"*) ok ;; *) bad "a failed audit-lib copy must say the gate still runs unaudited — got: $OUT" ;; esac
 [ -x "$R/.claude/hooks/flaky-kit-self-protection-gate.sh" ] \
   && ok || bad "the gate script itself must still land even when the audit lib copy fails"
+rm -rf "$R"
+
+# A ZERO-BYTE audit-lib SOURCE is the third outcome the `[ -s ]` test used to collapse into the
+# second. `[ -s ]` is false for an empty file exactly as it is for a missing one, so the branch took
+# neither the copy nor the warning and the clean "restored the … gate" line then announced a full
+# restore for a degraded one — the same `-r`-vs-`-s` confusion already fixed one line up for the gate
+# script itself. Three assertions, because "it warned" alone would not distinguish the fix from a
+# version that warned AND installed the empty lib: the empty file must NOT be copied (the adapter's
+# gate stubs `hektor_audit(){ :; }` only when the lib is MISSING — a present-but-empty one gets
+# sourced and defines nothing, which is worse than absent), the warning must be there, and the gate
+# script itself must still land, because this is a degradation and not a failure.
+R="$(mktemp -d)"; K="$(wire_fixture "$R")"
+mkdir -p "$K/core/gate-src/claude/lib"
+printf '#!/bin/sh\nexit 0\n' > "$K/core/gate-src/claude/flaky-kit-self-protection-gate.sh"
+chmod +x "$K/core/gate-src/claude/flaky-kit-self-protection-gate.sh"
+: > "$K/core/gate-src/claude/lib/audit.sh"          # zero bytes: present, readable, useless
+rm -f "$R/.claude/hooks/flaky-kit-self-protection-gate.sh"
+OUT="$(wiring_repair "$K" degraded dangling 2>&1 >/dev/null)"
+[ ! -e "$R/.claude/hooks/lib/audit.sh" ] \
+  && ok || bad "a zero-byte audit-lib source must not be copied — an empty lib is worse than an absent one"
+case "$OUT" in *"still runs, unaudited"*) ok ;; *) bad "a zero-byte audit-lib source must say the gate still runs unaudited — got: $OUT" ;; esac
+[ -x "$R/.claude/hooks/flaky-kit-self-protection-gate.sh" ] \
+  && ok || bad "the gate script itself must still land when only the audit lib source is unusable"
 rm -rf "$R"
 
 # --- review round 2, Important 3: a HEALTHY harness must not be overwritten just because the OTHER
@@ -1187,6 +1275,59 @@ case "$OUT2" in
   *"not found"*) bad "with _wiring_repair.sh missing and no fallback, wiring_repair is an UNDEFINED command — got: $OUT2" ;; *) ok ;;
 esac
 rm -rf "$R"
+
+# --- whole-branch review, Important 4: SOURCED-BUT-NONZERO is the third state, and the one that
+# --- silently disabled the entire repair ----------------------------------------------------------
+# The two cases above pin PRESENT and ABSENT. The line that used to join them —
+#   [ -r X ] && . X || wiring_repair() { return 0; }
+# — branches on the STATUS OF THE SOURCE, not on whether the source worked: `. X` returning non-zero
+# makes the `||` fire and REDEFINE the just-loaded `wiring_repair` as a no-op. Every function in the
+# file loads correctly and then the one that matters is thrown away, with nothing printed and nothing
+# failed. It held only because _wiring_repair.sh happens to end on a function definition — a property
+# of that file on that day, not of this line, and this is the single line the whole branch's
+# reachability rests on.
+#
+# The fixture appends one `false` to the fixture's OWN copy, which is exactly the mutation that proved
+# the defect. The assertion is the repair LANDING, not merely an rc: an rc says nothing here, because
+# integrity_guard returns integrity_report's status either way (that is the trap the DRIVER2 probe
+# above already documents). What separates a loaded repair from a discarded one is whether the
+# registration is on disk afterwards.
+R="$(mktemp -d)"; K="$(wire_fixture "$R")"
+cp "$CORE/_integrity.sh" "$CORE/_wiring_repair.sh" "$K/core/"
+printf 'false\n' >> "$K/core/_wiring_repair.sh"      # the sourced file now returns non-zero
+echo '{}' > "$R/.claude/settings.json"               # registration gone: unregistered
+# CONTROL, required: prove the mutation actually took — a `printf` that silently failed, or a file
+# that already returned non-zero, would leave every assertion below passing for the wrong reason.
+( . "$K/core/_wiring_repair.sh" ) >/dev/null 2>&1 \
+  && bad "CONTROL: the fixture's _wiring_repair.sh must actually return NON-ZERO when sourced, or this block tests nothing" || ok
+bash "$DRIVER" "$K" >/dev/null 2>&1
+case "$(slots_of "$R/.claude/settings.json")" in
+  *PreToolUse:Bash*) ok ;; *) bad "a _wiring_repair.sh whose last statement returns non-zero must still be USED — the fallback may only fire when wiring_repair is genuinely undefined, never on the source's exit status" ;;
+esac
+rm -rf "$R"
+
+# PRESENT-BUT-UNREADABLE was previously indistinguishable from "not installed": both took the silent
+# no-op path, though only one of them is a defect. It must still not wedge the caller (rc sane, stdout
+# clean, wiring_repair callable) AND it must now say which of the two states it is in.
+R="$(mktemp -d)"; K="$(wire_fixture "$R")"
+cp "$CORE/_integrity.sh" "$CORE/_wiring_repair.sh" "$K/core/"
+chmod 000 "$K/core/_wiring_repair.sh"
+echo '{}' > "$R/.claude/settings.json"
+# CONTROL: a test process that can read the file anyway (running as root, or a permissive filesystem)
+# would make the assertions below vacuous.
+[ ! -r "$K/core/_wiring_repair.sh" ] \
+  && ok || bad "CONTROL: the fixture's _wiring_repair.sh must actually be unreadable to this process, or the block below tests nothing"
+OUT="$(bash "$DRIVER" "$K" 2>/dev/null)"; RC=$?
+ERR="$(bash "$DRIVER" "$K" 2>&1 >/dev/null)"
+[ -z "$OUT" ] && ok || bad "an unreadable _wiring_repair.sh must not leak anything to stdout — got: $OUT"
+case "$RC" in 0|76) ok ;; *) bad "an unreadable _wiring_repair.sh must still return a sane rc (0 or 76), not wedge the caller (got $RC)" ;; esac
+case "$ERR" in
+  *"present but unreadable"*) ok ;; *) bad "an unreadable _wiring_repair.sh must SAY so rather than degrade silently into the not-installed case — got: $ERR" ;;
+esac
+OUT3="$(bash "$DRIVER2" "$K" 2>&1)"
+case "$OUT3" in *wr_rc=0*) ok ;; *) bad "with _wiring_repair.sh unreadable, wiring_repair must still be callable and return 0 — got: $OUT3" ;; esac
+chmod 644 "$K/core/_wiring_repair.sh"                # so the cleanup below can remove it
+rm -rf "$R"
 rm -f "$DRIVER" "$DRIVER2"
 
 # Task 5 review, Important: a hardened tree that lost its registration refusing (76) on the VERY CALL
@@ -1277,6 +1418,53 @@ STATSH
 
   rm -rf "$R" "$SHIM"
 done
+
+# --- whole-branch review, Important 1: `mismatch` is the THIRD refusing tier -----------------------
+# The ruling the loop above encodes was first phrased "where the tree is root-owned", which reaches
+# `hardened` and `stale` and misses the one tier whose entire meaning is that the record CLAIMS a root
+# ownership the tree does not have. Driven against the real thing — recorded `hardened`, `core/` left
+# user-owned (so no stat shim is needed, or wanted: the whole point is that the tree is genuinely NOT
+# root-owned), the relocated gate file deleted, and `core/gate-src` PRESENT so a restore is actually
+# possible — the repair copied the gate script out of a tree the very same run calls untrustworthy,
+# into the path that is the kit's own protection hook, and flipped the axis from `dangling` to `wired`.
+#
+# The gate-src half is what makes this fixture different from a naive one: without a restore source
+# there is nothing to copy and the whole finding is invisible. That is precisely the failure mode this
+# branch has repeated — an assertion passing against a state its fixture never produced — so the
+# CONTROLs below prove the fixture reaches `mismatch`/`dangling` BEFORE anything is asserted about it.
+R="$(mktemp -d)"; R="$(cd "$R" && pwd -P)"; K="$(wire_fixture "$R")"
+printf 'claude\n' > "$K/core/.harness"
+printf '{"tier":"hardened","at":"x"}\n' > "$K/core/.lock-state"   # recorded hardened, tree user-owned
+mkdir -p "$K/core/gate-src/claude/lib"
+printf '#!/bin/sh\nexit 0\n' > "$K/core/gate-src/claude/flaky-kit-self-protection-gate.sh"
+chmod +x "$K/core/gate-src/claude/flaky-kit-self-protection-gate.sh"
+printf 'audit\n' > "$K/core/gate-src/claude/lib/audit.sh"
+GATE="$R/.claude/hooks/flaky-kit-self-protection-gate.sh"
+rm -f "$GATE"                                                     # registration stands, file gone
+cp "$R/.claude/settings.json" "$R/.claude/settings.json.before"
+
+M_TIER="$(integrity_tier "$(integrity_owner_uid "$K/core")" "$(integrity_state "$K")")"
+[ "$M_TIER" = mismatch ] \
+  && ok || bad "CONTROL: this fixture must read as mismatch, or every check below is vacuous (got $M_TIER)"
+[ "$(integrity_wiring "$K" "$M_TIER")" = dangling ] \
+  && ok || bad "CONTROL: this fixture must read as dangling BEFORE the repair, or the restore it would perform is not even reachable (got $(integrity_wiring "$K" "$M_TIER"))"
+[ -s "$K/core/gate-src/claude/flaky-kit-self-protection-gate.sh" ] \
+  && ok || bad "CONTROL: a usable restore source must be present, or 'nothing was restored' proves nothing"
+
+RC1="$(integrity_guard "$K" >/dev/null 2>&1; echo $?)"
+[ "$RC1" = 76 ] && ok || bad "mismatch: the guard must refuse (76) on the FIRST call (got $RC1)"
+[ ! -e "$GATE" ] && ok \
+  || bad "mismatch: the gate must NOT be restored from a tree this same run declares untrustworthy — and planting it there is what a later re-lock would chown to root and bless"
+cmp -s "$R/.claude/settings.json" "$R/.claude/settings.json.before" && ok \
+  || bad "mismatch: the settings file must be BYTE-IDENTICAL — every tier that refuses writes nothing at all"
+[ "$(integrity_wiring "$K" mismatch)" = dangling ] && ok \
+  || bad "mismatch: the wiring axis must still read dangling — flipping it to wired is the exact loss this assertion names (got $(integrity_wiring "$K" mismatch))"
+MSG="$(wiring_repair "$K" mismatch dangling 2>&1 >/dev/null)"
+case "$MSG" in *"not repairing"*) ok ;; *) bad "mismatch: refusing to repair must say why — got: $MSG" ;; esac
+RC2="$(integrity_guard "$K" >/dev/null 2>&1; echo $?)"
+[ "$RC2" = 76 ] && ok \
+  || bad "mismatch: must ALSO refuse (76) on the SECOND consecutive call — nothing on disk changed, so nothing may have converged (got $RC2)"
+rm -rf "$R"
 
 echo "integrity-test: $pass passed, $fail failed"
 [ "$fail" -eq 0 ]

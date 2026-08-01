@@ -248,8 +248,15 @@ pre-relocation registration before merging and the repair does not — so a dead
 stays registered forever. That dead entry does **not** gate whether the wiring axis converges, in either
 direction: `_wiring_slots` sorts same-tool commands (jq `unique`) and `_wiring_cover`
 (`core/_integrity.sh:134-147`) returns the first of them, and the relocated path (`.claude/hooks/...`)
-sorts before the pre-relocation one (`.claude/skills/.../hooks/...`) **unconditionally** — with or
-without the dead entry present, with or without `core/gate-src` ever having been vendored. What decides
+sorts before the pre-relocation one (`.claude/skills/.../hooks/...`) **within one settings file** — with
+or without the dead entry present, with or without `core/gate-src` ever having been vendored. Not
+*unconditionally*, as an earlier version of this sentence claimed: the sort is per-file, because
+`integrity_wiring` concatenates each file's `unique` output in file order and `_wiring_cover` returns the
+first line, so there is no cross-file sort at all. Measured with the dead entry in `settings.json` and
+the relocated one in `settings.local.json`, the cover for `PreToolUse:Bash` is the pre-relocation command
+and the verdict is `dangling`. The repair converges there anyway, because it always writes into
+`settings.json`, which is read first — measured, `dangling` on the read before and `wired` on the read
+after a single repair call. Within one file, what decides
 `wired` vs `dangling` is solely whether a file exists at the resolved (relocated) path; the dead entry is
 never even `stat`'d. The residual this leaves, stated precisely: once that file exists — by this repair
 restoring it, or by any other means — the axis reads `wired` while a harness that loads every hook

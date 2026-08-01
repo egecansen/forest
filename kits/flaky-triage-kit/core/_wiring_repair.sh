@@ -37,8 +37,13 @@ _wr_unlock() {
 #    moment that pid is provably dead, or — a directory left by a holder that crashed BETWEEN mkdir
 #    and writing its pid — once it has sat long enough that no live acquire is still in flight.
 #    Proven necessary by measurement, not assumed: a pre-existing `.lock.d` with no recovery logic
-#    cost every subsequent call the full 10s wait forever, on an otherwise healthy fixture — the
-#    exact "must never wedge a caller" violation this file exists to prevent.
+#    cost every subsequent call the full timeout (~15s, see below) forever, on an otherwise healthy
+#    fixture — the exact "must never wedge a caller" violation this file exists to prevent.
+#
+# The two thresholds below are counted in ITERATIONS, and an iteration costs more than its `sleep`:
+# a `cat`, a `kill -0`, a `[ -e ]` and the loop's own `mkdir` attempt all land on top of the 0.05s.
+# The wall-clock figures quoted are measured on macOS bash 3.2, not derived from the sleep alone —
+# an earlier version of these comments quoted the arithmetic (2s and 10s) and was out by ~1.6x.
 _wr_lock() {
   local target="${1:-}" waited=0 p
   [ -n "$target" ] || return 1
@@ -52,11 +57,11 @@ _wr_lock() {
     if [ -n "$p" ] && ! kill -0 "$p" 2>/dev/null; then
       rm -rf "$target.lock.d" 2>/dev/null; continue
     fi
-    if [ ! -e "$target.lock.d/pid" ] && [ "$waited" -ge 40 ]; then  # …or pidless + stale (2s)
+    if [ ! -e "$target.lock.d/pid" ] && [ "$waited" -ge 40 ]; then  # …or pidless + stale (~3.2s)
       rm -rf "$target.lock.d" 2>/dev/null; continue
     fi
     waited=$((waited + 1))
-    [ "$waited" -ge 200 ] && return 1      # 200 * 0.05s = 10s cap
+    [ "$waited" -ge 200 ] && return 1      # ~15.5s cap (200 iterations, not 200 * 0.05s)
     sleep 0.05
   done
   echo "$$" > "$target.lock.d/pid" 2>/dev/null || true
@@ -110,27 +115,29 @@ _wr_register_cursor() {
   return 0
 }
 
-# _wr_restore_gate <kit_root> <project_root> <tier> <harness> <dest-dir> -> 0. Narrates; never fails.
+# _wr_restore_gate <kit_root> <harness> <dest-dir> -> 0. Narrates; never fails.
 #
-# Restores only where the tree is NOT root-owned. At `hardened` and `stale` the gate's path must hold
-# a root-owned file — that ownership IS _wiring_one's identity test — and this process runs as the
-# user, so the file it wrote would report `foreign`: the repair would break the kit differently while
-# claiming to heal it. `stale` is included with `hardened` because it means the tree IS root-owned and
-# only .lock-state disagrees; keying this on the recorded tier while the identity test keys on
-# ownership would split one property across two conditions.
+# It knows NOTHING about tiers, deliberately. It used to carry its own `hardened|stale` arm that
+# refused to restore, as defence in depth for a hypothetical direct caller — and there is none: the
+# whole file is `_wr`-private and `wiring_repair` below is the only thing that calls it. Once that
+# function grew its own guard (every refusing tier writes nothing at all), the arm here became
+# unreachable, and its only remaining effect was to make two tests in
+# `core/tests/integrity-test.sh` pass on the OUTER guard's message while claiming to test this one.
+# Two conditions expressing one rule is the exact "split one property across two conditions" defect
+# this kit has already retracted twice. The rule lives in `wiring_repair` alone; the tier is not this
+# function's business, so it is no longer this function's parameter.
 #
-# This tier arm is UNREACHABLE through `wiring_repair` below — that function now returns before ever
-# calling here when the tree is root-owned (see its own root-owned guard, added when Task 5's review
-# found the registration half of this same story). Left in place as defence in depth for any future
-# caller of this function directly, and documented here rather than deleted so a later reader does not
-# mistake dead code for an oversight.
+# `$root` went with it: it was never referenced at all. A five-parameter signature with two dead
+# slots is an invitation to a mis-ordered call, and the caller already computes `$dest` from `$root`.
 _wr_restore_gate() {
-  local kit="$1" root="$2" tier="$3" harness="$4" dest="$5" src="$kit/core/gate-src/$4"
-  case "$tier" in
-    hardened|stale)
-      echo "integrity: not restoring the $harness gate — this tree is root-owned, so a file written as you would not be the kit's. Unlock, reinstall, lock." >&2
-      return 0 ;;
-  esac
+  local kit="$1" harness="$2" dest="$3" src
+  # SEPARATE statement, not a sixth word on the `local` above. Bash declares every name in a `local`
+  # list as unset BEFORE assigning any of them, so `local kit="$1" src="$kit/..."` reads `$kit` while
+  # it is still unset and dies under `set -u` — "kit: unbound variable". The previous five-parameter
+  # version had exactly that shape and never showed it, because its only caller is `wiring_repair`,
+  # whose own `kit` local was visible here through dynamic scoping. The first direct call this file
+  # has ever had (added with the signature above) is what surfaced it.
+  src="$kit/core/gate-src/$harness"
   # This harness's gate is already there. `dangling` is a verdict over the whole project, so a
   # project whose Claude gate is missing and whose Cursor gate is fine reaches this function twice;
   # without this line the healthy one is overwritten and announced as "restored", which is a repair
@@ -156,7 +163,17 @@ _wr_restore_gate() {
     return 0
   fi
   chmod +x "$dest/flaky-kit-self-protection-gate.sh" 2>/dev/null || true
-  if [ -s "$src/lib/audit.sh" ] && ! cp "$src/lib/audit.sh" "$dest/lib/audit.sh" 2>/dev/null; then
+  # Three outcomes, not two. `[ -s ]` alone collapsed a PRESENT-BUT-ZERO-BYTE audit.sh into the
+  # "no source at all" case: it took neither the copy nor the warning, and the clean "restored the
+  # gate" line below then announced a full restore for a degraded one. Same `-r`-vs-`-s` shape as the
+  # gate script above, with the opposite resolution: an empty gate must not be installed AND must be
+  # loud, while an empty audit lib must not be installed and must be loud — copying it would be worse
+  # than leaving it absent, because the adapter's gate stubs `hektor_audit(){ :; }` only when the lib
+  # is MISSING, and a present-but-empty one gets sourced and defines nothing. A genuinely absent
+  # source stays silent: that is the stub's designed-for case, not a degradation.
+  if [ -e "$src/lib/audit.sh" ] && [ ! -s "$src/lib/audit.sh" ]; then
+    echo "integrity: restored the $harness gate, but its audit lib source is zero-byte — not copied; the gate still runs, unaudited." >&2
+  elif [ -s "$src/lib/audit.sh" ] && ! cp "$src/lib/audit.sh" "$dest/lib/audit.sh" 2>/dev/null; then
     echo "integrity: restored the $harness gate, but its audit lib did not copy — the gate still runs, unaudited." >&2
   fi
   echo "integrity: restored the $harness gate from the engine's copy." >&2
@@ -171,15 +188,35 @@ wiring_repair() {
     *) return 0 ;;                      # wired, absent, foreign: nothing to do or nothing that is ours
   esac
 
-  # Root-owned tree: detect and say so, repair nothing. A registration written here would be read as
-  # `wired` by the very next entrypoint — the guard recomputes from disk every call — so the tier
-  # would stop refusing while this session's harness still has no gate loaded. One call would refuse
-  # and every call after it would proceed unprotected, which is the silent loss this axis exists to
-  # catch. The refusal is worth more here than the repair: the protection at this tier is real, and a
-  # registration this session cannot use buys nothing while destroying the only signal.
+  # EVERY TIER THAT REFUSES WRITES NOTHING AT ALL — not the registration, not the gate file. A write
+  # here would be read as `wired` by the very next entrypoint (the guard recomputes from disk every
+  # call), so the tier would stop refusing while this session's harness still has no gate loaded. One
+  # call would refuse and every call after it would proceed unprotected, which is the silent loss this
+  # axis exists to catch. The refusal is worth more than the repair: a registration this session
+  # cannot use buys nothing while destroying the only signal that anything is wrong.
+  #
+  # `mismatch` is on this list for the same reason and was missed once, because the rule was first
+  # phrased "where the tree is root-owned" — which reaches `hardened` and `stale` but not the one tier
+  # whose whole meaning is that the record CLAIMS a root ownership the tree does not have. Measured
+  # there, the repair copied the gate script out of a tree the same run declares untrustworthy
+  # ("this is not the tree that was hardened … nothing it produces should be trusted") into the path
+  # that is the kit's own protection hook, and flipped the axis from `dangling` to `wired`. The run is
+  # refused anyway, so the write bought nothing. What it cost is real: `harden_targets`
+  # (core/lock-kit.sh) picks up .claude/hooks/flaky-kit-self-protection-gate.sh only when that file
+  # already exists, so a re-lock used to leave the path empty and the kit went on refusing until
+  # someone reinstalled — with the file planted, the re-lock chowns it to root and `_wiring_one`'s
+  # ownership identity test accepts it. A signal that used to survive the printed remedy no longer
+  # does. No attacker gains a capability here (at `mismatch` they already own the tree); there is
+  # simply no upside to set against the loss. See §4 of the design spec.
+  #
+  # The message is deliberately about the TIER refusing, not about root ownership: two of these three
+  # trees are root-owned and one is exactly the tree that is not, and one sentence has to be true of
+  # all three. It is also textually distinct from `_wr_restore_gate`'s messages, so a test that means
+  # to assert one of them cannot be satisfied by the other — which is how the restore's own dead tier
+  # arm went unnoticed.
   case "$tier" in
-    hardened|stale)
-      echo "integrity: not repairing — this tree is root-owned, so a repair would silence the refusal on the next entrypoint without arming anything. Unlock, re-run the installer, and lock." >&2
+    hardened|stale|mismatch)
+      echo "integrity: not repairing — this tier refuses the run, and a repair would silence that refusal on the very next entrypoint (the guard recomputes from disk every call) without arming anything in this session. Repair it by hand: unlock if the tree is root-owned, re-run the kit installer against this project, then core/lock-kit.sh lock." >&2
       return 0 ;;
   esac
 
@@ -191,7 +228,7 @@ wiring_repair() {
   wc="${1:-0}"; wu="${2:-0}"
 
   if [ "$wc" = 1 ]; then
-    [ "$wiring" = dangling ] && _wr_restore_gate "$kit" "$root" "$tier" claude "$root/.claude/hooks"
+    [ "$wiring" = dangling ] && _wr_restore_gate "$kit" claude "$root/.claude/hooks"
     s="$root/.claude/settings.json"
     mkdir -p "$(dirname "$s")" 2>/dev/null
     [ -e "$s" ] || echo '{}' > "$s" 2>/dev/null
@@ -212,7 +249,7 @@ wiring_repair() {
   fi
 
   if [ "$wu" = 1 ]; then
-    [ "$wiring" = dangling ] && _wr_restore_gate "$kit" "$root" "$tier" cursor "$root/.cursor/hooks"
+    [ "$wiring" = dangling ] && _wr_restore_gate "$kit" cursor "$root/.cursor/hooks"
     s="$root/.cursor/hooks.json"
     mkdir -p "$(dirname "$s")" 2>/dev/null
     [ -e "$s" ] || echo '{"version":1,"hooks":{}}' > "$s" 2>/dev/null

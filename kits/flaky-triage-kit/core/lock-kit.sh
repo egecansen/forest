@@ -121,11 +121,15 @@
 #      configuration tree", which is a different promise with its own false-positive cost, and it
 #      needs its own design round rather than a line appended to a fix wave.
 #
-# Since 2026-07-31 the kit REPAIRS a broken wiring below root ownership — `core/_wiring_repair.sh`,
-# called from `integrity_guard` between detection and reporting — rather than only reporting it. At
-# `hardened`/`stale` it writes NOTHING at all: repairing nothing there PRESERVES this tier's guarantee
-# rather than leaving a gap in it, so items 10-13 below describe the repair that runs everywhere else,
-# not this tier:
+# Since 2026-07-31 the kit REPAIRS a broken wiring at every tier that lets the run proceed —
+# `core/_wiring_repair.sh`, called from `integrity_guard` between detection and reporting — rather than
+# only reporting it. At every tier that REFUSES — `hardened`, `stale` and `mismatch` — it writes
+# NOTHING at all: repairing nothing there PRESERVES those tiers' guarantee rather than leaving a gap in
+# it, so items 10-13 below describe the repair that runs everywhere else, not those tiers. (`mismatch`
+# was missed by the first version of this rule, which was phrased "where the tree is root-owned" and so
+# reached the other two but not the tier whose meaning is a recorded root ownership the tree does not
+# have — where a repair planted a gate file that a later re-lock would chown to root and bless. See
+# `harden_targets` below: it picks the gate path up only when the file already exists.):
 #
 #  10. A repair arms on the next session, never the one that made it. The harness reads hook config
 #      at startup, so between the repair and a restart the gate is registered and not running.
@@ -139,7 +143,13 @@
 #      (`core/_integrity.sh:134-147`) returns the FIRST of two same-tool commands after `_wiring_slots`
 #      sorts them, and the relocated path always sorts ahead of the dead one within one settings file
 #      (not guaranteed split across `settings.json`/`settings.local.json`, though nothing that writes
-#      either file today produces that split). Once the relocated file exists the axis reads `wired`
+#      either file today produces that split: `integrity_wiring` concatenates each file's `unique`
+#      output in file order and takes the first line, so there is no cross-file sort — measured, a
+#      dead entry in `settings.json` with the relocated one in `settings.local.json` covers
+#      `PreToolUse:Bash` with the PRE-RELOCATION command and reads `dangling`). The repair still
+#      converges in that split case, because it always writes into `settings.json`, which is read
+#      first — measured, `dangling` on the read before and `wired` on the read after one repair call.
+#      Once the relocated file exists the axis reads `wired`
 #      while a harness still runs the dead hook on every matching call, invisibly. Re-running the
 #      installer, which purges it, is the real fix.
 #

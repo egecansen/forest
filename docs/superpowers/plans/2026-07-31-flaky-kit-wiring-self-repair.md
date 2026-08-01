@@ -196,6 +196,8 @@ This task repairs `unregistered` and `partial` by writing the missing slots. The
 
 Append to `core/tests/integrity-test.sh`. `wire_fixture` is the existing helper that builds an installed layout; reuse it rather than writing a second one.
 
+> **SUPERSEDED — see "Correction taken during Task 5" above and §4 of the spec.** The snippet below prescribes "all three slots written, at every tier" and loops over `hardened stale degraded …`. Every tier that REFUSES — `hardened`, `stale`, `mismatch` — writes nothing at all; the loop shipped as `degraded unprotected unlocked`, with a companion loop asserting that nothing lands at the other three. The task body is left as the historical execution record, not as instructions.
+
 ```bash
 # --- wiring_repair: the registration half ------------------------------------------------------
 . "$HERE/../_wiring_repair.sh"
@@ -447,6 +449,8 @@ Run each mutation on a scratch copy, and for each one first assert the file actu
 | the `REPAIRED` line is echoed to stdout instead of stderr | the stdout assertion |
 
 - [ ] **Step 6: Commit**
+
+> **SUPERSEDED — see "Correction taken during Task 5" above and §4 of the spec.** The commit message below says "The registration is now rewritten at every tier." It is not: every tier that refuses — `hardened`, `stale`, `mismatch` — writes nothing at all. Kept as the historical execution record.
 
 ```bash
 git add kits/flaky-triage-kit/core/_wiring_repair.sh kits/flaky-triage-kit/core/tests/integrity-test.sh
@@ -766,6 +770,8 @@ happened."
 
 - [ ] **Step 1: Add the repair to `core/README.md`'s module table**
 
+> **SUPERSEDED — see "Correction taken during Task 5" above and §4 of the spec.** "registration at every tier" is wrong; every refusing tier (`hardened`, `stale`, `mismatch`) writes nothing at all. `core/README.md` already ships the corrected row — do not copy the literal text below into it.
+
 ```
 | `_wiring_repair` | re-asserts the kit's own gate registration when the guard finds it missing or dangling | registration at every tier · the gate FILE only where the tree is not root-owned · `foreign` never |
 ```
@@ -773,6 +779,8 @@ happened."
 And extend the `_integrity` row's prose so the reader learns the guard now writes: it detects, repairs, then reports the pre-repair verdict.
 
 - [ ] **Step 2: Extend `kernel.md`'s P4 row**
+
+> **SUPERSEDED — see "Correction taken during Task 5" above and §4 of the spec.** "The registration is rewritten at every tier" is wrong, and so is keying the exception on root ownership alone: every refusing tier (`hardened`, `stale`, `mismatch`) writes nothing at all — neither the registration nor the gate file. `kernel.md` already ships the corrected row — do not copy the literal text below into it.
 
 ```
 **2026-07-31:** the kit now REPAIRS its own wiring rather than only reporting it. Detection was not enough: whether a project ends up wired depends on which tool provisioned it, and a worktree was twice observed holding the kit with none of it wired and nothing saying why. The registration is rewritten at every tier; the gate file is restored only where the tree is not root-owned, because at hardened and stale that path must hold a root-owned file and a repair running as the user would turn a `dangling` into a `foreign`. A repair arms on the NEXT session — the harness reads hook config at startup — so a root-owned tree still refuses after repairing and says to restart.
