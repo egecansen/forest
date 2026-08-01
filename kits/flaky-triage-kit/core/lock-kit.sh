@@ -282,6 +282,7 @@ harden_targets() {
   local root p; root="$(git -C "$KIT" rev-parse --show-toplevel 2>/dev/null)"
   if [ -n "$root" ]; then
     for p in .claude/hooks/flaky-kit-self-protection-gate.sh \
+             .claude/hooks/flaky-kit-delivery-gate.sh \
              .claude/hooks/lib/audit.sh \
              .cursor/hooks/flaky-kit-self-protection-gate.sh \
              .cursor/hooks/lib/cursor-compat.sh \

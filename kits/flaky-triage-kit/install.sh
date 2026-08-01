@@ -81,7 +81,13 @@ echo "install: engine + SKILL.md -> $KIT/"
 # The wiring check must require exactly the harnesses this kit was installed for. Written under
 # core/, which harden_targets already chowns, so at the hardened tier an agent cannot rewrite it to
 # require nothing.
-printf '%s\n' "$HARNESS" > "$SKILL_DIR/core/.harness"
+#
+# First token: the --harness selection. Remaining tokens: capabilities this install shipped.
+# A record without `stop` is an install that predates the delivery gate and must go on requiring
+# exactly the slots it already required — that is what keeps the wiring axis from refusing every
+# entrypoint on every existing project the moment this ships.
+if [ "$do_claude" = 1 ]; then printf '%s stop\n' "$HARNESS" > "$SKILL_DIR/core/.harness"
+else printf '%s\n' "$HARNESS" > "$SKILL_DIR/core/.harness"; fi
 
 # UPGRADE PATH. Before the relocation, the gate installed INSIDE the kit tree at
 # $SKILL_DIR/hooks/flaky-kit-self-protection-gate.sh. Nothing removed it, so upgrading an existing
@@ -159,6 +165,21 @@ if [ "$do_claude" = 1 ]; then
   cp "$HERE/adapters/claude/flaky-kit-self-protection-gate.sh" "$SKILL_DIR/core/gate-src/claude/flaky-kit-self-protection-gate.sh"
   chmod +x "$SKILL_DIR/core/gate-src/claude/flaky-kit-self-protection-gate.sh" 2>/dev/null || true
   vendor "$HERE/adapters/_lib/audit.sh" "$SKILL_DIR/core/gate-src/claude/lib/audit.sh"
+
+  # --- the delivery gate (Stop): refuses a session that ends with a red test rationalised away.
+  # It lives beside the self-protection gate at .claude/hooks/ and resolves lib/audit.sh RELATIVE
+  # TO ITS OWN LOCATION (see the gate's own header), which is the same .claude/hooks/lib/audit.sh
+  # the self-protection gate just vendored above — so it is found automatically. vendor() is called
+  # again here anyway (it never clobbers) so this block does not silently depend on running after
+  # the self-protection block above, and the restore source at gate-src gets its own copy too.
+  cp "$HERE/adapters/claude/flaky-kit-delivery-gate.sh" "$PROJ/.claude/hooks/flaky-kit-delivery-gate.sh"
+  chmod +x "$PROJ/.claude/hooks/flaky-kit-delivery-gate.sh" 2>/dev/null || true
+  vendor "$HERE/adapters/_lib/audit.sh" "$PROJ/.claude/hooks/lib/audit.sh"
+  mkdir -p "$SKILL_DIR/core/gate-src/claude"
+  cp "$HERE/adapters/claude/flaky-kit-delivery-gate.sh" "$SKILL_DIR/core/gate-src/claude/flaky-kit-delivery-gate.sh"
+  chmod +x "$SKILL_DIR/core/gate-src/claude/flaky-kit-delivery-gate.sh" 2>/dev/null || true
+  vendor "$HERE/adapters/_lib/audit.sh" "$SKILL_DIR/core/gate-src/claude/lib/audit.sh"
+
   S="$PROJ/.claude/settings.json"; [ -f "$S" ] || echo '{}' > "$S"
   C='"$CLAUDE_PROJECT_DIR/.claude/hooks/flaky-kit-self-protection-gate.sh"'
   # Drop any registration of the PRE-RELOCATION in-tree gate path FIRST. The jq below only ever
@@ -181,7 +202,14 @@ if [ "$do_claude" = 1 ]; then
         (if any(.hooks[]?; .command==$c) then . else .hooks += [{type:"command", command:$c, timeout:10}] end)
         else . end)' "$S" > "$t" && mv "$t" "$S"
   done
-  echo "install: Claude Code wired (.claude/settings.json: PreToolUse Write|Edit + Bash)"
+  # --- register the delivery gate at Stop, idempotently (the guard below is what makes a
+  # second install a no-op instead of a second registration) ---
+  D='"$CLAUDE_PROJECT_DIR/.claude/hooks/flaky-kit-delivery-gate.sh"'
+  t="$(mktemp)"; jq --arg c "$D" '
+    .hooks //= {} | .hooks.Stop //= [] |
+    (if any(.hooks.Stop[]?; (.hooks // []) | any(.command==$c)) then .
+     else .hooks.Stop += [{hooks:[{type:"command", command:$c, timeout:20}]}] end)' "$S" > "$t" && mv "$t" "$S"
+  echo "install: Claude Code wired (.claude/settings.json: PreToolUse Write|Edit + Bash, Stop)"
 fi
 
 # --- Cursor: rule + gate + vendored libs + hooks.json registration ---

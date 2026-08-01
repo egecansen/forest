@@ -6,7 +6,10 @@ set -uo pipefail
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 KITSRC="$(cd "$HERE/../.." && pwd)"
 TMP="$(mktemp -d)"; TMP="$(cd "$TMP" && pwd -P)"
-trap 'chmod -R u+w "$TMP" 2>/dev/null; rm -rf "$TMP"' EXIT
+# chflags -R nouappend FIRST: the audit-lib assertion below drives the installed delivery gate,
+# whose hektor_audit() flags docs/hektor/.hook-audit.log append-only on Darwin — a flag `rm -rf`
+# cannot remove through, so without this the fixture directory outlives the run.
+trap 'chflags -R nouappend "$TMP" 2>/dev/null; chmod -R u+w "$TMP" 2>/dev/null; rm -rf "$TMP"' EXIT
 pass=0; fail=0
 ok()  { pass=$((pass+1)); }
 bad() { fail=$((fail+1)); echo "FAIL: $1" >&2; }
@@ -100,6 +103,35 @@ GSC="$SKILL_DIR2/core/gate-src/cursor"
 [ -f "$GSC/lib/audit.sh" ] && ok || bad "install must ship the audit lib beside the cursor restore source"
 cmp -s "$GSC/flaky-kit-self-protection-gate.sh" "$P2/.cursor/hooks/flaky-kit-self-protection-gate.sh" \
   && ok || bad "the cursor restore source must be byte-identical to the installed gate"
+
+# --- the delivery gate ships, registers, and records its capability ---------------------------
+[ -x "$P/.claude/hooks/flaky-kit-delivery-gate.sh" ] && ok || bad "install must ship the delivery gate"
+[ -f "$SKILL_DIR/core/gate-src/claude/flaky-kit-delivery-gate.sh" ] && ok || bad "the delivery gate needs a restore source like its sibling"
+[ "$(jq -r '[.hooks.Stop[]?|(.hooks//[])[]?|.command|select(test("flaky-kit-delivery-gate"))]|length' "$P/.claude/settings.json")" = 1 ] \
+  && ok || bad "install must register the delivery gate at Stop, exactly once"
+# The capability record: first token the harness, remaining tokens capabilities.
+[ "$(cat "$SKILL_DIR/core/.harness")" = "claude stop" ] && ok || bad "install must record the stop capability"
+# Idempotent: a second install must not duplicate the registration or the token.
+"$KITSRC/install.sh" --harness claude --project "$P" >/dev/null 2>&1
+[ "$(jq -r '[.hooks.Stop[]?|(.hooks//[])[]?|.command|select(test("flaky-kit-delivery-gate"))]|length' "$P/.claude/settings.json")" = 1 ] \
+  && ok || bad "a second install must not duplicate the Stop registration"
+[ "$(cat "$SKILL_DIR/core/.harness")" = "claude stop" ] && ok || bad "a second install must not duplicate the capability token"
+
+# --- carried forward from the gate's own task: the audit-lib fallback is a SILENT no-op ------------
+# (`hektor_audit() { :; }`) whenever lib/audit.sh is not beside the installed gate, which would turn
+# every one of the delivery gate's "fail open and SAY so" paths quiet. install.sh vendors the lib
+# beside the deployed gate the same way it does for the self-protection gate — but a bare file-exists
+# check would pass even if the gate's own relative-path lookup were wrong (wrong dirname, wrong
+# nesting, ...). Run the INSTALLED gate for real and prove it actually FOUND the lib: empty stdin is
+# the very first fail-open branch in the gate (`command -v jq` first, then this), needs nothing but
+# jq, and hektor_audit only ever reaches docs/hektor/.hook-audit.log if lib/audit.sh was sourced —
+# the `{ :; }` fallback writes nothing at all.
+rm -rf "$P/docs/hektor"
+( cd "$P" && printf '' | "$P/.claude/hooks/flaky-kit-delivery-gate.sh" >/dev/null 2>&1 )
+case "$(cat "$P/docs/hektor/.hook-audit.log" 2>/dev/null)" in
+  *"empty stdin, failing open"*) ok ;;
+  *) bad "the installed delivery gate must find its vendored audit lib and log its fail-open path, not silently no-op" ;;
+esac
 
 echo "install-guard-test: $pass passed, $fail failed"
 [ "$fail" -eq 0 ]
