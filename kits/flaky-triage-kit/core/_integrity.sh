@@ -584,7 +584,7 @@ integrity_report() {
       # specifically protects is the detail line's business, and the detail line already names it.
       case "$tier" in
         hardened|stale)
-          echo "integrity: refusing — the tree is root-owned, so this run would report the hardened tier while $which is not going to run at all. That is weaker than the protection the tier claims, and nothing short of the password can close the gap." >&2
+          echo "integrity: refusing — the tree is root-owned, so this run would report the hardened tier while $which is not going to run as registered. That is weaker than the protection the tier claims, and nothing short of the password can close the gap." >&2
           echo "integrity: to repair, unlock FIRST — the installer refuses to overwrite a root-owned tree: HEKTOR_FLAKYKIT_UNLOCK=1 core/lock-kit.sh unlock, then re-run the kit installer against this project, then core/lock-kit.sh lock." >&2
           rc=76 ;;
         *)

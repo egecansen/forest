@@ -1534,6 +1534,29 @@ for T in hardened stale; do
     esac
   done
 done
+
+# --- final minors, Fix 1: the refusing paragraph must not assert MORE than the wiring value
+# establishes. At `partial` the gate DOES run for the matchers it covers; at `foreign` a registered,
+# existing, non-kit file DOES run. "is not going to run at all" is false at both — only the header one
+# line up ("...is not going to run as registered.") is true across every wiring value that reaches
+# this paragraph. Verified reddening before the fix: the refusing paragraph read "...while $which is
+# not going to run at all." for both `partial` and `foreign`.
+for T in hardened stale; do
+  for w in partial foreign; do
+    RLINE="$(integrity_report "$T" "$w" "the delivery gate (Claude, Stop)" 2>&1 >/dev/null | grep '^integrity: refusing')"
+    [ -n "$RLINE" ] \
+      && ok || bad "CONTROL: $T/$w must actually print a refusing paragraph, or the two assertions below read an empty string"
+    case "$RLINE" in
+      *"not going to run at all"*)
+        bad "$T/$w: the refusing paragraph must not claim \$which is not going to run AT ALL — at $w it runs (partially, or as a foreign file) — got: $RLINE" ;;
+      *) ok ;;
+    esac
+    case "$RLINE" in
+      *"not going to run as registered"*) ok ;;
+      *) bad "$T/$w: the refusing paragraph must say \$which is not going to run AS REGISTERED, matching the header — got: $RLINE" ;;
+    esac
+  done
+done
 # ...and the mirror, or "must name the gate" is satisfied by a paragraph that says "delivery gate"
 # unconditionally: the two self-protection labels must come back in the same paragraph.
 for L in "the self-protection gate (Claude, PreToolUse)" "the self-protection gate (Cursor)"; do
