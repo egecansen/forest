@@ -168,17 +168,22 @@ if [ "$do_claude" = 1 ]; then
 
   # --- the delivery gate (Stop): refuses a session that ends with a red test rationalised away.
   # It lives beside the self-protection gate at .claude/hooks/ and resolves lib/audit.sh RELATIVE
-  # TO ITS OWN LOCATION (see the gate's own header), which is the same .claude/hooks/lib/audit.sh
-  # the self-protection gate just vendored above — so it is found automatically. vendor() is called
-  # again here anyway (it never clobbers) so this block does not silently depend on running after
-  # the self-protection block above, and the restore source at gate-src gets its own copy too.
+  # TO ITS OWN LOCATION (see the gate's own header) — the same .claude/hooks/lib/audit.sh the
+  # self-protection gate vendored two lines above. That IS the vendoring for this gate too: both
+  # gates share one on-disk copy per destination by construction (same directory, same filename),
+  # so a second `vendor()` call here would target the identical path an unconditional block above
+  # ALWAYS runs first — dead on arrival, never the deciding write, and CI caught exactly that: it
+  # printed vendor()'s "already exists, leaving it AS-IS" WARNING on every install and stayed
+  # green even with the call deleted outright. Removed instead of kept as decoration. The genuine
+  # dependency this leaves — the delivery gate's audit trail depends on the self-protection block
+  # above still vendoring lib/audit.sh — is exercised by install-guard-test.sh's audit-lib
+  # assertion, which drives the INSTALLED gate and fails if lib/audit.sh is ever missing for
+  # either reason. Same reasoning for the restore source: no gate-src vendor() call here either.
   cp "$HERE/adapters/claude/flaky-kit-delivery-gate.sh" "$PROJ/.claude/hooks/flaky-kit-delivery-gate.sh"
   chmod +x "$PROJ/.claude/hooks/flaky-kit-delivery-gate.sh" 2>/dev/null || true
-  vendor "$HERE/adapters/_lib/audit.sh" "$PROJ/.claude/hooks/lib/audit.sh"
   mkdir -p "$SKILL_DIR/core/gate-src/claude"
   cp "$HERE/adapters/claude/flaky-kit-delivery-gate.sh" "$SKILL_DIR/core/gate-src/claude/flaky-kit-delivery-gate.sh"
   chmod +x "$SKILL_DIR/core/gate-src/claude/flaky-kit-delivery-gate.sh" 2>/dev/null || true
-  vendor "$HERE/adapters/_lib/audit.sh" "$SKILL_DIR/core/gate-src/claude/lib/audit.sh"
 
   S="$PROJ/.claude/settings.json"; [ -f "$S" ] || echo '{}' > "$S"
   C='"$CLAUDE_PROJECT_DIR/.claude/hooks/flaky-kit-self-protection-gate.sh"'

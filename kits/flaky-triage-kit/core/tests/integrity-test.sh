@@ -379,6 +379,20 @@ rm -f "$W/m/.claude/settings.json"
 [ "$(integrity_wiring "$K13" degraded)" = unregistered ] \
   && ok || bad "a .harness record requiring claude with no settings.json at all must be unregistered, not absent"
 
+# --- Task 3 REGRESSION: the capability-token record format. install.sh now writes "claude stop"
+# (harness + capability tokens) once it also ships the delivery gate, not the bare "claude" every
+# fixture above still uses. `_wiring_want` used to `case`-match the WHOLE file content, so
+# "claude stop" matched no arm at all and fell through to the very file-existence inference this
+# function exists to replace — reopening exactly the false-negative its own header names: a project
+# carrying a .cursor/hooks.json from some UNRELATED tool (present, but registering nothing for the
+# kit's own gate) got graded on that file again, on every FRESH claude-only install, not merely ones
+# whose record predates this format.
+K14="$(wire_fixture "$W/n")"
+printf 'claude stop\n' > "$K14/core/.harness"
+printf '{"version":1,"hooks":{}}\n' > "$W/n/.cursor/hooks.json"   # "unrelated tool": present, unregistered
+[ "$(integrity_wiring "$K14" degraded)" = wired ] \
+  && ok || bad "a 'claude stop' capability record must be parsed by its FIRST TOKEN — cursor must not be examined at all, and a stray foreign .cursor/hooks.json must not drag the verdict to unregistered (got $(integrity_wiring "$K14" degraded))"
+
 # No .harness record at all must still reproduce the pre-existing file-presence inference, unchanged
 # -- every K1..K11 fixture above already proves this implicitly (none of them writes .harness), and
 # this line names the property directly for anyone reading only this section.

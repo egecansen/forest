@@ -224,6 +224,13 @@ grep -qxF -- "-k" "$SUDO_LOG" && ok \
 # the safety surface by SURF_RE, core/shell-guard.py, the CODEOWNERS block and README.md, and
 # installed by install.sh whenever --harness includes cursor. So a Cursor user could run `lock`, read
 # "the safety surface … is owned by root", and still have their ONLY gate user-writable.
+#
+# The DELIVERY gate (flaky-kit-delivery-gate.sh) is on this same fixture for the identical reason:
+# install.sh ships it beside the self-protection gate and harden_targets() lists it right next to
+# its sibling, guarded by the same `[ -f ]` test — but nothing named it here, so deleting that one
+# line from harden_targets() reddened NOTHING across the whole suite (verified independently: 813/0
+# unaffected by the deletion). It is the Stop hook that refuses an unproven session; a user-writable
+# copy at the hardened tier is exactly the gap `lock` claims to have closed.
 : > "$SUDO_LOG"; unset SUDO_CHOWN_FAIL
 PROJ5="$TMP/proj5"; KIT5="$PROJ5/.claude/skills/hektor-flaky-triage"
 mkdir -p "$KIT5/core" "$PROJ5/.claude/hooks/lib" "$PROJ5/.cursor/hooks/lib"
@@ -231,6 +238,7 @@ git -C "$PROJ5" init -q
 cp "$LOCK" "$KIT5/core/lock-kit.sh"; cp "$HERE/../_integrity.sh" "$KIT5/core/_integrity.sh"
 printf '{}\n' > "$KIT5/core/config.json"; printf 'x\n' > "$KIT5/SKILL.md"; chmod +x "$KIT5/core/lock-kit.sh"
 printf 'x\n' > "$PROJ5/.claude/hooks/flaky-kit-self-protection-gate.sh"
+printf 'x\n' > "$PROJ5/.claude/hooks/flaky-kit-delivery-gate.sh"
 printf 'x\n' > "$PROJ5/.claude/hooks/lib/audit.sh"
 printf 'x\n' > "$PROJ5/.cursor/hooks/flaky-kit-self-protection-gate.sh"
 printf 'x\n' > "$PROJ5/.cursor/hooks/lib/cursor-compat.sh"
@@ -240,6 +248,8 @@ H5OUT="$(PATH="$SHIM:$PATH" "$KIT5/core/lock-kit.sh" lock 2>&1)"
 case "$H5OUT" in *"HARDENED "*) ok ;; *) bad "the install-shaped fixture must reach a complete hardened tier — got: $H5OUT" ;; esac
 chown_r_operands | grep -qxF "$PROJ5/.claude/hooks/flaky-kit-self-protection-gate.sh" && ok \
   || bad "the Claude gate must be a chown operand"
+chown_r_operands | grep -qxF "$PROJ5/.claude/hooks/flaky-kit-delivery-gate.sh" && ok \
+  || bad "the delivery gate must be a chown operand — it is the Stop hook that refuses an unproven session, and a user-writable copy at the hardened tier defeats the point of locking"
 chown_r_operands | grep -qxF "$PROJ5/.cursor/hooks/flaky-kit-self-protection-gate.sh" && ok \
   || bad "the CURSOR gate must be a chown operand — install.sh installs it and it is a Cursor user's only gate"
 chown_r_operands | grep -qxF "$PROJ5/.cursor/hooks/lib/cursor-compat.sh" && ok \

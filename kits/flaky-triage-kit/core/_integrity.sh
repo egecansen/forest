@@ -99,10 +99,19 @@ integrity_project_root() {
 #
 # No record means the kit predates this file: fall back to the old inference rather than silently
 # requiring nothing, which would turn every existing install into a green "wired".
+#
+# `core/.harness` is now "<harness> [capability...]" (install.sh appends `stop` when it ships the
+# delivery gate) — so only the FIRST token is the harness selection; the rest are capabilities a
+# later check reads separately. Matching the WHOLE file content, as this used to, made a
+# `claude stop` record fall through every arm below to the file-existence inference — reopening the
+# exact false-negative this function's header describes: a project whose ONLY reason to look
+# cursor-wired was an unrelated tool's .cursor/hooks.json now got graded on that file again, on
+# every FRESH claude-only install, not just ones written before this format existed.
 _wiring_want() {
-  local kit="${1:-}" root="${2:-}" h c=0 u=0
+  local kit="${1:-}" root="${2:-}" h first c=0 u=0
   h="$(cat "$kit/core/.harness" 2>/dev/null)"
-  case "$h" in
+  first="${h%% *}"
+  case "$first" in
     all|both) echo "1 1"; return 0 ;;
     claude)   echo "1 0"; return 0 ;;
     cursor)   echo "0 1"; return 0 ;;
