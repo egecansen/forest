@@ -10,16 +10,145 @@ while [ -L "$SOURCE" ]; do
 done
 DIR="$(cd -P "$(dirname "$SOURCE")/.." && pwd)"
 PORT="$(node --input-type=commonjs -e "try{process.stdout.write(String(JSON.parse(require('fs').readFileSync('$DIR/config.json','utf8')).port||5577))}catch(e){process.stdout.write('5577')}" 2>/dev/null || echo 5577)"
-if ! curl -s "http://127.0.0.1:${PORT}/api/config" >/dev/null 2>&1; then
-  (cd "$DIR" && nohup node server.mjs >/tmp/forest.log 2>&1 &)
-  started=0
-  for i in 1 2 3 4 5 6 7 8 9 10; do
-    if curl -s "http://127.0.0.1:${PORT}/api/config" >/dev/null 2>&1; then started=1; break; fi
+URL="http://127.0.0.1:${PORT}"
+
+usage() {
+  cat >&2 <<'EOF'
+usage: forest [command]
+
+  (no command)  start the server if it is down, then open the dashboard
+  up            start the server if it is down; do not open a browser
+  down          stop the server
+  status        report whether the server is running
+  restart       stop the server, then start it again
+EOF
+  exit 2
+}
+
+# Is Forest answering on the port?
+is_up() {
+  curl -s "${URL}/api/config" >/dev/null 2>&1
+}
+
+# PID(s) of the Forest server listening on PORT, one per line. Prints nothing
+# when the port is free or when the listener is not Forest. Liveness and PID
+# are separate questions: a wedged Forest can hold the port while no longer
+# answering /api/config, and `down` still has to be able to kill it.
+forest_pid() {
+  local pid cmd
+  for pid in $(lsof -ti "tcp:${PORT}" -sTCP:LISTEN 2>/dev/null || true); do
+    cmd="$(ps -o command= -p "$pid" 2>/dev/null || true)"
+    case "$cmd" in
+      *node*server.mjs*) printf '%s\n' "$pid" ;;
+    esac
+  done
+}
+
+# Command line of whatever holds the port, Forest or not. Returns 1 if free.
+port_holder() {
+  local pid
+  pid="$(lsof -ti "tcp:${PORT}" -sTCP:LISTEN 2>/dev/null | head -1 || true)"
+  [ -n "$pid" ] || return 1
+  ps -o command= -p "$pid" 2>/dev/null || return 1
+}
+
+# The `( ... nohup node server.mjs & )` subshell does not exit — it survives as
+# the server's parent, reparented to init, and is why `ps | grep forest` is
+# unreadable. Once the server is gone it is a childless bash running this very
+# script, so reap it. Never touches our own shell, and never a process with
+# surviving children.
+reap_launcher() {
+  local ppid="$1" cmd
+  [ -n "$ppid" ] || return 0
+  [ "$ppid" -gt 1 ] 2>/dev/null || return 0
+  [ "$ppid" != "$$" ] || return 0
+  cmd="$(ps -o command= -p "$ppid" 2>/dev/null || true)"
+  case "$cmd" in
+    *bash*forest*) ;;
+    *) return 0 ;;
+  esac
+  [ -z "$(pgrep -P "$ppid" 2>/dev/null || true)" ] || return 0
+  kill "$ppid" 2>/dev/null || true
+}
+
+stop_server() {
+  local pids ppid holder signal gone
+  pids="$(forest_pid)"
+
+  if [ -z "$pids" ]; then
+    if holder="$(port_holder)"; then
+      echo "forest: port ${PORT} is held by something that is not forest:" >&2
+      echo "  ${holder}" >&2
+      return 1
+    fi
+    echo "forest: not running (port ${PORT})"
+    return 0
+  fi
+
+  # Remember the launcher shell before the server dies and the link is lost.
+  ppid="$(ps -o ppid= -p "$(printf '%s\n' "$pids" | head -1)" 2>/dev/null | tr -d ' ' || true)"
+
+  # Unquoted on purpose: forest_pid may print more than one PID and each must
+  # become its own argument.
+  kill $pids 2>/dev/null || true
+  signal="TERM"
+  gone=0
+  for _ in 1 2 3 4 5 6 7 8 9 10; do
+    if [ -z "$(forest_pid)" ]; then gone=1; break; fi
     sleep 0.3
   done
-  if [ "$started" -eq 0 ]; then
-    echo "forest: server did not start on port ${PORT} — see /tmp/forest.log" >&2
-    exit 1
+
+  if [ "$gone" -eq 0 ]; then
+    kill -9 $pids 2>/dev/null || true
+    signal="KILL"
+    sleep 0.3
+    if [ -n "$(forest_pid)" ]; then
+      echo "forest: failed to stop server on port ${PORT}" >&2
+      return 1
+    fi
   fi
-fi
-open "http://127.0.0.1:${PORT}"
+
+  reap_launcher "$ppid"
+  echo "forest: stopped (port ${PORT}, SIG${signal})"
+}
+
+start_server() {
+  if is_up; then
+    return 0
+  fi
+  (cd "$DIR" && nohup node server.mjs >/tmp/forest.log 2>&1 &)
+  for _ in 1 2 3 4 5 6 7 8 9 10; do
+    if is_up; then return 0; fi
+    sleep 0.3
+  done
+  echo "forest: server did not start on port ${PORT} — see /tmp/forest.log" >&2
+  return 1
+}
+
+# 0 when Forest is running, 1 otherwise, so `forest status && ...` is scriptable.
+status_server() {
+  local pids holder
+  pids="$(forest_pid)"
+  if [ -n "$pids" ]; then
+    echo "forest: running (pid $(printf '%s' "$pids" | tr '\n' ' ' | sed 's/ *$//'), port ${PORT})"
+    return 0
+  fi
+  if holder="$(port_holder)"; then
+    echo "forest: not running; port ${PORT} held by:"
+    echo "  ${holder}"
+    return 1
+  fi
+  echo "forest: not running (port ${PORT})"
+  return 1
+}
+
+[ "$#" -le 1 ] || usage
+cmd="${1:-open}"
+case "$cmd" in
+  open)    start_server; open "$URL" ;;
+  up)      start_server; status_server ;;
+  down)    stop_server ;;
+  status)  status_server ;;
+  restart) stop_server; start_server; status_server ;;
+  *)       usage ;;
+esac

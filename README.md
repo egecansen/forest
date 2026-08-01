@@ -6,7 +6,19 @@ to `npm install`). The server binds to `127.0.0.1`.
 
 ## Run
 
-    forest        # starts the server (if down) and opens the dashboard
+    forest            # start the server (if down) and open the dashboard
+
+    forest up         # start the server; do not open a browser
+    forest down       # stop the server
+    forest status     # report running/stopped, with pid and port
+    forest restart    # stop, then start again
+
+`forest status` exits 0 when the server is running and 1 when it is not, so it
+composes: `forest status && open http://127.0.0.1:5577`.
+
+Forest finds its server by looking for the listener on its configured port and
+checking that the process really is `node server.mjs` — if something else is
+squatting on the port, `forest down` reports it and refuses to kill it.
 
 Or directly:
 
