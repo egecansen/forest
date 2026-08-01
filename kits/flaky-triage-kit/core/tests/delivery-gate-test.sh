@@ -242,10 +242,53 @@ OUT="$(run "$WORK/t1")"
 # HEKTOR* is the bypass the pack ships and this kit ruled out. CLAUDE_PROJECT_DIR is the other half:
 # the sibling self-protection gate anchors on it legitimately (it hunts the PROJECT'S kit tree), but
 # this gate resolves its OWN engine, and anchoring that on an environment variable would let the
-# subject of the check choose which ledger.sh judges it. Both belong in the same alternation, or the
-# decision to anchor solely on $BASH_SOURCE could be reverted with nothing noticing.
-grep -v '^[[:space:]]*#' "$GATE" | grep -qE '(^|[^\\])\$\{?(HEKTOR[A-Z_]*|CLAUDE_PROJECT_DIR)' \
-  && bad "the delivery gate must carry no environment bypass and no environment-anchored engine lookup" || ok
+# subject of the check choose which ledger.sh judges it. Both must be caught, or the decision to
+# anchor solely on $BASH_SOURCE could be reverted with nothing noticing.
+#
+# The assertion matches the SHAPE of any `$UPPERCASE` read, not a list of names — §6.1 of the design
+# spec asked for exactly that, and the earlier `HEKTOR[A-Z_]*|CLAUDE_PROJECT_DIR` alternation was a
+# list: `DELIVERY_GATE=off` passed it. core/tests/integrity-test.sh has asserted the shape form over
+# `_integrity.sh` and `_wiring_repair.sh` for two rounds; this is the same instrument, with the
+# polarity that matters — a name this gate does not already declare FAILS by default, so adding an
+# environment read is a deliberate act that has to come here and argue for itself.
+#
+# The gate's own locals are uppercase, so the exclusion list below is what makes the shape usable.
+# Two properties keep it from becoming the name list it replaces: it is an ALLOW list (a new name is
+# a failure until someone adds it), and every name on it is checked to be ASSIGNED in the gate — a
+# read with no assignment is by definition a value that came from outside. BASH_SOURCE is the one
+# exception, and the reason it is safe is the same one integrity-test.sh states: there is no value
+# for a caller to hijack, because bash sets it from the path it invoked.
+DG_OWN='BASH_SOURCE ACTIVE CHANGED CMDS CORE COUNTS DETAIL DOCS FOUND_LEDGER HIT INPUT JQ JQ_RC
+KIT_USED L LAST LEDGERS LEDGER_NAMED LINES MSG OPEN RAW RC TRANSCRIPT'
+# Comments stripped ONCE, and both scans read the stripped text. The assignment check below was
+# written against the raw file first and passed for a name that appeared only inside this gate's own
+# header ("the pack's delivery-gate.sh ships HEKTOR_DELIVERY_GATE=off") — a prose mention standing in
+# for an assignment, which is precisely the stand-in-for-the-thing defect this suite exists to catch.
+DG_CODE="$WORK/gate-code.sh"
+grep -v '^[[:space:]]*#' "$GATE" > "$DG_CODE"
+DG_READS="$(grep -oE '(^|[^\\])\$\{?[A-Z][A-Z0-9_]*' "$DG_CODE" | sed -E 's/.*\$\{?//' | sort -u)"
+DG_FOREIGN=""
+for n in $DG_READS; do
+  case " $(echo $DG_OWN) " in *" $n "*) : ;; *) DG_FOREIGN="$DG_FOREIGN $n" ;; esac
+done
+[ -z "$DG_FOREIGN" ] && ok \
+  || bad "the delivery gate must carry no environment bypass and no environment-anchored engine lookup — it reads:$DG_FOREIGN"
+# ...and the allow list must not be a way to smuggle one in: every name on it except BASH_SOURCE has
+# to be ASSIGNED in the gate before it can be read, which is what makes "this is one of our own
+# locals" a checked claim rather than an assertion in a comment. Three assignment forms, because the
+# gate uses all three: `NAME=`, `while IFS= read -r NAME`, and `for NAME in` (`L` is bound by the
+# second and would be reported unassigned by a `NAME=`-only test).
+DG_UNASSIGNED=""
+for n in $DG_OWN; do
+  [ "$n" = BASH_SOURCE ] && continue
+  grep -qE "(^|[[:space:]]|;)$n=|read([[:space:]]+-[A-Za-z]+)*[[:space:]]+$n([[:space:]]|;|$)|for[[:space:]]+$n[[:space:]]+in" "$DG_CODE" \
+    || DG_UNASSIGNED="$DG_UNASSIGNED $n"
+done
+[ -z "$DG_UNASSIGNED" ] && ok \
+  || bad "a name excused as one of the gate's own locals must actually be assigned in it — these are not:$DG_UNASSIGNED"
+# CONTROL: the shape matcher must actually find the gate's reads, or both assertions above are
+# vacuously satisfied by an empty set.
+[ -n "$DG_READS" ] && ok || bad "CONTROL: the \$UPPERCASE shape scan found nothing at all in the gate"
 
 echo "delivery-gate-test: $pass passed, $fail failed"
 [ "$fail" -eq 0 ]
