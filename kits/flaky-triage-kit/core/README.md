@@ -54,7 +54,9 @@ including, since 2026-07-30, the kit tree and both harnesses' hook directories a
 **operands**, the out-of-tree `.flaky-kit-expect` record, and the harness settings files that
 register the gate at all (`.claude/settings.json`, `.claude/settings.local.json`,
 `.cursor/hooks.json`): Bash denies any mutation of them outright, and Write/Edit denies only an edit
-that would drop the registration — neither is chown-backed the way `core/**` is (full residual in
+that would drop a registration the file carries today — since 2026-08-01 that means the delivery
+gate's `Stop` registration as well as the self-protection gate's `PreToolUse` one, and the delivery
+gate's own file joined the matched surface in the same change — neither is chown-backed the way `core/**` is (full residual in
 `core/lock-kit.sh`'s header). It did not match any of those before: every surface pattern ended in
 `/`, so `mv <kit> /tmp/x` and `rm -rf .claude/hooks` were allowed and unaudited on every install.
 

@@ -509,6 +509,7 @@ integrity_tier() {
 # seam, it is a hole. The seam now runs through the function boundary instead of through the
 # environment, so nothing in production reads an override at all — the test suite greps this file
 # to make sure that variable never reappears here.
+#
 # `$3` is the gate the wiring verdict is ABOUT — `_wiring_compute`'s second field, threaded through
 # `integrity_guard`. It defaults, so the two-argument form the test suite drives this with still
 # works and still says something true. Without it the messages named the self-protection gate for

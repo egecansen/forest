@@ -198,7 +198,7 @@ _wr_restore_gate() {
   # project whose Claude gate is missing and whose Cursor gate is fine reaches this function twice;
   # without this line the healthy one is overwritten and announced as "restored", which is a repair
   # claimed for a harness that was never broken — the same misattribution the per-harness `did_c`
-  # and `did_u` split exists to prevent, one function over. It is a `elif` chain rather than the
+  # and `did_u` split exists to prevent, one function over. It is an `elif` chain rather than the
   # early `return` it used to be, because the delivery-gate arm below has to be reached whether or
   # not this file was missing — that early return IS the defect I1 names.
   #
@@ -254,6 +254,11 @@ _wr_restore_gate() {
   # is not per-gate work. Running it only on a real restore is what keeps a project whose gates are
   # both present from being told about its audit lib on every entrypoint.
   #
+  # The messages say "the restored $harness hook", not "the $harness gate": when only the DELIVERY
+  # gate was restored, naming the self-protection gate here would be the same misattribution I2 fixed
+  # one file over. The phrase "still runs, unaudited" is what the assertions match, and it is true of
+  # whichever hook was restored.
+  #
   # Three outcomes, not two. `[ -s ]` alone collapsed a PRESENT-BUT-ZERO-BYTE audit.sh into the
   # "no source at all" case: it took neither the copy nor the warning, and the clean "restored the
   # gate" line then announced a full restore for a degraded one. Same `-r`-vs-`-s` shape as the
@@ -264,9 +269,9 @@ _wr_restore_gate() {
   # source stays silent: that is the stub's designed-for case, not a degradation.
   [ "$did" = 1 ] || return 0
   if [ -e "$src/lib/audit.sh" ] && [ ! -s "$src/lib/audit.sh" ]; then
-    echo "integrity: restored the $harness gate, but its audit lib source is zero-byte — not copied; the gate still runs, unaudited." >&2
+    echo "integrity: the audit lib beside the restored $harness hook has a zero-byte source — not copied; the gate still runs, unaudited." >&2
   elif [ -s "$src/lib/audit.sh" ] && ! cp "$src/lib/audit.sh" "$dest/lib/audit.sh" 2>/dev/null; then
-    echo "integrity: restored the $harness gate, but its audit lib did not copy — the gate still runs, unaudited." >&2
+    echo "integrity: the audit lib beside the restored $harness hook did not copy — the gate still runs, unaudited." >&2
   fi
   return 0
 }

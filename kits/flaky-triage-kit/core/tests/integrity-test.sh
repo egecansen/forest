@@ -290,7 +290,7 @@ K7="$(wire_fixture "$W/g")"; rm -f "$W/g/.cursor/hooks/flaky-kit-self-protection
 # leaking. Every `_wr_*` helper gets its own call for the reason the block below already states about
 # `_wiring_*`: reached only through the composition, a helper's locals can be unobservable.
 LOCAL_NAMES="kit tier root f p t s slots cmd g gate got want out wc wu ws h c u ev tool line key k owner recorded actual expected wiring rc"
-LOCAL_NAMES="$LOCAL_NAMES m did did_c did_u did_s harness dest src target waited want_stop rcs"
+LOCAL_NAMES="$LOCAL_NAMES m did did_c did_u did_s harness dest src target waited want_stop rcs one which w"
 ( for v in $LOCAL_NAMES; do unset "$v"; done
   . "$HERE/../_integrity.sh"
   integrity_owner_uid   "$K1/core"                                     >/dev/null
@@ -308,6 +308,10 @@ LOCAL_NAMES="$LOCAL_NAMES m did did_c did_u did_s harness dest src target waited
   # same as every other helper in this list — its own direct call belongs here for the same reason,
   # regardless of it declaring no locals today (the rule is not conditioned on that).
   _wiring_slots_stop    "$W/a/.claude/settings.json"                   >/dev/null
+  # `_wiring_compute` and `_wiring_which` for the same reason: integrity_wiring and integrity_guard
+  # both reach the first only through `$( )`, so `one`, `which` and `w` are unobservable from there.
+  _wiring_compute       "$K1" degraded                                 >/dev/null
+  _wiring_which         partial dangling                               >/dev/null
   _wiring_cover         "$(printf 'PreToolUse:Write\tsome-command')" PreToolUse Write >/dev/null
   _wiring_resolve       'x/y.sh' "$W/a"                                >/dev/null
   _wiring_one           '' degraded 0 3                                >/dev/null
