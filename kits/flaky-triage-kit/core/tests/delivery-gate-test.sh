@@ -62,9 +62,9 @@ audit_home() {  # audit_home <name> -> a scratch git repo whose docs/hektor/ the
   printf '%s' "$d"
 }
 audit_log() { cat "$1/docs/hektor/.hook-audit.log" 2>/dev/null; }
-H0="$(audit_home main)"                  # the scratch repo the unremarkable runs below write into
+MAIN_HOME="$(audit_home main)"           # the scratch repo the unremarkable runs below write into
 run() {  # run <transcript> [stop_hook_active] -> stdout of the gate
-  run_in "$GATE" "$H0" "$1" "${2:-false}"
+  run_in "$GATE" "$MAIN_HOME" "$1" "${2:-false}"
 }
 blocked() { case "$1" in *'"block"'*) return 0 ;; *) return 1 ;; esac; }
 
@@ -147,24 +147,27 @@ tx "$WORK/t6" "Cluster c1 is green: 5/5 passes, verified by core/gate." "$KIT/co
 [ -z "$(run "$WORK/t6")" ] && ok || bad "a proven, unhedged summary must pass"
 
 # --- fail open: no transcript, unreadable transcript, no jq ------------------------------------
-[ -z "$(run_in "$GATE" "$H0" /nonexistent/x)" ] && ok || bad "a missing transcript must fail open"
-[ -z "$( cd "$H0" && printf '' | bash "$GATE" 2>/dev/null )" ] && ok || bad "empty stdin must fail open"
+[ -z "$(run_in "$GATE" "$MAIN_HOME" /nonexistent/x)" ] && ok || bad "a missing transcript must fail open"
+[ -z "$( cd "$MAIN_HOME" && printf '' | bash "$GATE" 2>/dev/null )" ] && ok || bad "empty stdin must fail open"
 A_TX="$(audit_home transcript)"
 run_in "$GATE" "$A_TX" /nonexistent/x >/dev/null 2>&1
-case "$(audit_log "$A_TX")" in *transcript*) ok ;; *) bad "an unreadable transcript must leave an audit line — the gate read nothing, and that is not the same as reading a clean session" ;; esac
+case "$(audit_log "$A_TX")" in *"no readable transcript"*) ok ;; *) bad "an unreadable transcript must leave an audit line — the gate read nothing, and that is not the same as reading a clean session" ;; esac
 
 # --- the engine it checks against may be missing: fail open, and SAY so ------------------------
 # The gate ships to <proj>/.claude/hooks/ and the engine to <proj>/.claude/skills/hektor-flaky-
 # triage/core/. Rename the kit tree aside and the gate is still registered but has nothing to ask.
 # Blocking there would wedge every stop in the project; passing silently would look like a clean
 # session forever after.
-LONE="$WORK/lonely"; mkdir -p "$LONE/lib"
+# Laid out as a real install with the kit tree removed, and nested deeply enough that BOTH paths the
+# gate probes land inside this fixture — a shallower copy would send `../../core` outside $WORK, and
+# the assertion would then depend on what happens to sit next to the temp directory.
+LONE="$WORK/lonely/.claude/hooks"; mkdir -p "$LONE/lib"
 cp "$GATE" "$LONE/flaky-kit-delivery-gate.sh"
 cp "$KIT/adapters/_lib/audit.sh" "$LONE/lib/audit.sh"
 A_ENG="$(audit_home engine)"
 [ -z "$(run_in "$LONE/flaky-kit-delivery-gate.sh" "$A_ENG" "$WORK/t4")" ] \
   && ok || bad "a gate that cannot find its engine must fail open, not block"
-case "$(audit_log "$A_ENG")" in *engine*) ok ;; *) bad "a gate that cannot find its engine must leave an audit line" ;; esac
+case "$(audit_log "$A_ENG")" in *"engine not found"*) ok ;; *) bad "a gate that cannot find its engine must leave an audit line" ;; esac
 
 # --- nothing may reach stdout except the verdict JSON ------------------------------------------
 OUT="$(run "$WORK/t1")"
