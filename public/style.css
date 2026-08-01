@@ -73,7 +73,7 @@ header {
   white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
 }
 .readout b { color: var(--ink); font-weight: 600; font-variant-numeric: tabular-nums; }
-.readout .rd-prune { color: var(--amber); }
+.readout .rd-stale { color: var(--amber); }
 .readout .rd-live { color: var(--run); }
 .readout .dot { margin: 0 2px -1px 0; }
 
@@ -144,6 +144,14 @@ main { max-width: 1320px; margin: 0 auto; padding: 16px 18px 210px; }
   border-radius: 8px; cursor: pointer; transition: color .12s, border-color .12s, background .12s;
 }
 .repo-unlist:hover { color: var(--danger); border-color: var(--danger); background: var(--danger-weak); }
+/* Sized like its neighbours; warns on hover because confirming it deletes
+   worktrees and their branches. The first click only previews. */
+.repo-prune {
+  margin-left: 6px; font: 12px var(--font-ui); color: var(--muted);
+  background: transparent; border: 1px solid transparent; padding: 4px 10px;
+  border-radius: 8px; cursor: pointer; transition: color .12s, border-color .12s, background .12s;
+}
+.repo-prune:hover { color: var(--danger); border-color: var(--danger); background: var(--danger-weak); }
 .repo-count {
   font-family: var(--font-mono); font-size: 11px; font-weight: 500; color: var(--muted);
   border: 1px solid var(--line); border-radius: 999px; padding: 0 7px;

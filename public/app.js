@@ -129,7 +129,7 @@ function render() {
     const removeBtn = r.listed
       ? `<button class="repo-unlist" data-act="unlist-repo" data-path="${encodeURIComponent(r.repoPath)}" title="Remove ${esc(r.repo)} from the list (nothing on disk is deleted)">✕</button>`
       : '';
-    return `<div class="repo-group"><div class="repo-name"><span class="repo-name-label">${esc(r.repo)}<span class="repo-count">${shown.length}</span></span><button class="repo-add" data-repo="${esc(r.repoPath)}" title="New worktree in ${esc(r.repo)}">+ worktree</button>${removeBtn}</div>${rows}</div>`;
+    return `<div class="repo-group"><div class="repo-name"><span class="repo-name-label">${esc(r.repo)}<span class="repo-count">${shown.length}</span></span><button class="repo-add" data-repo="${esc(r.repoPath)}" title="New worktree in ${esc(r.repo)}">+ worktree</button><button class="repo-prune" data-act="prune-repo" data-path="${encodeURIComponent(r.repoPath)}" title="Delete worktrees in ${esc(r.repo)} that are merged, clean and older than ${esc(String(state.config?.staleDays ?? 14))} days, and their branches">prune</button>${removeBtn}</div>${rows}</div>`;
   }).join('');
   const skippedHtml = (state.snapshot.skippedRepos || []).map(skippedGroupHtml).join('');
   const html = groupsHtml + skippedHtml;
@@ -138,18 +138,22 @@ function render() {
 }
 
 function renderReadout() {
-  let total = 0, changed = 0, prunable = 0, live = 0;
+  // Counts merged-or-old worktrees, which is NOT what the repo `prune` button
+  // acts on — that requires clean and unused as well. Labelled "stale" so the
+  // two never contradict each other on screen (this number is routinely
+  // non-zero while prune correctly finds nothing).
+  let total = 0, changed = 0, stale = 0, live = 0;
   for (const r of state.snapshot.repos) for (const w of r.worktrees) {
     total++;
     if (w.status.dirty && !(w.stale || w.merged)) changed++;
-    if ((w.stale || w.merged) && !w.isPrimary) prunable++;
+    if ((w.stale || w.merged) && !w.isPrimary) stale++;
     if (w.agent.state === 'running') live++;
   }
   const el = $('#readout');
   if (!el) return;
   el.innerHTML = `<b>${total}</b> worktrees`
     + (changed ? ` · <b>${changed}</b> changed` : '')
-    + (prunable ? ` · <b class="rd-prune">${prunable}</b> prunable` : '')
+    + (stale ? ` · <b class="rd-stale">${stale}</b> stale` : '')
     + (live ? ` · <span class="dot run"></span><b class="rd-live">${live}</b> live` : '');
 }
 
@@ -328,6 +332,39 @@ async function doAction(act, ds) {
     return;
   }
   if (act === 'finish') { openFinish(path); return; }
+  if (act === 'prune-repo') {
+    // `path` is the repo path here. The preview is read-only: nothing is
+    // deleted until the confirm below is accepted.
+    const pv = await api('/api/repo/prune-preview', { repoPath: path });
+    if (!pv || pv.error) { toast(`Prune failed: ${(pv && pv.error) || 'server unreachable'}`); return; }
+    const kept = {};
+    for (const k of pv.kept || []) kept[k.reason] = (kept[k.reason] || 0) + 1;
+    const keptLine = Object.entries(kept).map(([reason, n]) => `${n} ${reason}`).join(', ') || 'none';
+    const keptTotal = (pv.kept || []).length;
+    if (!(pv.candidates || []).length) {
+      alert(`Nothing to prune.\n\nKept ${keptTotal}: ${keptLine}.`);
+      return;
+    }
+    // Below a megabyte, round-to-MB reads as a bare "0 MB"; show KB instead.
+    const size = (b) => (b == null ? '—' : b < 1e6 ? `${Math.max(1, Math.round(b / 1e3))} KB` : `${Math.round(b / 1e6)} MB`);
+    const list = pv.candidates
+      .map((c) => `  ${c.branch || '(detached)'}   ${c.ageDays}d   ${size(c.sizeBytes)}`)
+      .join('\n');
+    if (!confirm(
+      `Prune ${pv.candidates.length} worktree(s)?\n\n${list}\n\n`
+      + 'Branches are deleted with `git branch -d` (merged only).\n'
+      + `Kept ${keptTotal}: ${keptLine}.`,
+    )) return;
+    const r = await api('/api/repo/prune', { repoPath: path, paths: pv.candidates.map((c) => c.path), mode: state.mode });
+    if (!r || r.error) { toast(`Prune failed: ${(r && r.error) || 'server unreachable'}`); return; }
+    if (state.mode === 'guided') { toast('Sent to terminal'); return; }
+    const failed = (r.failed || []).length;
+    const skipped = (r.skipped || []).length;
+    toast(`Pruned ${(r.removed || []).length}`
+      + (skipped ? `, ${skipped} skipped` : '')
+      + (failed ? `, ${failed} failed — see the journal` : ''));
+    return;
+  }
   if (act === 'unlist-repo') {
     if (!confirm(`Remove ${path} from forest's list?\n\nNothing on disk is deleted — the repo, its worktrees and its .claude/ stay exactly as they are.`)) return;
     const r = await api('/api/repos/remove', { path });
