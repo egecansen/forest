@@ -305,7 +305,24 @@ function renderTaskPanel(path) {
   if (c) c.onclick = () => api('/api/launch', { path });
 }
 
-async function doAction(act, ds) {
+// Shows a button as working for the duration of `fn`, and blocks a second
+// click while it runs. The 4s re-render can swap the node out mid-flight, in
+// which case the visual state is lost but the operation continues — the busy
+// flag, not the DOM, is what prevents a double run.
+const busy = new Set();
+async function withPending(el, key, label, fn) {
+  if (busy.has(key)) return;
+  busy.add(key);
+  const prev = el ? el.textContent : null;
+  if (el) { el.disabled = true; el.textContent = label; }
+  try { return await fn(); }
+  finally {
+    busy.delete(key);
+    if (el && el.isConnected) { el.disabled = false; el.textContent = prev; }
+  }
+}
+
+async function doAction(act, ds, el) {
   const path = decodeURIComponent(ds.path);
   if (act === 'launch') { openPicker(path); return; }
   if (act === 'open-cursor') { await api('/api/open', { path, target: 'cursor' }); return; }
@@ -333,6 +350,7 @@ async function doAction(act, ds) {
   }
   if (act === 'finish') { openFinish(path); return; }
   if (act === 'prune-repo') {
+    return withPending(el, `prune:${path}`, 'prune…', async () => {
     // `path` is the repo path here. The preview is read-only: nothing is
     // deleted until the confirm below is accepted.
     const pv = await api('/api/repo/prune-preview', { repoPath: path });
@@ -363,7 +381,7 @@ async function doAction(act, ds) {
     toast(`Pruned ${(r.removed || []).length}`
       + (skipped ? `, ${skipped} skipped` : '')
       + (failed ? `, ${failed} failed — see the journal` : ''));
-    return;
+    });
   }
   if (act === 'unlist-repo') {
     if (!confirm(`Remove ${path} from forest's list?\n\nNothing on disk is deleted — the repo, its worktrees and its .claude/ stay exactly as they are.`)) return;
@@ -673,7 +691,7 @@ function wireEvents() {
     const add = e.target.closest('.repo-add');
     if (add) { e.stopPropagation(); openNewWorktree(add.dataset.repo); return; }
     const btn = e.target.closest('button[data-act]');
-    if (btn) { e.stopPropagation(); doAction(btn.dataset.act, btn.dataset); return; }
+    if (btn) { e.stopPropagation(); doAction(btn.dataset.act, btn.dataset, btn); return; }
     const row = e.target.closest('.row[data-path]');
     if (row) openDrawer(decodeURIComponent(row.dataset.path));
   });

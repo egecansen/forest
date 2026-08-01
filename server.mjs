@@ -39,6 +39,11 @@ function broadcast(event, data) {
 }
 journal.subscribe((entry) => broadcast('journal', entry));
 
+// The last snapshot built, kept so read-only callers do not have to pay for a
+// fresh one. A full build walks every worktree in every repo and takes seconds;
+// the periodic loop below is already paying that cost on a timer.
+let lastSnapshot = null;
+
 async function snapshot() {
   const snap = await buildSnapshot(config, { registry, nowMs: Date.now(), claudeProjectsDir: CLAUDE_PROJECTS, sizes, repoList });
   for (const p of snap.skippedRepos) {
@@ -46,7 +51,15 @@ async function snapshot() {
     warnedRepos.add(p);
     journal.add({ cmd: `repo skipped: ${p} is no longer a git repository (still listed)`, cwd: ROOT, mode: 'auto' });
   }
+  lastSnapshot = snap;
   return snap;
+}
+
+// For callers that only display: at most one refresh interval stale, which the
+// UI already is between broadcasts. Never use this to decide a mutation — the
+// prune executor re-reads a fresh snapshot for exactly that reason.
+async function cachedSnapshot() {
+  return lastSnapshot ?? snapshot();
 }
 
 const MIME = { '.html': 'text/html', '.css': 'text/css', '.js': 'text/javascript', '.json': 'application/json', '.woff2': 'font/woff2', '.svg': 'image/svg+xml' };
@@ -79,7 +92,7 @@ export function readBody(req) {
 
 // Shared context handed to the action router (Task 8).
 export const ctx = {
-  config, registry, journal, broadcast, snapshot, CLAUDE_PROJECTS,
+  config, registry, journal, broadcast, snapshot, cachedSnapshot, CLAUDE_PROJECTS,
   forestRoot: ROOT,
   getRepoList: () => repoList,
   setRepoList: (list) => { repoList = list; warnedRepos.clear(); },
