@@ -115,6 +115,25 @@ _wr_register_cursor() {
   return 0
 }
 
+# _wr_register_stop <settings-file> <command> -> 0, or 1 if the merge did not land.
+#
+# Same shape as _wr_register above, adapted for a single Stop-event slot with no matcher concept
+# (Stop fires once, on end-of-session, not per-tool) — and the SAME shape install.sh itself writes
+# when it first ships the delivery gate, so an install and a repair cannot disagree about it.
+_wr_register_stop() {
+  local s="$1" c="$2" t rc=0
+  t="$(mktemp)" || return 1
+  if jq --arg c "$c" '
+    .hooks //= {} | .hooks.Stop //= [] |
+    (if any(.hooks.Stop[]?; (.hooks // []) | any(.command==$c)) then .
+     else .hooks.Stop += [{hooks:[{type:"command", command:$c, timeout:20}]}] end)' "$s" > "$t" 2>/dev/null && [ -s "$t" ]; then
+    mv "$t" "$s" || rc=1
+  else
+    rm -f "$t"; rc=1
+  fi
+  return "$rc"
+}
+
 # _wr_restore_gate <kit_root> <harness> <dest-dir> -> 0. Narrates; never fails.
 #
 # It knows NOTHING about tiers, deliberately. It used to carry its own `hardened|stale` arm that
@@ -182,7 +201,7 @@ _wr_restore_gate() {
 
 # wiring_repair <kit_root> <tier> <wiring> -> narrates to stderr, always returns 0.
 wiring_repair() {
-  local kit="${1:-}" tier="${2:-}" wiring="${3:-}" root wc wu s did_c=0 did_u=0
+  local kit="${1:-}" tier="${2:-}" wiring="${3:-}" root wc wu ws s did_c=0 did_u=0
   case "$wiring" in
     unregistered|partial|dangling) : ;;
     *) return 0 ;;                      # wired, absent, foreign: nothing to do or nothing that is ours
@@ -225,7 +244,7 @@ wiring_repair() {
   command -v jq >/dev/null 2>&1 || return 0
 
   set -- $(_wiring_want "$kit" "$root")
-  wc="${1:-0}"; wu="${2:-0}"
+  wc="${1:-0}"; wu="${2:-0}"; ws="${3:-0}"
 
   if [ "$wc" = 1 ]; then
     [ "$wiring" = dangling ] && _wr_restore_gate "$kit" claude "$root/.claude/hooks"
@@ -238,6 +257,19 @@ wiring_repair() {
           did_c=1
         else
           echo "integrity: the Claude gate registration merge failed — $s was not repaired." >&2
+        fi
+        # The delivery gate (Stop) rides the SAME lock already held on this file and the SAME
+        # per-harness did_c flag: it is Claude's second control, not a third harness, so a repair
+        # that touches either one is reported the one way "the Claude gate registration has been
+        # rewritten" already means. Gated on `ws`, the capability the record actually requires — an
+        # install that predates the delivery gate (no `stop` token in core/.harness) must not gain a
+        # Stop registration it never asked for; that is the same no-brick rule `_wiring_want` encodes.
+        if [ "$ws" = 1 ]; then
+          if _wr_register_stop "$s" '"$CLAUDE_PROJECT_DIR/.claude/hooks/flaky-kit-delivery-gate.sh"'; then
+            did_c=1
+          else
+            echo "integrity: the Claude delivery gate registration merge failed — $s was not repaired." >&2
+          fi
         fi
         _wr_unlock
       else

@@ -281,7 +281,7 @@ K7="$(wire_fixture "$W/g")"; rm -f "$W/g/.cursor/hooks/flaky-kit-self-protection
 # the subshell's pass/fail exit status crosses back out, and `ok`/`bad` (which touch this file's
 # pass/fail counters) are called out here in the main shell, not inside the subshell where their
 # effect would be lost when it exits.
-LOCAL_NAMES="kit tier root f p t s slots cmd g gate got want out wc wu h c u ev tool line key k owner recorded actual expected wiring rc"
+LOCAL_NAMES="kit tier root f p t s slots cmd g gate got want out wc wu ws h c u ev tool line key k owner recorded actual expected wiring rc"
 ( for v in $LOCAL_NAMES; do unset "$v"; done
   . "$HERE/../_integrity.sh"
   integrity_owner_uid   "$K1/core"                                     >/dev/null
@@ -390,6 +390,15 @@ rm -f "$W/m/.claude/settings.json"
 K14="$(wire_fixture "$W/n")"
 printf 'claude stop\n' > "$K14/core/.harness"
 printf '{"version":1,"hooks":{}}\n' > "$W/n/.cursor/hooks.json"   # "unrelated tool": present, unregistered
+# Task 4 ADDITION: this record's second token now names a REAL capability the wiring axis checks
+# (the delivery gate, registered at Stop) — wire it the same way wire_fixture wires the
+# self-protection gate, so this assertion keeps pinning only what it always pinned (first-token
+# parsing; cursor never examined) instead of being dragged to `unregistered` by a capability this
+# fixture predates, which would test Task 4's own feature by accident instead of Task 3's fix.
+printf '#!/bin/sh\nexit 0\n' > "$W/n/.claude/hooks/flaky-kit-delivery-gate.sh"
+chmod +x "$W/n/.claude/hooks/flaky-kit-delivery-gate.sh"
+t="$(mktemp)"; jq '.hooks.Stop = [{hooks:[{type:"command",command:"\"$CLAUDE_PROJECT_DIR/.claude/hooks/flaky-kit-delivery-gate.sh\""}]}]' \
+  "$W/n/.claude/settings.json" > "$t" && mv "$t" "$W/n/.claude/settings.json"
 [ "$(integrity_wiring "$K14" degraded)" = wired ] \
   && ok || bad "a 'claude stop' capability record must be parsed by its FIRST TOKEN — cursor must not be examined at all, and a stray foreign .cursor/hooks.json must not drag the verdict to unregistered (got $(integrity_wiring "$K14" degraded))"
 
@@ -1506,6 +1515,64 @@ case "$OUT" in
   *) ok ;;
 esac
 rm -rf "$R"
+
+# --- Task 4: the delivery gate (Stop) joins the wiring axis -------------------------------------
+# A control that can be silently unregistered is not a control -- the same rule that put the
+# self-protection gate on this axis. The Stop slot is a SEPARATE block from the Claude PreToolUse
+# one -- its own file (flaky-kit-delivery-gate.sh), its own event (Stop, not PreToolUse) -- merged
+# into the overall verdict by the same worse-wins rule, so _wiring_one never has to arbitrate
+# between two different gate files inside one call.
+#
+# The record's THIRD field decides whether the Stop slot is required at all, exactly as the first
+# two fields decide Claude/Cursor. An install predating the delivery gate (a bare "claude" record,
+# no `stop` token) must require exactly what it required before -- that is the whole no-brick
+# guarantee this task exists to prove holds (the task report's decisive mutation forces the third
+# field to 1 unconditionally and reddens the very next assertion).
+R="$(mktemp -d)"; W="$(wire_fixture "$R")"
+printf 'claude\n' > "$W/core/.harness"          # a record predating the delivery gate
+[ "$(integrity_wiring "$W" degraded)" = wired ] && ok || bad "an install without the stop capability must not require the Stop slot"
+printf 'claude stop\n' > "$W/core/.harness"     # this install shipped it, and it is not registered
+# CORRECTED FROM THE BRIEF: the brief's own Step-1 snippet expected `partial` here. `_wiring_one`'s
+# own contract (unchanged by this task, verified directly before writing this assertion) returns
+# `unregistered` whenever NO slot is registered -- that arm fires on `got -eq 0` alone, before want
+# is ever consulted -- and `partial` is reachable only for 0 < got < want, which no want=1 axis can
+# ever produce (there is no integer strictly between 0 and 1). Running the brief's own Step-3 code
+# against this exact fixture (got=0, want=1) computes `unregistered`, not `partial`. `unregistered`
+# is also the established meaning, one axis over, for "settings present, no registration for the
+# kit's gate at all" (K3, above): a totally-missing Stop registration is that same fact about a
+# different gate, not a new one `partial` was ever meant to describe.
+[ "$(integrity_wiring "$W" degraded)" = unregistered ] \
+  && ok || bad "a stop-capable install with no Stop registration must read unregistered, not partial -- partial is unreachable for a single-slot axis (got=0 always takes _wiring_one's unregistered arm before want is consulted)"
+rm -rf "$R"
+
+# --- registering it satisfies the axis ------------------------------------------------------------
+R="$(mktemp -d)"; W="$(wire_fixture "$R")"; P="$(dirname "$(dirname "$(dirname "$W")")")"
+printf 'claude stop\n' > "$W/core/.harness"
+mkdir -p "$P/.claude/hooks"; printf '#!/bin/sh\nexit 0\n' > "$P/.claude/hooks/flaky-kit-delivery-gate.sh"
+chmod +x "$P/.claude/hooks/flaky-kit-delivery-gate.sh"
+t="$(mktemp)"; jq '.hooks.Stop = [{hooks:[{type:"command",command:"\"$CLAUDE_PROJECT_DIR/.claude/hooks/flaky-kit-delivery-gate.sh\""}]}]' \
+  "$P/.claude/settings.json" > "$t" && mv "$t" "$P/.claude/settings.json"
+[ "$(integrity_wiring "$W" degraded)" = wired ] && ok || bad "a registered, present delivery gate must read wired"
+# and a registration whose file is gone is dangling, exactly as for the sibling gate
+rm -f "$P/.claude/hooks/flaky-kit-delivery-gate.sh"
+[ "$(integrity_wiring "$W" degraded)" = dangling ] && ok || bad "a Stop registration pointing at a missing file must read dangling"
+rm -rf "$R"
+
+# --- the repair writes the Stop slot below root ownership, and nothing at a refusing tier -------
+R="$(mktemp -d)"; W="$(wire_fixture "$R")"; P="$(dirname "$(dirname "$(dirname "$W")")")"
+printf 'claude stop\n' > "$W/core/.harness"
+wiring_repair "$W" degraded partial >/dev/null 2>&1
+[ "$(jq -r '[.hooks.Stop[]?|(.hooks//[])[]?|.command|select(test("flaky-kit-delivery-gate"))]|length' "$P/.claude/settings.json")" = 1 ] \
+  && ok || bad "below root ownership the repair must register the Stop slot"
+rm -rf "$R"
+for T in hardened stale mismatch; do
+  R="$(mktemp -d)"; W="$(wire_fixture "$R")"; P="$(dirname "$(dirname "$(dirname "$W")")")"
+  printf 'claude stop\n' > "$W/core/.harness"
+  cp "$P/.claude/settings.json" "$R/before.json"
+  wiring_repair "$W" "$T" partial >/dev/null 2>&1
+  cmp -s "$R/before.json" "$P/.claude/settings.json" && ok || bad "$T: a refusing tier must not write the Stop slot either"
+  rm -rf "$R"
+done
 
 echo "integrity-test: $pass passed, $fail failed"
 [ "$fail" -eq 0 ]
