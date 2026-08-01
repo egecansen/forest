@@ -41,16 +41,19 @@ PROJ="$(cd "$PROJ" && pwd)"
 KIT=".claude/skills/hektor-flaky-triage"
 SKILL_DIR="$PROJ/$KIT"
 
-# Set by the Claude block's Stop merge when it does not land, read by the closing block at the very
-# bottom. Declared HERE, at top level, rather than inside that block: `set -u` is on, and the closing
-# block runs for every --harness value including the ones that never enter the Claude arm.
+# Set by the Claude block's Stop merge when it does not land, and by the Cursor block's hooks.json
+# merge below it, read by the closing block at the very bottom. Declared HERE, at top level, rather
+# than inside either block: `set -u` is on, and the closing block runs for every --harness value
+# including the ones that never enter the Claude or Cursor arm.
 #
 # The install RUNS TO COMPLETION either way and only the ending changes. A partial install that
 # aborts in the middle is worse than one that finishes and reports: the engine, the skill, the
-# self-protection gate and the other harnesses' registrations are all independent of this one merge,
+# self-protection gate(s) and the other harnesses' registrations are all independent of either merge,
 # and leaving them half-written would turn one repairable failure into several.
 stop_failed=0
 stop_failed_file=""
+cursor_failed=0
+cursor_failed_file=""
 
 # --- engine + skill: the canonical home for EVERY harness (the gate's surface + the AGENTS.md/rule
 #     pointers all reference this path; the engine runs from here in any terminal). Always installed. ---
@@ -279,14 +282,37 @@ if [ "$do_cursor" = 1 ]; then
   vendor "$HERE/adapters/_lib/audit.sh" "$SKILL_DIR/core/gate-src/cursor/lib/audit.sh"
   H="$PROJ/.cursor/hooks.json"; [ -f "$H" ] || echo '{"version":1,"hooks":{}}' > "$H"
   C=".cursor/hooks/flaky-kit-self-protection-gate.sh"
-  t="$(mktemp)"; jq --arg c "$C" '
+  # `[ -s "$t" ]` and the `rm -f` are the same two guards the Claude Stop merge below carries, for the
+  # same reason. Without them this merge printed "Cursor wired" unconditionally even when the jq
+  # errored out — measured against a project whose `.hooks.beforeShellExecution` is a non-array (valid
+  # JSON, so nothing upstream rejects it): jq errors, `mv` never runs, and the installer claimed the
+  # registration landed over a hooks.json with nothing written. `core/.harness` records cursor as a
+  # required harness regardless of this outcome, deliberately (the same reasoning as the Stop
+  # capability below: a record that quietly forgot cursor would turn a loud, repairable failure into a
+  # silent downgrade), so the wiring axis reads `unregistered` for the Cursor self-protection gate from
+  # then on, and refuses every entrypoint with 76 once the tree is hardened.
+  cursor_ok=0
+  t="$(mktemp)"
+  if jq --arg c "$C" '
     .hooks //= {} |
     .hooks.beforeShellExecution //= [] |
     (if any(.hooks.beforeShellExecution[]?; .command==$c) then . else .hooks.beforeShellExecution += [{command:$c, timeout:10}] end) |
     .hooks.preToolUse //= [] |
     (if any(.hooks.preToolUse[]?; .command==$c) then . else .hooks.preToolUse += [{command:$c, matcher:"Write|Edit", timeout:10}] end)
-  ' "$H" > "$t" && mv "$t" "$H"
-  echo "install: Cursor wired (.cursor/: rule + beforeShellExecution + preToolUse Write|Edit)"
+  ' "$H" > "$t" 2>/dev/null \
+     && [ -s "$t" ] && mv "$t" "$H"; then
+    cursor_ok=1
+  else
+    rm -f "$t"
+  fi
+  if [ "$cursor_ok" = 1 ]; then
+    echo "install: Cursor wired (.cursor/: rule + beforeShellExecution + preToolUse Write|Edit)"
+  else
+    echo "install: Cursor rule + gate file copied (.cursor/), but the hooks.json registration did NOT land"
+    echo "install: WARN the Cursor self-protection gate's hooks.json registration did NOT land — $H could not be merged (most likely .hooks.beforeShellExecution or .hooks.preToolUse is present but is not an array). core/.harness records cursor as a required harness, so the wiring axis will report 'unregistered' for the Cursor self-protection gate from now on, and after 'core/lock-kit.sh lock' that refuses EVERY entrypoint with 76. Fix .cursor/hooks.json (both keys must be arrays) and re-run this installer." >&2
+    cursor_failed=1
+    cursor_failed_file="$H"
+  fi
 fi
 
 # --- Any other LLM/harness: drop an AGENTS.md pointer (Codex, Gemini, etc. read this) ---
@@ -323,24 +349,46 @@ fi
 # Everything above has already run. What differs here is what the script CLAIMS and what it hands
 # back to whoever called it: the pack-level installer branches on this rc and warns by kit name, and
 # `hektor-triage-kit install` execs this script, so the rc is the CLI's own.
-if [ "$stop_failed" = 1 ]; then
-  cat >&2 <<EOF
-
-install: INCOMPLETE ($HARNESS) in $PROJ
-The engine, the skill, the self-protection gate and every other registration ARE in place. The
-delivery gate's Stop registration is NOT (the WARN above says why), and it is the control that
-enforces I11 at end-of-session.
-DO NOT run '$KIT/core/lock-kit.sh lock' yet. $KIT/core/.harness records the 'stop' capability
-deliberately — dropping it would make the wiring axis stop checking the slot, which is a silent
-downgrade — so the axis reads 'unregistered' from now on. That is a warning while the tree is yours
-and rc 76 from all thirteen entrypoints once it is root-owned, where the remedy it prints (re-run
-this installer) is itself refused with 75. Locking now turns one repairable failure into
-unlock (password) -> fix -> reinstall -> relock.
-repair, in this order:
-  1) fix .hooks.Stop in $stop_failed_file  (it must be an ARRAY)
-  2) re-run this installer against this project
-  3) only then  $KIT/core/lock-kit.sh lock
-EOF
+#
+# ONE non-zero ending for ANY registration merge that failed — `stop_failed` and `cursor_failed` both
+# land here rather than each growing its own exit code or its own message, so a caller watching for
+# "INCOMPLETE" / rc 74 sees exactly one contract regardless of which merge broke. The body names only
+# the merge(s) that actually failed and claims nothing stronger: an earlier version of this paragraph,
+# written for the Stop merge alone, said "the self-protection gate and every other registration ARE in
+# place" — true when Stop was the only merge that could fail, and false the moment the Cursor merge
+# gained the same failure mode, since a Cursor registration failure means the self-protection gate
+# ITSELF (its Cursor registration, specifically) is one of the things not in place.
+if [ "$stop_failed" = 1 ] || [ "$cursor_failed" = 1 ]; then
+  {
+    echo ""
+    echo "install: INCOMPLETE ($HARNESS) in $PROJ"
+    echo "The engine, the skill, and every registration that DID land are in place. The following did"
+    echo "NOT (the WARN above says why):"
+    [ "$stop_failed" = 1 ] \
+      && echo "  - the delivery gate's Stop registration — the control that enforces I11 at end-of-session"
+    [ "$cursor_failed" = 1 ] \
+      && echo "  - the Cursor self-protection gate's hooks.json registration"
+    echo "DO NOT run '$KIT/core/lock-kit.sh lock' yet. $KIT/core/.harness records every capability this"
+    echo "install was asked for regardless of merge outcome, deliberately — dropping one would make the"
+    echo "wiring axis stop checking that slot, which is a silent downgrade — so the axis reads"
+    echo "'unregistered' for the affected slot(s) from now on. That is a warning while the tree is yours"
+    echo "and rc 76 from all thirteen entrypoints once it is root-owned, where the remedy it prints"
+    echo "(re-run this installer) is itself refused with 75. Locking now turns one repairable failure"
+    echo "into unlock (password) -> fix -> reinstall -> relock."
+    echo "repair, in this order:"
+    n=1
+    if [ "$stop_failed" = 1 ]; then
+      echo "  $n) fix .hooks.Stop in $stop_failed_file  (it must be an ARRAY)"
+      n=$((n+1))
+    fi
+    if [ "$cursor_failed" = 1 ]; then
+      echo "  $n) fix .hooks.beforeShellExecution and .hooks.preToolUse in $cursor_failed_file  (both must be ARRAYs)"
+      n=$((n+1))
+    fi
+    echo "  $n) re-run this installer against this project"
+    n=$((n+1))
+    echo "  $n) only then  $KIT/core/lock-kit.sh lock"
+  } >&2
   exit 74
 fi
 

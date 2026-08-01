@@ -206,6 +206,76 @@ esac
 case "$OUTH" in *"install: done"*) ok ;; *) bad "CONTROL: a healthy install must still print 'install: done'" ;; esac
 case "$OUTH" in *"INCOMPLETE"*) bad "CONTROL: a healthy install must not call itself incomplete" ;; *) ok ;; esac
 
+# --- final minors, Fix 2: the Cursor merge had the exact defect Minor 3 / residual R3 fixed for the
+# Stop merge above — no `[ -s "$t" ]` guard, no `rm -f "$t"` on failure, and an unconditional "install:
+# Cursor wired". Same fixture shape as the Stop-merge block above, mirrored onto `.cursor/hooks.json`:
+# `.hooks.beforeShellExecution` set to a non-array (valid JSON, so nothing upstream rejects it) makes
+# the `+=` inside the jq filter error, `mv` never runs, and the pre-fix installer printed "Cursor
+# wired (… beforeShellExecution + preToolUse …)" over a hooks.json with nothing registered — while
+# `core/.harness` recorded cursor as a required harness, so the wiring axis reads `unregistered` for
+# the Cursor self-protection gate at the very next entrypoint, rc 76 at the hardened and stale tiers.
+P5="$TMP/proj-cursorfail"; mkdir -p "$P5/.cursor"; git -C "$P5" init -q
+printf '{"version":1,"hooks":{"beforeShellExecution":"not-an-array"}}\n' > "$P5/.cursor/hooks.json"
+H5="$P5/.cursor/hooks.json"
+cp "$H5" "$TMP/before-cursor.json"
+TD2="$TMP/tmpdir2"; mkdir -p "$TD2"
+OUT5="$(MKTEMP_DIR="$TD2" PATH="$SHIM:$PATH" "$KITSRC/install.sh" --harness cursor --project "$P5" 2>&1)"; RC5=$?
+case "$OUT5" in *"beforeShellExecution + preToolUse"*) bad "the installer must not claim the Cursor registration landed when the merge failed — got: $OUT5" ;; *) ok ;; esac
+case "$OUT5" in *"hooks.json registration did NOT land"*) ok ;; *) bad "a failed Cursor merge must say so — got: $OUT5" ;; esac
+cmp -s "$TMP/before-cursor.json" "$H5" && ok || bad "a failed Cursor merge must leave hooks.json exactly as it found it"
+[ "$(jq -r '.hooks.beforeShellExecution' "$H5")" = "not-an-array" ] \
+  && ok || bad "CONTROL: .hooks.beforeShellExecution must still be the non-array this fixture set, or the merge did not actually fail"
+[ "$(find "$TD2" -type f 2>/dev/null | wc -l | tr -d ' ')" = 0 ] \
+  && ok || bad "a failed Cursor merge must remove its temp file — $(find "$TD2" -type f 2>/dev/null | wc -l | tr -d ' ') left behind"
+# The record still says `cursor`, deliberately, for the same reason the Stop capability survives its
+# own merge's failure above: it states what the install was ASKED for, and dropping it would turn a
+# loud, repairable failure into a silent downgrade — the wiring axis would simply stop checking the
+# Cursor self-protection slot.
+[ "$(cat "$P5/.claude/skills/hektor-flaky-triage/core/.harness")" = "cursor" ] \
+  && ok || bad "a failed Cursor merge must not quietly drop the harness the install was asked for"
+[ "$RC5" = 74 ] && ok || bad "a failed Cursor merge must exit non-zero (74), the same contract the Stop merge failure uses — got rc $RC5"
+case "$OUT5" in *"install: done"*) bad "a failed Cursor merge must not print 'install: done' as if the install were clean — got: $OUT5" ;; *) ok ;; esac
+case "$OUT5" in *"HARDEN (do not skip"*) bad "a failed Cursor merge must not print the HARDEN step — got: $OUT5" ;; *) ok ;; esac
+case "$OUT5" in *"INCOMPLETE"*) ok ;; *) bad "a failed Cursor merge must SAY the install is incomplete — got: $OUT5" ;; esac
+case "$OUT5" in *"DO NOT run"*) ok ;; *) bad "the incomplete ending must tell the reader not to lock yet — got: $OUT5" ;; esac
+# The closing paragraph must not overclaim: it used to say "every other registration ARE in place",
+# which is exactly the assertion the branch's own INCOMPLETE ending would be making falsely here, since
+# the Cursor merge — not the Stop merge — is the one that failed.
+case "$OUT5" in *"every other registration ARE in place"*) bad "the INCOMPLETE ending must not claim every OTHER registration is in place when the Cursor merge itself is the one that failed — got: $OUT5" ;; *) ok ;; esac
+# ...and the failed merge must take nothing else down with it: the gate FILE and rule are a different
+# control from the hooks.json REGISTRATION, mirroring the Stop-failure assertions above.
+[ -x "$P5/.cursor/hooks/flaky-kit-self-protection-gate.sh" ] \
+  && ok || bad "the failing Cursor path must still install the self-protection gate file — only its registration failed"
+[ -f "$P5/.cursor/rules/hektor-flaky-triage.mdc" ] \
+  && ok || bad "the failing Cursor path must still install the rule file"
+[ -f "$P5/.claude/skills/hektor-flaky-triage/core/gate-src/cursor/flaky-kit-self-protection-gate.sh" ] \
+  && ok || bad "the failing Cursor path must still vendor the cursor restore source"
+
+# THE INSTALL MUST RUN TO COMPLETION here too — the AGENTS.md block is the only work scheduled AFTER
+# the Cursor merge, so a pre-broken `.cursor/hooks.json` under `--harness all` is what tells "finished,
+# then exited 74" from "bailed at the merge", mirroring the Stop-side P4 fixture above but with the
+# failure on the OTHER merge, and the Claude side left healthy to prove the two merges are independent.
+P6="$TMP/proj-cursorfail-all"; mkdir -p "$P6/.cursor"; git -C "$P6" init -q
+printf '{"version":1,"hooks":{"beforeShellExecution":"not-an-array"}}\n' > "$P6/.cursor/hooks.json"
+OUT6="$("$KITSRC/install.sh" --harness all --project "$P6" 2>&1)"; RC6=$?
+[ "$RC6" = 74 ] && ok || bad "CONTROL: the --harness all fixture must also hit the failing Cursor merge — got rc $RC6"
+[ "$(jq -r '[.hooks.Stop[]?|(.hooks//[])[]?|.command|select(test("flaky-kit-delivery-gate"))]|length' "$P6/.claude/settings.json")" = 1 ] \
+  && ok || bad "the Claude Stop registration is written BEFORE the failing Cursor merge and must still land — the two merges are independent"
+grep -qF 'hektor-flaky-triage:begin' "$P6/AGENTS.md" 2>/dev/null \
+  && ok || bad "the AGENTS.md pointer is the LAST thing the installer writes and must still land before it exits 74, even when the Cursor merge is what failed"
+
+# ...and the control that keeps the above from passing against an installer that never claims Cursor
+# at all, or that exits 74 on every install: the healthy Cursor path still says it, and still exits 0.
+P7="$TMP/proj-cursor-healthy"; mkdir -p "$P7"; git -C "$P7" init -q
+OUT7="$("$KITSRC/install.sh" --harness cursor --project "$P7" 2>&1)"; RC7=$?
+case "$OUT7" in
+  *"Cursor wired (.cursor/: rule + beforeShellExecution + preToolUse Write|Edit)"*) ok ;;
+  *) bad "CONTROL: a healthy Cursor install must still report the registration — got: $OUT7" ;;
+esac
+[ "$RC7" = 0 ] && ok || bad "CONTROL: a healthy Cursor install must still exit 0 — got rc $RC7"
+case "$OUT7" in *"install: done"*) ok ;; *) bad "CONTROL: a healthy Cursor install must still print 'install: done'" ;; esac
+case "$OUT7" in *"INCOMPLETE"*) bad "CONTROL: a healthy Cursor install must not call itself incomplete" ;; *) ok ;; esac
+
 # --- carried forward from the gate's own task: the audit-lib fallback is a SILENT no-op ------------
 # (`hektor_audit() { :; }`) whenever lib/audit.sh is not beside the installed gate, which would turn
 # every one of the delivery gate's "fail open and SAY so" paths quiet. install.sh vendors the lib
