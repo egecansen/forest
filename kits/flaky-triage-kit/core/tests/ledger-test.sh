@@ -54,6 +54,12 @@ expect 0  "validate --final clean"   -- "$LEDGER" validate "$F" --final
 "$LEDGER" cluster-state  "$F" c9 selected >/dev/null 2>&1
 expect 67 "--final fails on selected"  -- "$LEDGER" validate "$F" --final
 expect 0  "plain validate still clean" -- "$LEDGER" validate "$F"
+# The ARGUMENT ORDER is load-bearing and was documented backwards in kernel.md's I11 row for two
+# rounds: the file is the subcommand's first positional and `--final` follows it. Reversed, the flag
+# is taken as the file, so the command exits 65 "not a ledger" — a MALFORMED-FILE verdict, not I11's
+# own 67 — and a reader following the row would have read a broken invocation as a clean session.
+# Pinned here so the row and the tool cannot drift apart again.
+expect 65 "--final BEFORE the file is not the accepted spelling" -- "$LEDGER" validate --final "$F"
 
 # --- v1 tolerance
 jq -n '{run:{}, clusters:[{id:"old"}], events:[]}' > "$TMP/v1.json"
