@@ -27,14 +27,20 @@
 # `$HERE/..`, but that is a property of the callers, not of this function, and the kind of property
 # that decays silently the moment a fourteenth caller does not.
 #
-# The shape below is `if`/`fi` + `command -v`, NOT the one-line `[ -r X ] && . X || fallback` that
+# The shape below is `if`/`fi` + `declare -F`, NOT the one-line `[ -r X ] && . X || fallback` that
 # stood here. In that form the `||` branch fires on the STATUS OF THE SOURCE, so a `_wiring_repair.sh`
 # whose last statement happened to return non-zero would load fine and then be immediately REDEFINED
 # as a no-op — the whole repair silently disabled, nothing printed, nothing failed. Proven by
 # appending a single `false` to a fixture's copy: the registration was not repaired and the run said
 # nothing. It worked only because the file happens to end on a function definition, which is a
-# property of that file today, not of this line. `command -v` asks the question the fallback actually
-# means — "is `wiring_repair` defined?" — instead of a proxy for it.
+# property of that file today, not of this line. `declare -F` asks the question the fallback actually
+# means — "is `wiring_repair` defined as a FUNCTION?" — instead of a proxy for it. `command -v` stood
+# here first and was itself a proxy: it resolves PATH executables as readily as shell functions, so a
+# `wiring_repair` binary early on PATH (with `_wiring_repair.sh` absent) satisfied the check, the
+# no-op fallback never installed, and the integrity path went on to exec that binary with
+# `<kit_root> <tier> <wiring>` — a proxy standing in for a property, the fifth time that shape has
+# caused a defect in this kit (the four are catalogued at `_wiring_slots` below). `declare -F` is
+# bash 3.2-safe and answers only "is this a function", which is the question being asked.
 #
 # `|| :` on the source keeps the "never wedge a caller" contract: thirteen entrypoints source this
 # file, some under `set -e`, where a non-zero `.` inside an `if` body would abort the caller outright.
@@ -48,7 +54,7 @@ if [ -r "$_INTEGRITY_HERE/_wiring_repair.sh" ]; then
 elif [ -e "$_INTEGRITY_HERE/_wiring_repair.sh" ]; then
   echo "integrity: _wiring_repair.sh is present but unreadable — self-repair is disabled for this run." >&2
 fi
-command -v wiring_repair >/dev/null 2>&1 || wiring_repair() { return 0; }
+declare -F wiring_repair >/dev/null 2>&1 || wiring_repair() { return 0; }
 
 # integrity_owner_uid <path> -> numeric uid, or empty. BSD and GNU stat take different flags.
 integrity_owner_uid() {
@@ -433,11 +439,15 @@ integrity_guard() {
   local kit="${1:-}" tier wiring
   tier="$(integrity_tier "$(integrity_owner_uid "$kit/core")" "$(integrity_state "$kit")")"
   wiring="$(integrity_wiring "$kit" "$tier")"
-  # Repair first, report the PRE-repair verdict. Below root ownership `wiring_repair` may write the
-  # registration and the gate file; where the tree is root-owned it writes NOTHING — a registration
-  # written there would read as `wired` on the very next entrypoint (this recomputes from disk every
-  # call), so the refusal would hold for exactly one call and then silently stop. The refusal here
-  # does not depend on anything the repair did; it depends on nothing having changed.
+  # Repair first, report the PRE-repair verdict. `wiring_repair` may write the registration and the
+  # gate file; at every tier that refuses — `hardened`, `stale`, `mismatch` — it writes NOTHING: a
+  # registration written there would read as `wired` on the very next entrypoint (this recomputes
+  # from disk every call), so the refusal would hold for exactly one call and then silently stop.
+  # The refusal here does not depend on anything the repair did; it depends on nothing having
+  # changed. (The rule is keyed on the tier refusing, not on root ownership alone: `mismatch` is the
+  # one refusing tier whose whole meaning is a recorded root ownership the tree does NOT have — keying
+  # this on ownership was tried once, missed `mismatch`, and is the mistake `core/README.md`'s
+  # `_integrity` row repeated until this same correction.)
   wiring_repair "$kit" "$tier" "$wiring"
   integrity_report "$tier" "$wiring"
 }

@@ -1466,5 +1466,32 @@ RC2="$(integrity_guard "$K" >/dev/null 2>&1; echo $?)"
   || bad "mismatch: must ALSO refuse (76) on the SECOND consecutive call — nothing on disk changed, so nothing may have converged (got $RC2)"
 rm -rf "$R"
 
+# --- the repair fallback keys on a FUNCTION, not on anything PATH can answer -------------------
+# `command -v` resolves executables too, so a `wiring_repair` on PATH satisfied it and the no-op
+# fallback never fired — the integrity path then exec'd that binary. `declare -F` asks the property.
+#
+# ADAPTED FROM THE BRIEF: the snippet as written sources "$K/core/_integrity.sh" without ever
+# putting a copy of that file under the fixture's own core/ — wire_fixture (above) only creates
+# $k/core as an empty directory, it never populates it with this repo's *.sh files. Verified
+# directly: run unmodified, the inner `bash -c` prints "No such file or directory" for the source
+# and "integrity_guard: command not found" for the call, so OUT never contains PATH-BINARY-RAN and
+# the case's `*) ok` arm fires — passing, but for a reason that has nothing to do with the fix this
+# task makes. The DRIVER fixtures earlier in this file (search "cp \"$CORE/_integrity.sh\"") already
+# establish the right shape for a fresh-process probe: copy this repo's own _integrity.sh into the
+# fixture's core/ first, so the inner bash -c sources a real file whose ${BASH_SOURCE[0]} resolves
+# inside the fixture. Added below; nothing else about the brief's snippet changed.
+R="$(mktemp -d)"; K="$(wire_fixture "$R")"
+cp "$CORE/_integrity.sh" "$K/core/"                     # _wiring_repair.sh deliberately NOT copied
+rm -f "$K/core/_wiring_repair.sh"
+mkdir -p "$R/fakebin"
+printf '#!/bin/sh\necho PATH-BINARY-RAN >&2\nexit 0\n' > "$R/fakebin/wiring_repair"
+chmod +x "$R/fakebin/wiring_repair"
+OUT="$(PATH="$R/fakebin:$PATH" bash -c ". \"$K/core/_integrity.sh\"; integrity_guard \"$K\"" 2>&1 >/dev/null)"
+case "$OUT" in
+  *PATH-BINARY-RAN*) bad "a wiring_repair on PATH must not satisfy the repair-unit check" ;;
+  *) ok ;;
+esac
+rm -rf "$R"
+
 echo "integrity-test: $pass passed, $fail failed"
 [ "$fail" -eq 0 ]
