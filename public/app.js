@@ -562,6 +562,52 @@ async function startSession() {
   btn.disabled = true;
   const r = await api('/api/launch', { path, selections, mode: state.mode });
   btn.disabled = false;
+  if (r && r.blocked === 'missing-hooks') {
+    const names = r.missing
+      .map((h) => (h.command.match(/([^/"']+\.sh)/) || [, h.command])[1])
+      .filter((v, i, a) => a.indexOf(v) === i);
+    const list = names.map((n) => `    ${n}`).join('\n');
+    // Step 1 — the abort. Cancel (and Escape, which maps to it) must NOT start
+    // a session: dismissing a dialog should never be what launches an ungated
+    // agent. Launching is only ever reached by an explicit OK.
+    const proceed = confirm(
+      `Launch Claude with ${r.missing.length} hook script(s) missing?\n\n${list}\n\n`
+      + 'The gates are not running.\n\n'
+      + 'OK — continue.\n'
+      + 'Cancel — do not launch.',
+    );
+    if (!proceed) return;
+
+    // Step 2 — how to continue. Forest can only re-provision from a recorded
+    // set of selections; without one there is nothing to repair from, so the
+    // only remaining choice is to launch ungated or back out.
+    if (!r.repairable) {
+      if (!confirm(
+        'Forest cannot repair this worktree: it has no provision record, so there '
+        + 'is nothing to re-provision from. Pick packs in the launcher to provision '
+        + 'it, or fix the wiring by hand.\n\n'
+        + 'OK — launch anyway, with the gates off.\n'
+        + 'Cancel — do not launch.',
+      )) return;
+    }
+    const repair = r.repairable && confirm(
+      'Repair before launching?\n\n'
+      + 'OK — re-run the kit\'s installer, then launch.\n'
+      + 'Cancel — launch without repairing.',
+    );
+    if (repair) {
+      const rep = await api('/api/worktree/repair', { path, mode: state.mode });
+      if (!rep || rep.error) { toast(`Repair failed: ${(rep && rep.error) || 'server unreachable'}`); return; }
+      toast(`Repaired · ${rep.scope.active} hooks active, ${rep.scope.missing} missing`);
+    }
+    // selections: [] on purpose — provisioning already ran on the first call,
+    // and re-sending them would provision twice.
+    const forced = await api('/api/launch', { path, selections: [], mode: state.mode, force: true });
+    if (!forced || !forced.ok) { toast(`Launch failed: ${(forced && forced.error) || 'server unreachable'}`); return; }
+    closePicker();
+    toast(forced.action === 'focused' ? 'Claude already running — Terminal brought to front' : 'Launching Claude…');
+    return;
+  }
   if (!r || !r.ok) { toast(`Launch failed: ${(r && r.error) || 'server unreachable'}`); return; }
   closePicker();
   const prov = r.provisioned;
