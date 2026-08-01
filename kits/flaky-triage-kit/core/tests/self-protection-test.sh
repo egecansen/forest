@@ -58,12 +58,17 @@ cp "$CORE/shell-guard.py" "$SKILL/core/shell-guard.py"
 cp "$CORE/lock-kit.sh"    "$SKILL/core/lock-kit.sh"
 cp "$CORE/_integrity.sh"  "$SKILL/core/_integrity.sh"   # lock-kit.sh sources this; must ship alongside it
 cp "$KITSRC/adapters/claude/flaky-kit-self-protection-gate.sh" "$PROJ/.claude/hooks/flaky-kit-self-protection-gate.sh"
+# install.sh puts the delivery gate in this same directory, so the fixture does too — the surface
+# assertions below are about a path, but a fixture that omits the file would be describing a layout
+# no install produces, and the audit assertion at the end of this file drives the real thing.
+cp "$KITSRC/adapters/claude/flaky-kit-delivery-gate.sh"        "$PROJ/.claude/hooks/flaky-kit-delivery-gate.sh"
 cp "$KITSRC/adapters/_lib/audit.sh"                             "$PROJ/.claude/hooks/lib/audit.sh"
 cp "$KITSRC/adapters/cursor/flaky-kit-self-protection-gate.sh"  "$PROJ/.cursor/hooks/flaky-kit-self-protection-gate.sh"
 cp "$KITSRC/adapters/cursor/lib/cursor-compat.sh"               "$PROJ/.cursor/hooks/lib/cursor-compat.sh"
 cp "$KITSRC/adapters/_lib/audit.sh"                             "$PROJ/.cursor/hooks/lib/audit.sh"
 chmod +x "$SKILL/core/shell-guard.py" "$SKILL/core/lock-kit.sh" \
-         "$PROJ/.claude/hooks/flaky-kit-self-protection-gate.sh" "$PROJ/.cursor/hooks/flaky-kit-self-protection-gate.sh"
+         "$PROJ/.claude/hooks/flaky-kit-self-protection-gate.sh" "$PROJ/.claude/hooks/flaky-kit-delivery-gate.sh" \
+         "$PROJ/.cursor/hooks/flaky-kit-self-protection-gate.sh"
 printf '{"kit":"config"}\n'      > "$SKILL/core/config.json"
 printf '# unrelated cursor rule\n' > "$PROJ/.cursor/rules/hektor-flaky-triage.mdc"
 printf '{}\n'                    > "$PROJ/.claude/settings.json"
@@ -209,6 +214,40 @@ proj_bash_deny "rm -f $PROJ/.claude/hooks/.flaky-kit-expect"
 assert_claude_edit_deny "$PROJ/.claude/hooks/.flaky-kit-expect" "the out-of-tree lock-tier record"
 assert_cursor_edit_deny "$PROJ/.claude/hooks/.flaky-kit-expect" "the out-of-tree lock-tier record (parity)"
 
+echo "== THE DELIVERY GATE (Stop hook) is surface too. It shipped onto core/lock-kit.sh's" >&2
+echo "   harden_targets and onto NOTHING else — and chown-list membership is not protection: below" >&2
+echo "   the hardened tier it buys nothing, and the wiring axis that would notice the file gone only" >&2
+echo "   runs when a kit ENTRYPOINT next runs, which a session whose whole goal is to stop never" >&2
+echo "   does. Measured on a real install fixture before this block existed, 'rm -f" >&2
+echo "   .claude/hooks/flaky-kit-delivery-gate.sh' was an ALLOW with no audit line while the same" >&2
+echo "   command against the sibling gate DENIED. It also leaves wiring=dangling, which is rc 76 from" >&2
+echo "   all thirteen entrypoints at the hardened tier with a password-priced remedy. ==" >&2
+DG="$PROJ/.claude/hooks/flaky-kit-delivery-gate.sh"
+assert_claude_edit_deny "$DG" "the delivery gate protects itself"
+assert_cursor_edit_deny "$DG" "the delivery gate is surface in the other harness too"
+proj_bash_deny "rm -f $DG"
+proj_bash_deny "sed -i '' $DG"
+proj_bash_deny "mv $DG /tmp/delivery-aside"
+# The DIRECTORY operand already covered it, but only as a side effect of taking everything else with
+# it — assert the file on its own, or a later narrowing of the directory arm silently reopens this.
+# And the same precision the sibling arms keep: a file of the same NAME somewhere else is not surface.
+proj_bash_allow "rm -f $PROJ/flaky-kit-delivery-gate.sh"
+# shell-guard.py's SURF directly, not through a gate: both gates dispatch to it whenever python3 is
+# present, so an assertion through a gate exercises whichever engine it chose, never this pattern in
+# isolation. Same reasoning as the settings-file block further down.
+printf '%s' "rm -f $DG" | HEKTOR_FK_CWD="$PROJ" python3 "$SKILL/core/shell-guard.py" >/dev/null 2>&1 \
+  && ok || bad "shell-guard.py SURF must directly DENY a Bash mutation of the delivery gate: rm -f $DG"
+printf '%s' "cat $DG" | HEKTOR_FK_CWD="$PROJ" python3 "$SKILL/core/shell-guard.py" >/dev/null 2>&1 \
+  && bad "shell-guard.py SURF must directly ALLOW a read of the delivery gate: cat $DG" || ok
+# ...and the bash-ERE fallback, which decides when python3 is unavailable. Extracted from the gate
+# rather than re-spelled here, so this cannot pass against a pattern the gate does not carry.
+SURF_RE_DG="$(sed -n "s/^SURF_RE='\(.*\)'\$/\1/p" "$CLAUDE_GATE")"
+printf '%s' "rm -f $DG" | grep -qE "$SURF_RE_DG" \
+  && ok || bad "the gates' bash SURF_RE fallback must also class the delivery gate as surface"
+# Cursor has no stop event, so the delivery gate never lands under .cursor/hooks/ — a pattern for a
+# file that cannot exist is a claim nothing can check, and this is the control that says so out loud.
+proj_bash_allow "rm -f $PROJ/.cursor/hooks/flaky-kit-delivery-gate.sh"
+
 echo "== Interpreter inline programs: the branch still bites on an absolute path, and a benign one-liner" >&2
 echo "   run from INSIDE the kit tree is not flagged for its identifiers ==" >&2
 # Widening the surface to the kit DIRECTORY made every bare identifier inside `-c`/`-e` code resolve to a
@@ -308,6 +347,66 @@ assert_claude_edit_str_allow "$SJ" '"hooks"' '"hooks"' \
   "a no-op Edit that preserves the registration must be allowed"
 assert_cursor_edit_str_allow "$SJ" '"hooks"' '"hooks"' \
   "a no-op Edit that preserves the registration must be allowed"
+
+echo "== The DELIVERY gate's Stop registration is a slot of its own. This branch decides by OUTCOME," >&2
+echo "   and its outcome test used to read .hooks.PreToolUse and nothing else — so a Write applying" >&2
+echo "   del(.hooks.Stop) with the PreToolUse arm left intact was a verified ALLOW on a real install" >&2
+echo "   fixture: every key the check read was untouched, and it was blind to the one key the write" >&2
+echo "   removed. Unregistering the Stop hook is the cheapest way to stop a session the Stop hook has" >&2
+echo "   just refused to let stop. ==" >&2
+DGC='"$CLAUDE_PROJECT_DIR/.claude/hooks/flaky-kit-delivery-gate.sh"'
+REGS="$(printf '%s' "$REG" | jq -c --arg d "$DGC" '.hooks.Stop = [{hooks:[{type:"command", command:$d, timeout:20}]}]')"
+printf '%s\n' "$REGS" > "$SJ"
+# The reviewer's row, as an assertion: PreToolUse intact, Stop dropped -> DENY.
+assert_claude_write_deny "$SJ" "$(printf '%s' "$REGS" | jq -c 'del(.hooks.Stop)')" \
+  "a Write that drops the Stop registration while leaving PreToolUse intact must be denied"
+assert_cursor_write_deny "$SJ" "$(printf '%s' "$REGS" | jq -c 'del(.hooks.Stop)')" \
+  "a Write that drops the Stop registration while leaving PreToolUse intact must be denied"
+# The same loss spelled as an Edit, since that is the tool an agent reaches for first.
+assert_claude_edit_str_deny "$SJ" \
+  "\"Stop\":[{\"hooks\":[{\"type\":\"command\",\"command\":\"\\\"\$CLAUDE_PROJECT_DIR/.claude/hooks/flaky-kit-delivery-gate.sh\\\"\",\"timeout\":20}]}]" '"Stop":[]' \
+  "an Edit that empties the Stop registration must be denied"
+assert_cursor_edit_str_deny "$SJ" \
+  "\"Stop\":[{\"hooks\":[{\"type\":\"command\",\"command\":\"\\\"\$CLAUDE_PROJECT_DIR/.claude/hooks/flaky-kit-delivery-gate.sh\\\"\",\"timeout\":20}]}]" '"Stop":[]' \
+  "an Edit that empties the Stop registration must be denied"
+# ...and the over-denial control this whole branch exists to keep: a Write that keeps BOTH
+# registrations and changes something unrelated is still allowed.
+assert_claude_write_allow "$SJ" "$(printf '%s' "$REGS" | jq -c '.permissions = {"allow":["Bash(ls:*)"]}')" \
+  "a Write that keeps the Stop registration must be allowed even though it touches settings.json"
+assert_cursor_write_allow "$SJ" "$(printf '%s' "$REGS" | jq -c '.permissions = {"allow":["Bash(ls:*)"]}')" \
+  "a Write that keeps the Stop registration must be allowed even though it touches settings.json"
+# The Stop slot must be keyed on the DELIVERY gate's filename and nothing else: retargeting the Stop
+# command at the SELF-PROTECTION gate leaves a Stop entry naming a flaky-kit file, and a check that
+# asked "does some flaky-kit command still appear under Stop" would read that as a survival while the
+# I11 hook no longer runs. One predicate for both gates is how a different gate comes to satisfy a
+# slot it does not guard.
+assert_claude_write_deny "$SJ" "$(printf '%s' "$REGS" | jq -c '.hooks.Stop[0].hooks[0].command = "\"$CLAUDE_PROJECT_DIR/.claude/hooks/flaky-kit-self-protection-gate.sh\""')" \
+  "retargeting the Stop registration at the self-protection gate must be denied"
+assert_cursor_write_deny "$SJ" "$(printf '%s' "$REGS" | jq -c '.hooks.Stop[0].hooks[0].command = "\"$CLAUDE_PROJECT_DIR/.claude/hooks/flaky-kit-self-protection-gate.sh\""')" \
+  "retargeting the Stop registration at the self-protection gate must be denied"
+# ...and the mirror image, which is what keeps the two predicates genuinely separate: a document
+# whose ONLY delivery-gate mention sits under PreToolUse must not have that mention counted as
+# covering Write, Edit or Bash. Registering the delivery gate at PreToolUse and dropping the
+# self-protection gate's Bash matcher is still a loss.
+DGP="$(jq -nc --arg g '"$CLAUDE_PROJECT_DIR/.claude/hooks/flaky-kit-self-protection-gate.sh"' --arg d "$DGC" '{hooks:{PreToolUse:[
+  {matcher:"Write|Edit", hooks:[{type:"command", command:$g}]},
+  {matcher:"Bash",       hooks:[{type:"command", command:$g}]},
+  {matcher:"Bash",       hooks:[{type:"command", command:$d}]}]}}')"
+printf '%s\n' "$DGP" > "$SJ"
+assert_claude_write_deny "$SJ" "$(printf '%s' "$DGP" | jq -c '.hooks.PreToolUse |= [.[0], .[2]]')" \
+  "a delivery-gate command under PreToolUse must not count as covering Bash for the self-protection gate"
+assert_cursor_write_deny "$SJ" "$(printf '%s' "$DGP" | jq -c '.hooks.PreToolUse |= [.[0], .[2]]')" \
+  "a delivery-gate command under PreToolUse must not count as covering Bash for the self-protection gate"
+printf '%s\n' "$REG" > "$SJ"
+# NO-BRICK CONTROL, the same rule `_wiring_want` encodes for the wiring axis: an install that
+# predates the delivery gate carries no Stop registration at all, and a document with none before and
+# none after has lost nothing. `_slots_kept` denies on a LOSS only, never on "must always end
+# registered" — without this control the new arm could have been written as "a Stop slot is required"
+# and every pre-delivery-gate project would be frozen out of its own settings file.
+assert_claude_write_allow "$SJ" "$(printf '%s' "$REG" | jq -c '.permissions = {"allow":["Bash(ls:*)"]}')" \
+  "a settings file that never had a Stop registration must not start needing one"
+assert_cursor_write_allow "$SJ" "$(printf '%s' "$REG" | jq -c '.permissions = {"allow":["Bash(ls:*)"]}')" \
+  "a settings file that never had a Stop registration must not start needing one"
 
 echo "== Task 4: slot identity is the TOOLS a matcher covers, not the matcher's spelling ==" >&2
 # Keying on the string would deny a user who HARDENS their registration by widening the matcher — a
@@ -410,6 +509,16 @@ assert_claude_write_deny "$CH" "$(printf '%s' "$CREG" | jq -c '.hooks.preToolUse
   "retargeting the Cursor preToolUse matcher to an inert tool must be denied"
 assert_cursor_write_deny "$CH" "$(printf '%s' "$CREG" | jq -c '.hooks.preToolUse[0].matcher = "Task"')" \
   "retargeting the Cursor preToolUse matcher to an inert tool must be denied"
+# The Stop slot the Claude block above added to `_reg_slots` must be inert here, and that is what
+# lets the function stay BYTE-IDENTICAL across the two harnesses while naming a Claude-only control:
+# `.cursor/hooks.json` has no `Stop` key, so the arm emits nothing BEFORE the edit and nothing AFTER,
+# and `_slots_kept` denies on a LOSS only. Absent/absent must read as no change, never as a dropped
+# registration — if it did, the shared shape would have to fork and the parity assertion below would
+# be the thing that has to give.
+assert_claude_write_allow "$CH" "$(printf '%s' "$CREG" | jq -c '.hooks.afterShellExecution = []')" \
+  "a Cursor hooks.json has no Stop key at all — absent before and absent after is not a loss"
+assert_cursor_write_allow "$CH" "$(printf '%s' "$CREG" | jq -c '.hooks.afterShellExecution = []')" \
+  "a Cursor hooks.json has no Stop key at all — absent before and absent after is not a loss"
 printf '{"version":1,"hooks":{}}\n' > "$CH"   # restore the fixture's original shape
 
 echo "== Fix 2: SURF_RE stays byte-identical between the two gate scripts (parity) ==" >&2
@@ -437,13 +546,26 @@ echo "   (will the gate actually run?) must derive the SAME slots from the same 
 # so the two functions cannot be the same text), and a comment saying "kept in sync" is what the SURF
 # DRIFT test above already exists to distrust. Compare DECISIONS: for each document, the set of
 # "<event>:<tool>" keys must match exactly. Any divergence is drift between the two axes.
+#
+# The wiring side spells the same model across TWO functions — `_wiring_slots` for the
+# self-protection gate's PreToolUse/preToolUse/beforeShellExecution slots and `_wiring_slots_stop`
+# for the delivery gate's Stop slot, split so that one gate's registration can never satisfy the
+# other's slot. The gate's `_reg_slots` keeps both in one function with two predicates for the same
+# reason, so the comparison is against the UNION. Documents carrying a Stop registration are in the
+# list below precisely so that half is not compared vacuously.
 JQ="$(command -v jq)"
 eval "$(sed -n '/^_reg_slots() {/,/^}/p' "$CLAUDE_GATE")"
 . "$CORE/_integrity.sh"
 PARITY_DOC_DIR="$WORK/slot-parity"; mkdir -p "$PARITY_DOC_DIR"
 SLOT_DRIFT=0; n=0
 gate_c='"$CLAUDE_PROJECT_DIR/.claude/hooks/flaky-kit-self-protection-gate.sh"'
+dlv_c='"$CLAUDE_PROJECT_DIR/.claude/hooks/flaky-kit-delivery-gate.sh"'
 for doc in \
+  "$(jq -nc --arg c "$gate_c" --arg d "$dlv_c" '{hooks:{PreToolUse:[{matcher:"Write|Edit",hooks:[{type:"command",command:$c}]},{matcher:"Bash",hooks:[{type:"command",command:$c}]}],Stop:[{hooks:[{type:"command",command:$d}]}]}}')" \
+  "$(jq -nc --arg d "$dlv_c" '{hooks:{Stop:[{hooks:[{type:"command",command:$d}]}]}}')" \
+  "$(jq -nc --arg c "$gate_c" '{hooks:{Stop:[{hooks:[{type:"command",command:$c}]}]}}')" \
+  "$(jq -nc --arg d "$dlv_c" '{hooks:{PreToolUse:[{matcher:"Bash",hooks:[{type:"command",command:$d}]}]}}')" \
+  '{"hooks":{"Stop":[]}}' \
   "$(jq -nc --arg c "$gate_c" '{hooks:{PreToolUse:[{matcher:"Write|Edit",hooks:[{type:"command",command:$c}]},{matcher:"Bash",hooks:[{type:"command",command:$c}]}]}}')" \
   "$(jq -nc --arg c "$gate_c" '{hooks:{PreToolUse:[{matcher:"Write|Edit|MultiEdit",hooks:[{type:"command",command:$c}]},{matcher:"Bash",hooks:[{type:"command",command:$c}]}]}}')" \
   "$(jq -nc --arg c "$gate_c" '{hooks:{PreToolUse:[{matcher:"*",hooks:[{type:"command",command:$c}]}]}}')" \
@@ -457,14 +579,21 @@ for doc in \
 do
   n=$((n+1)); PD="$PARITY_DOC_DIR/doc$n.json"; printf '%s\n' "$doc" > "$PD"
   GATE_SLOTS="$(_reg_slots "$PD" | sort)"
-  WIRE_SLOTS="$(_wiring_slots "$PD" | sed 's/	.*//' | sort -u)"
+  WIRE_SLOTS="$({ _wiring_slots "$PD"; _wiring_slots_stop "$PD"; } | sed 's/	.*//' | sort -u)"
   [ "$GATE_SLOTS" = "$WIRE_SLOTS" ] || { SLOT_DRIFT=1; echo "   SLOT DRIFT on doc$n: gate=[$GATE_SLOTS] wiring=[$WIRE_SLOTS]" >&2; }
 done
-[ "$SLOT_DRIFT" -eq 0 ] && ok || bad "the gate's _reg_slots and core/_integrity.sh's _wiring_slots disagree about at least one document — the two integrity axes have drifted apart again"
+[ "$SLOT_DRIFT" -eq 0 ] && ok || bad "the gate's _reg_slots and core/_integrity.sh's _wiring_slots/_wiring_slots_stop disagree about at least one document — the two integrity axes have drifted apart again"
 # ...and the control that keeps the comparison from being vacuous: the documents above must actually
-# produce slots, or two empty sets would match for every one of them.
+# produce slots, or two empty sets would match for every one of them. doc1 carries BOTH a PreToolUse
+# and a Stop registration, so it is non-empty on `_wiring_slots` and on `_wiring_slots_stop` — the
+# Stop half needs its own control for exactly the reason the whole comparison does.
 [ -n "$(_reg_slots "$PARITY_DOC_DIR/doc1.json")" ] && [ -n "$(_wiring_slots "$PARITY_DOC_DIR/doc1.json")" ] \
-  && ok || bad "CONTROL: the slot-parity documents must produce non-empty slot sets on both axes, or the comparison above is vacuous"
+  && [ -n "$(_wiring_slots_stop "$PARITY_DOC_DIR/doc1.json")" ] \
+  && ok || bad "CONTROL: the slot-parity documents must produce non-empty slot sets on both axes, Stop included, or the comparison above is vacuous"
+# ...and that the gate's own reader emits the Stop slot at all — the parity loop compares two sets and
+# would stay green if BOTH sides went blind to Stop at once (a shared jq typo in the filename, say).
+[ "$(_reg_slots "$PARITY_DOC_DIR/doc2.json")" = 'Stop:*' ] \
+  && ok || bad "CONTROL: _reg_slots must emit Stop:* for a document whose only registration is the delivery gate at Stop"
 
 echo "== SURF DRIFT: the bash-ERE fallback and shell-guard.py's SURF must classify the same paths ==" >&2
 # There are two surface patterns in two languages, "kept in sync" by comment only — and the review that
@@ -477,6 +606,7 @@ SURF_RE_VAL="$(sed -n "s/^SURF_RE='\(.*\)'\$/\1/p" "$CLAUDE_GATE")"
 DRIFT=0
 for p in "$SKILL/core/config.json" "$SKILL/SKILL.md" "$SKILL" "$SKILL/core" \
          "$PROJ/.claude/hooks/flaky-kit-self-protection-gate.sh" "$PROJ/.claude/hooks/.flaky-kit-expect" \
+         "$PROJ/.claude/hooks/flaky-kit-delivery-gate.sh" "$PROJ/.cursor/hooks/flaky-kit-delivery-gate.sh" \
          "$PROJ/.claude/hooks/lib/audit.sh" "$PROJ/.cursor/hooks/lib/audit.sh" \
          "$PROJ/.cursor/hooks/flaky-kit-self-protection-gate.sh" \
          "$PROJ/.claude/hooks" "$PROJ/.cursor/hooks" \

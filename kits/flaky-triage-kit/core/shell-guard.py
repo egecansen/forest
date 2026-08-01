@@ -118,9 +118,21 @@ import sys, re, os
 # gates' `match_surface` (the Write/Edit matcher) is deliberately untouched by these settings paths —
 # that branch decides by OUTCOME (does the registration survive the edit), which needs the payload,
 # not a path match; see Task 4.
+#
+# THE DELIVERY GATE (`.claude/hooks/flaky-kit-delivery-gate.sh`). It shipped onto `harden_targets`
+# in core/lock-kit.sh and onto no self-protection surface at all — and chown-list membership is not
+# protection: below the hardened tier it buys nothing, and the wiring axis that would notice the file
+# missing only runs when a kit entrypoint next runs, which a session whose whole goal is to STOP
+# never does. Measured on a real `install.sh --harness claude` fixture before this alternative
+# existed, `rm -f .claude/hooks/flaky-kit-delivery-gate.sh` was an ALLOW with no audit line while the
+# same command against the sibling gate DENIED. It also leaves `wiring=dangling`, which at the
+# hardened tier is rc 76 from all thirteen entrypoints with a password-priced remedy — an
+# agent-reachable brick behind an action nothing denied. Same alternative as its sibling (same
+# directory, same rules); no `.cursor/hooks/` arm, because Cursor has no stop event and the file
+# never exists there.
 _END = r'(?=[\s"\'`;)&|]|$)'          # zero-width end-of-shell-token boundary
 _DEFAULT_SURF = (r'\.claude/skills/hektor-flaky-triage(?:/|' + _END + r')'
-                 r'|\.claude/hooks/(?:flaky-kit-self-protection-gate\.sh|\.flaky-kit-expect|lib/)'
+                 r'|\.claude/hooks/(?:flaky-kit-self-protection-gate\.sh|flaky-kit-delivery-gate\.sh|\.flaky-kit-expect|lib/)'
                  r'|\.cursor/hooks/(?:flaky-kit-self-protection-gate\.sh|lib/)'
                  r'|\.(?:claude|cursor)/hooks(?:' + _END + r')'
                  r'|\.claude/settings(\.local)?\.json'

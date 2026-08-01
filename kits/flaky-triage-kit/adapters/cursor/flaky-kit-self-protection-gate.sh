@@ -8,8 +8,9 @@
 # Cursor port of .claude/hooks/flaky-kit-self-protection-gate.sh — SAME
 # detection logic (including the shared core/shell-guard.py quote/subshell-aware Bash check), Cursor I/O
 # via cursor-compat.sh. Protects the kit tree (core/ + SKILL.md, and the tree itself as an operand),
-# both harnesses' gate scripts and vendored libs, the out-of-tree `.flaky-kit-expect` tier record, and
-# the two hook directories as operands. There is no in-tree `hooks/` directory — the gate was moved out
+# both harnesses' gate scripts and vendored libs, the Claude-only delivery gate (the Stop hook that
+# enforces I11), the out-of-tree `.flaky-kit-expect` tier record, and the two hook directories as
+# operands. There is no in-tree `hooks/` directory — the gate was moved out
 # of the kit tree so a rename of that tree cannot take its own detector along.
 #
 # NOTE: Cursor exposes no reliable before-file-edit block, so the Write|Edit branch is best-effort. The
@@ -98,7 +99,16 @@ JQ="$CC_JQ"            # so _reg_slots() below stays byte-identical with the Cla
 # `.cursor/settings.json` arm is added, `.local` or otherwise. Bash-branch pattern ONLY: `match_surface`
 # below (the Write/Edit matcher) is deliberately untouched by these settings paths; see the Claude
 # gate's comment for the same reasoning in full.
-SURF_RE='\.claude/skills/hektor-flaky-triage(/|$|[[:space:]";)&|])|\.claude/hooks/(flaky-kit-self-protection-gate\.sh|\.flaky-kit-expect|lib/)|\.cursor/hooks/(flaky-kit-self-protection-gate\.sh|lib/)|\.(claude|cursor)/hooks($|[[:space:]";)&|])|\.claude/settings(\.local)?\.json|\.cursor/hooks\.json'
+#
+# THE DELIVERY GATE (`.claude/hooks/flaky-kit-delivery-gate.sh`) joins the same alternative as its
+# sibling. It shipped onto `core/lock-kit.sh`'s `harden_targets` and onto no self-protection surface
+# at all, and membership of a chown list is not protection below the hardened tier — `rm -f` on it
+# was a verified ALLOW, unaudited, on a real install fixture. Carried here even though this is the
+# CURSOR gate and the delivery gate is Claude-only, for the reason the header states about the
+# Cursor gate's own presence in the Claude pattern: a session in one harness must not be able to
+# disable the OTHER harness's controls. No `.cursor/hooks/` arm for it — Cursor has no stop event, so
+# that file never exists there. See the Claude gate's comment for the full reasoning.
+SURF_RE='\.claude/skills/hektor-flaky-triage(/|$|[[:space:]";)&|])|\.claude/hooks/(flaky-kit-self-protection-gate\.sh|flaky-kit-delivery-gate\.sh|\.flaky-kit-expect|lib/)|\.cursor/hooks/(flaky-kit-self-protection-gate\.sh|lib/)|\.(claude|cursor)/hooks($|[[:space:]";)&|])|\.claude/settings(\.local)?\.json|\.cursor/hooks\.json'
 # Fallback ONLY when python3/shell-guard.py is unavailable (degraded precision, documented).
 MUT_RE='(>>?|[[:space:]]tee[[:space:]]|sed[[:space:]]+-i|(^|[;&|[:space:]])(cp|mv|rm|chmod|chown|truncate|dd|install|ln|rsync|patch)([[:space:]]|$)|(^|[;&|[:space:]])git[[:space:]]+(checkout|apply|restore|stash|reset|clean)([[:space:]]|$))'
 
@@ -148,13 +158,34 @@ except Exception:
 # to an inert tool and read as a survival while the identical Claude-side change is caught.
 # `beforeShellExecution` is the one event with no matcher concept in either harness: it fires for
 # every shell execution, so it covers `*` by construction rather than by omission.
+#
+# `Stop:*` is the DELIVERY gate's slot, and it is here because without it this branch could not see
+# the cheapest way to unwire that gate. Measured before it existed, on a real `install.sh --harness
+# claude` fixture: a Write applying `del(.hooks.Stop)` with the PreToolUse registration left intact
+# was an ALLOW, because every key this function read was untouched — the outcome test was blind to
+# the one key the write removed. `Stop` fires once at end-of-session and has no matcher concept, so
+# it covers `*` by construction, exactly as `beforeShellExecution` does.
+#
+# A SEPARATE `delivery` predicate, not the delivery gate's name folded into `gate` above. `gate` is
+# consulted for the PreToolUse/preToolUse tools too, so one shared predicate would let a PreToolUse
+# registration of the DELIVERY gate count as covering Write, Edit or Bash — a different gate
+# satisfying a slot it does not guard, which is the same proxy-for-a-property shape this kit keeps
+# retracting. core/_integrity.sh's `_wiring_slots_stop` splits it for exactly this reason and this
+# is the same split, so the two axes go on deriving the same slots from the same document.
+#
+# On Cursor this arm is silent by construction: `.cursor/hooks.json` has no `Stop` key, so it emits
+# nothing there BEFORE an edit and nothing AFTER — and `_slots_kept` only ever denies on a LOSS, so
+# absent-before/absent-after is not a dropped registration. That is what lets the function stay
+# byte-identical across the two harnesses while naming a Claude-only control.
 _reg_slots() {
   "$JQ" -r '
     def gate: select((.command // "") | test("flaky-kit-self-protection-gate\\.sh"));
+    def delivery: select((.command // "") | test("flaky-kit-delivery-gate\\.sh"));
     def tools($m): (if ($m // "") == "" then "*" else $m end) | split("|") | .[];
     [ (.hooks.PreToolUse // [])[]? | .matcher as $m | (.hooks // [])[]? | gate | "PreToolUse:\(tools($m))" ]
     + [ (.hooks.preToolUse // [])[]? | .matcher as $m | gate | "preToolUse:\(tools($m))" ]
     + [ (.hooks.beforeShellExecution // [])[]? | gate | "beforeShellExecution:*" ]
+    + [ (.hooks.Stop // [])[]? | (.hooks // [])[]? | delivery | "Stop:*" ]
     | unique | .[]
   ' "$1" 2>/dev/null
 }
@@ -187,6 +218,7 @@ match_surface() {
     */.claude/skills/hektor-flaky-triage|*/.claude/skills/hektor-flaky-triage/*) \
                                                           SURFACE="kit tree"; return 0 ;;
     */.claude/hooks/flaky-kit-self-protection-gate.sh)    SURFACE="kit protection hook (Claude)"; return 0 ;;
+    */.claude/hooks/flaky-kit-delivery-gate.sh)           SURFACE="kit delivery hook (Claude)"; return 0 ;;
     */.cursor/hooks/flaky-kit-self-protection-gate.sh)    SURFACE="kit protection hook (Cursor)"; return 0 ;;
     */.cursor/hooks/lib/*)                                SURFACE="kit protection hook lib (Cursor)"; return 0 ;;
     */.claude/hooks/lib/*)                                SURFACE="kit protection hook lib (Claude)"; return 0 ;;

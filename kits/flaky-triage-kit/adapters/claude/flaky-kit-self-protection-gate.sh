@@ -22,6 +22,10 @@
 #   - .claude/hooks/flaky-kit-self-protection-gate.sh   (this gate — protect the protector; lives
 #                                                        outside the kit tree so it can't be
 #                                                        renamed away along with it, see Task 5/6)
+#   - .claude/hooks/flaky-kit-delivery-gate.sh          (the Stop hook that enforces I11 — the one
+#                                                        control a session that wants to STOP has a
+#                                                        motive to remove, and the only thing that
+#                                                        can deny that removal inside that session)
 #   - .claude/hooks/.flaky-kit-expect                   (the out-of-tree lock-tier record this gate's
 #                                                        own shadow check reads)
 #   - .claude/hooks/lib/, .cursor/hooks/{gate,lib/}     (the audit lib + the other harness's gate)
@@ -224,7 +228,23 @@ fi
 # Write/Edit matcher) is deliberately untouched by these settings paths — that branch decides by
 # OUTCOME (does the registration survive the edit), which needs the payload, not a path match; see
 # Round 5 above and the settings arm of the Write|Edit `case`.
-SURF_RE='\.claude/skills/hektor-flaky-triage(/|$|[[:space:]";)&|])|\.claude/hooks/(flaky-kit-self-protection-gate\.sh|\.flaky-kit-expect|lib/)|\.cursor/hooks/(flaky-kit-self-protection-gate\.sh|lib/)|\.(claude|cursor)/hooks($|[[:space:]";)&|])|\.claude/settings(\.local)?\.json|\.cursor/hooks\.json'
+#
+# THE DELIVERY GATE (`.claude/hooks/flaky-kit-delivery-gate.sh`), added because it shipped onto
+# `harden_targets` and onto nothing else. Membership of that list was taken as standing in for
+# "protected", and it does not: `harden_targets` is the hardened tier's chown list, so below hardened
+# — every existing install and every machine without sudo — it buys nothing at all, and the wiring
+# axis that WOULD notice the loss only fires when a kit entrypoint next runs. A session whose whole
+# goal is to stop never runs one. Measured against a real `install.sh --harness claude` fixture
+# before this line existed: `rm -f .claude/hooks/flaky-kit-delivery-gate.sh` was an ALLOW with no
+# audit line, while the identical command against the sibling gate on the same fixture DENIED — an
+# agent that has just been told by the Stop hook that it may not stop could delete the hook and stop.
+# Worse than a silent loss: the deletion leaves `wiring=dangling`, and `integrity_report hardened
+# dangling` returns 76, so on a hardened install that one free `rm` refuses all thirteen entrypoints
+# and the printed remedy costs the sudo password. Named in the SAME alternative as its sibling, not a
+# new one, because it lives in the same directory under the same rules. No `.cursor/hooks/` arm: the
+# delivery gate is Claude-only (Cursor has no stop event), and a pattern for a file that cannot exist
+# is a claim nothing can check — the same ruling as `.cursor/settings.json` above.
+SURF_RE='\.claude/skills/hektor-flaky-triage(/|$|[[:space:]";)&|])|\.claude/hooks/(flaky-kit-self-protection-gate\.sh|flaky-kit-delivery-gate\.sh|\.flaky-kit-expect|lib/)|\.cursor/hooks/(flaky-kit-self-protection-gate\.sh|lib/)|\.(claude|cursor)/hooks($|[[:space:]";)&|])|\.claude/settings(\.local)?\.json|\.cursor/hooks\.json'
 # Bash mutation indicators (redirect / in-place / copy / move / delete / perm / git-mutate / rsync /
 # patch) — heuristic, errs toward flagging. Used as the fallback ONLY when python3/shell-guard.py
 # is unavailable for the Bash branch below (degraded precision, documented, not silent).
@@ -260,6 +280,7 @@ match_surface() {  # $1 = a path -> sets SURFACE and returns 0, or returns 1
     */.claude/skills/hektor-flaky-triage|*/.claude/skills/hektor-flaky-triage/*) \
                                                           SURFACE="kit tree"; return 0 ;;
     */.claude/hooks/flaky-kit-self-protection-gate.sh)    SURFACE="kit protection hook (Claude)"; return 0 ;;
+    */.claude/hooks/flaky-kit-delivery-gate.sh)           SURFACE="kit delivery hook (Claude)"; return 0 ;;
     */.cursor/hooks/flaky-kit-self-protection-gate.sh)    SURFACE="kit protection hook (Cursor)"; return 0 ;;
     */.cursor/hooks/lib/*)                                SURFACE="kit protection hook lib (Cursor)"; return 0 ;;
     */.claude/hooks/lib/*)                                SURFACE="kit protection hook lib (Claude)"; return 0 ;;
@@ -295,13 +316,34 @@ match_surface() {  # $1 = a path -> sets SURFACE and returns 0, or returns 1
 # to an inert tool and read as a survival while the identical Claude-side change is caught.
 # `beforeShellExecution` is the one event with no matcher concept in either harness: it fires for
 # every shell execution, so it covers `*` by construction rather than by omission.
+#
+# `Stop:*` is the DELIVERY gate's slot, and it is here because without it this branch could not see
+# the cheapest way to unwire that gate. Measured before it existed, on a real `install.sh --harness
+# claude` fixture: a Write applying `del(.hooks.Stop)` with the PreToolUse registration left intact
+# was an ALLOW, because every key this function read was untouched — the outcome test was blind to
+# the one key the write removed. `Stop` fires once at end-of-session and has no matcher concept, so
+# it covers `*` by construction, exactly as `beforeShellExecution` does.
+#
+# A SEPARATE `delivery` predicate, not the delivery gate's name folded into `gate` above. `gate` is
+# consulted for the PreToolUse/preToolUse tools too, so one shared predicate would let a PreToolUse
+# registration of the DELIVERY gate count as covering Write, Edit or Bash — a different gate
+# satisfying a slot it does not guard, which is the same proxy-for-a-property shape this kit keeps
+# retracting. core/_integrity.sh's `_wiring_slots_stop` splits it for exactly this reason and this
+# is the same split, so the two axes go on deriving the same slots from the same document.
+#
+# On Cursor this arm is silent by construction: `.cursor/hooks.json` has no `Stop` key, so it emits
+# nothing there BEFORE an edit and nothing AFTER — and `_slots_kept` only ever denies on a LOSS, so
+# absent-before/absent-after is not a dropped registration. That is what lets the function stay
+# byte-identical across the two harnesses while naming a Claude-only control.
 _reg_slots() {
   "$JQ" -r '
     def gate: select((.command // "") | test("flaky-kit-self-protection-gate\\.sh"));
+    def delivery: select((.command // "") | test("flaky-kit-delivery-gate\\.sh"));
     def tools($m): (if ($m // "") == "" then "*" else $m end) | split("|") | .[];
     [ (.hooks.PreToolUse // [])[]? | .matcher as $m | (.hooks // [])[]? | gate | "PreToolUse:\(tools($m))" ]
     + [ (.hooks.preToolUse // [])[]? | .matcher as $m | gate | "preToolUse:\(tools($m))" ]
     + [ (.hooks.beforeShellExecution // [])[]? | gate | "beforeShellExecution:*" ]
+    + [ (.hooks.Stop // [])[]? | (.hooks // [])[]? | delivery | "Stop:*" ]
     | unique | .[]
   ' "$1" 2>/dev/null
 }

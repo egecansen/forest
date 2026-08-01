@@ -32,6 +32,7 @@ Bitbucket Data Center reads `CODEOWNERS` from the repo root, `.bitbucket/`, or `
 # they are the detector and its audit trail in the harness that has no reliable pre-edit block.
 /.claude/skills/hektor-flaky-triage/         @qa-automation
 /.claude/hooks/flaky-kit-self-protection-gate.sh @qa-automation
+/.claude/hooks/flaky-kit-delivery-gate.sh    @qa-automation
 /.claude/hooks/lib/audit.sh                  @qa-automation
 /.cursor/hooks/flaky-kit-self-protection-gate.sh @qa-automation
 /.cursor/hooks/lib/                          @qa-automation

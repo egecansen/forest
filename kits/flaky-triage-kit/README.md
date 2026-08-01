@@ -82,7 +82,8 @@ Cursor these two remain what they always were, prose the agent is trusted to hon
 
 ## Self-protection
 The kit guards its own `core/` · `SKILL.md` — plus its own protection gate at
-`.claude/hooks/flaky-kit-self-protection-gate.sh`, that gate's vendored `lib/`, the Cursor gate and
+`.claude/hooks/flaky-kit-self-protection-gate.sh`, the delivery gate beside it at
+`.claude/hooks/flaky-kit-delivery-gate.sh`, that gate's vendored `lib/`, the Cursor gate and
 libs under `.cursor/hooks/`, the out-of-tree `.flaky-kit-expect` tier record, and both hook
 directories as `mv`/`rm` operands. The gate is installed OUTSIDE this tree deliberately, so renaming
 the tree can't take the detector with it. It denies agent writes to any of that unless
@@ -105,6 +106,12 @@ branches ask different questions about them, deliberately:
   model is allowed; so is *widening* the registration (`Write|Edit` → `Write|Edit|MultiEdit`, or both
   matchers collapsed into one `*`). Narrowing it, dropping a matcher, or proposing unparseable JSON is
   denied. A settings file that carries no registration today is not this kit's business at all.
+
+The delivery gate's `Stop` registration is a slot of that same model, so a `del(.hooks.Stop)` that
+leaves `PreToolUse` untouched is denied exactly as dropping a `PreToolUse` matcher is — the two
+controls are unregistered by the same edit and cost the same. A settings file that carries no `Stop`
+registration (any install predating the delivery gate) does not start needing one: the rule is
+"would lose what it has", never "must always end registered".
 
 `core/_integrity.sh` asks the second question — *will the gate actually run?* — from the same slot
 model, so the two never disagree about what a valid registration is. Since 2026-07-31 it also REPAIRS
@@ -170,6 +177,10 @@ HEKTOR_FLAKYKIT_UNLOCK=1 core/lock-kit.sh unlock
 `"Bash"` matcher:
 ```json
 { "type": "command", "command": "\"$CLAUDE_PROJECT_DIR/.claude/hooks/flaky-kit-self-protection-gate.sh\"", "timeout": 10 }
+```
+...and the delivery gate under `hooks.Stop` (one entry, no matcher — `Stop` fires once per session):
+```json
+{ "type": "command", "command": "\"$CLAUDE_PROJECT_DIR/.claude/hooks/flaky-kit-delivery-gate.sh\"", "timeout": 20 }
 ```
 **Cursor** — add to `.cursor/hooks.json`: the gate `.cursor/hooks/flaky-kit-self-protection-gate.sh` under
 `beforeShellExecution` (no matcher) **and** under `preToolUse` with `"matcher": "Write|Edit"`. Ensure
