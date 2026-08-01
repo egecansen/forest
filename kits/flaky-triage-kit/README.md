@@ -147,6 +147,15 @@ wrong, and writes nothing, so the refusal (exit 76) holds on every entrypoint be
 ever changes. The printed advice there is still to unlock, reinstall, and lock — the only path that
 actually changes anything at that tier.
 
+It announces a repair only where one actually happened. The repair re-merges **every** slot whenever
+the axis reports any failure, so on a mixed state (one control broken, another already fine) each
+merge that had nothing to add is an idempotent no-op — and *"REPAIRED — the … registration has been
+rewritten"* is a claim about a state change, false when no state changed. All three registrars
+(Claude `PreToolUse`, Cursor, Claude `Stop`) therefore report three outcomes rather than two — landed
+and changed, landed and changed nothing, did not land — and only the first is announced, by name, per
+control. Silence from one of them means it had nothing to do, never that it was skipped: a merge that
+does not land says so on stderr instead.
+
 The wall, where there is one, is underneath: `lock-kit.sh` reaches for an OS-level tier. **hardened** —
 `core/**`, `SKILL.md`, the gate scripts, the vendored libs and the kit root itself chown'd to root, so
 reopening needs a password — holds in every harness, because the kernel enforces it rather than a hook.

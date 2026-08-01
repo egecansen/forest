@@ -69,14 +69,37 @@ _wr_lock() {
   return 0
 }
 
-# _wr_register <settings-file> <command> <matcher>... -> 0 if EVERY matcher merged and was written,
-# 1 if any one failed (mktemp, jq, or the mv). The caller uses this to decide whether to say
-# REPAIRED — a merge that never actually landed must never be reported as one that did. Idempotent
+# _wr_register <settings-file> <command> <matcher>... -> 0 when EVERY matcher merged and at least one
+# of them CHANGED the document, 2 when they all merged and none changed anything (already
+# registered), 1 when any one of them failed to land (mktemp, jq, or the mv). The caller uses this to
+# decide whether to say REPAIRED — a merge that never actually landed must never be reported as one
+# that did, and neither must a merge that landed on a document it had nothing to add to. Idempotent
 # and additive: adds the matcher block if absent and the command inside it if absent, and touches
 # nothing else in the document. Same merge install.sh performs, so an install and a repair cannot
 # disagree about the shape.
+#
+# THREE outcomes, decided the same way and for the same reason as `_wr_register_stop` below: a merge
+# succeeding is not a repair happening. This returned 0 for an idempotent no-op until the residual
+# wave, so `did_c` was set on every call that reached it and `wiring_repair` announced "REPAIRED —
+# the Claude gate registration has been rewritten." over a PreToolUse registration that was already
+# complete. Reachable on any mixed state, because `wiring_repair` re-merges EVERY slot whenever the
+# axis reports any failure at all: measured on a fully healthy install driven at `unregistered`, both
+# this line and the Cursor one printed while both settings files were semantically unchanged, and in
+# the delivery-gate restore's own convergence run the false line printed beside the true one with
+# nothing to tell a reader which was which.
+#
+# FAILURE DOMINATES a change: if one matcher's merge lands and another's does not, the answer is 1.
+# The caller's message for 1 is a diagnostic naming the file, and a half-merged document is exactly
+# the state that needs it — reporting the half that worked would be the misattribution again.
+#
+# "Changed" is `. == $a[0]` — semantic equality against the source, per matcher, before the mv — not
+# a second copy of the merge's own "is it registered?" predicate and not a byte comparison. jq
+# reformats, so bytes would call a hand-indented settings file repaired; and two spellings of one
+# rule is the shape this file keeps retracting. The merge only ever APPENDS (every `//=` here can
+# only fire when its key is absent, in which case the append fires too), so document-changed and
+# registration-added are the same fact.
 _wr_register() {
-  local s="$1" c="$2" m t rc=0
+  local s="$1" c="$2" m t rc=0 changed=0
   shift 2
   for m in "$@"; do
     t="$(mktemp)" || { rc=1; continue; }
@@ -86,19 +109,27 @@ _wr_register() {
       .hooks.PreToolUse |= map(if .matcher==$m then (.hooks //= []) |
         (if any(.hooks[]?; .command==$c) then . else .hooks += [{type:"command", command:$c, timeout:10}] end)
         else . end)' "$s" > "$t" 2>/dev/null && [ -s "$t" ]; then
+      jq -e --slurpfile a "$s" '. == $a[0]' "$t" >/dev/null 2>&1 || changed=1
       mv "$t" "$s" || rc=1
     else
       rm -f "$t"
       rc=1
     fi
   done
+  [ "$rc" = 0 ] && [ "$changed" = 0 ] && rc=2
   return "$rc"
 }
 
-# _wr_register_cursor <hooks-file> <command> -> 0 on a successful merge+write, 1 otherwise. Cursor's
-# spelling of the same three slots; same success/failure contract as _wr_register above.
+# _wr_register_cursor <hooks-file> <command> -> 0 when the merge landed AND changed the document,
+# 2 when it landed and changed nothing (already registered), 1 when it did not land. Cursor's
+# spelling of the same three slots; the SAME three-outcome contract as `_wr_register` above and
+# `_wr_register_stop` below, for the same reason — see `_wr_register`'s header.
+#
+# The `|| rc=1` on the `mv` is not decoration either: without it a failed rename returned 0 through
+# the fall-through at the bottom, so a merge that never reached disk was announced as one that did —
+# `_wr_register` has always guarded that and this function had not.
 _wr_register_cursor() {
-  local s="$1" c="$2" t
+  local s="$1" c="$2" t rc=0
   t="$(mktemp)" || return 1
   if jq --arg c "$c" '
     .hooks //= {} |
@@ -107,12 +138,13 @@ _wr_register_cursor() {
     .hooks.preToolUse //= [] |
     (if any(.hooks.preToolUse[]?; .command==$c) then . else .hooks.preToolUse += [{command:$c, matcher:"Write|Edit", timeout:10}] end)
   ' "$s" > "$t" 2>/dev/null && [ -s "$t" ]; then
-    mv "$t" "$s"
+    jq -e --slurpfile a "$s" '. == $a[0]' "$t" >/dev/null 2>&1 && rc=2
+    mv "$t" "$s" || rc=1
   else
     rm -f "$t"
-    return 1
+    rc=1
   fi
-  return 0
+  return "$rc"
 }
 
 # _wr_register_stop <settings-file> <command> -> 0 when the merge landed AND changed the document,
@@ -129,7 +161,9 @@ _wr_register_cursor() {
 # the gate FILE deleted and the registration intact: `dangling` before, that line printed, `dangling`
 # after — a repair announced over a state that never converged, on every entrypoint, forever. It is
 # the same misattribution class the `did_c`/`did_u` split closed one function over, arriving through
-# a different door.
+# a different door. This function was the first of the three to be given the test; the residual wave
+# gave the same one to `_wr_register` and `_wr_register_cursor`, so all three now answer the same
+# question and the flags they feed all mean the same thing.
 #
 # "Changed" is decided by comparing the merged document to the source AS JSON (`. == $a[0]`), not by
 # re-asking "was it registered?" with a second copy of the merge's own predicate. Two spellings of
@@ -278,7 +312,7 @@ _wr_restore_gate() {
 
 # wiring_repair <kit_root> <tier> <wiring> -> narrates to stderr, always returns 0.
 wiring_repair() {
-  local kit="${1:-}" tier="${2:-}" wiring="${3:-}" root wc wu ws s rcs did_c=0 did_u=0 did_s=0
+  local kit="${1:-}" tier="${2:-}" wiring="${3:-}" root wc wu ws s rcc rcu rcs did_c=0 did_u=0 did_s=0
   case "$wiring" in
     unregistered|partial|dangling) : ;;
     *) return 0 ;;                      # wired, absent, foreign: nothing to do or nothing that is ours
@@ -330,11 +364,16 @@ wiring_repair() {
     [ -e "$s" ] || echo '{}' > "$s" 2>/dev/null
     if [ -w "$s" ] && jq -e . "$s" >/dev/null 2>&1; then
       if _wr_lock "$s"; then
-        if _wr_register "$s" '"$CLAUDE_PROJECT_DIR/.claude/hooks/flaky-kit-self-protection-gate.sh"' 'Write|Edit' 'Bash'; then
-          did_c=1
-        else
-          echo "integrity: the Claude gate registration merge failed — $s was not repaired." >&2
-        fi
+        # THREE outcomes here too, since the residual wave. `did_c` is set on exactly one of them —
+        # the merge landed AND the document changed — because the line it prints ("the registration
+        # has been rewritten") is a claim about a state change, and on an idempotent no-op no state
+        # changed. See `_wr_register`'s header for the measurement.
+        _wr_register "$s" '"$CLAUDE_PROJECT_DIR/.claude/hooks/flaky-kit-self-protection-gate.sh"' 'Write|Edit' 'Bash' && rcc=0 || rcc=$?
+        case "$rcc" in
+          0) did_c=1 ;;
+          2) : ;;   # already registered: nothing was repaired, so nothing is announced
+          *) echo "integrity: the Claude gate registration merge failed — $s was not repaired." >&2 ;;
+        esac
         # The delivery gate (Stop) rides the SAME lock already held on this file, but tracks its OWN
         # per-harness `did_s` flag rather than reusing `did_c`. `did_c` means specifically "the Claude
         # SELF-PROTECTION gate registration was rewritten" — that is what its printed message says —
@@ -359,12 +398,17 @@ wiring_repair() {
         # AND the document changed. A merge succeeding is not a repair happening. Returning 0 for an
         # idempotent no-op made this flag unconditional, so the line below printed on every entrypoint
         # of a project whose Stop registration was already correct — including, before the restore
-        # above learned the delivery gate, over a `dangling` state that never converged. Its two
-        # siblings (`did_c`, `did_u`) still mean "the merge landed" rather than "something changed":
-        # that is the older contract, it is asserted deliberately in core/tests/integrity-test.sh (a
-        # no-op Cursor merge beside a failing Claude one must still be announced by name), and
-        # changing it is not this wave's work. The asymmetry is stated rather than left to be
-        # rediscovered.
+        # above learned the delivery gate, over a `dangling` state that never converged.
+        #
+        # All THREE flags now mean the same thing. `did_s` had this test first and its two siblings
+        # kept the older "the merge landed" contract for one wave, which shipped two flags meaning
+        # different things under one name and a suite that pinned both rules at once. The older
+        # contract lost, for the reason this file has applied three times now: "the registration has
+        # been rewritten" is a claim about a state change, and there is no state change in an
+        # idempotent no-op. The assertion that pinned the old rule (a no-op Cursor merge beside a
+        # failing Claude one) has been inverted, and the property it actually existed to protect —
+        # per-harness attribution, never one shared REPAIRED — is now pinned on a fixture whose
+        # Cursor registration is genuinely ABSENT, so the announcement it requires is a true one.
         if [ "$ws" = 1 ]; then
           _wr_register_stop "$s" '"$CLAUDE_PROJECT_DIR/.claude/hooks/flaky-kit-delivery-gate.sh"' && rcs=0 || rcs=$?
           case "$rcs" in
@@ -394,11 +438,12 @@ wiring_repair() {
     [ -e "$s" ] || echo '{"version":1,"hooks":{}}' > "$s" 2>/dev/null
     if [ -w "$s" ] && jq -e . "$s" >/dev/null 2>&1; then
       if _wr_lock "$s"; then
-        if _wr_register_cursor "$s" '.cursor/hooks/flaky-kit-self-protection-gate.sh'; then
-          did_u=1
-        else
-          echo "integrity: the Cursor gate registration merge failed — $s was not repaired." >&2
-        fi
+        _wr_register_cursor "$s" '.cursor/hooks/flaky-kit-self-protection-gate.sh' && rcu=0 || rcu=$?
+        case "$rcu" in
+          0) did_u=1 ;;
+          2) : ;;   # already registered: nothing was repaired, so nothing is announced
+          *) echo "integrity: the Cursor gate registration merge failed — $s was not repaired." >&2 ;;
+        esac
         _wr_unlock
       else
         echo "integrity: could not lock $s to repair the registration; the next entrypoint will retry." >&2

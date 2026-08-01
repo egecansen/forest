@@ -291,6 +291,9 @@ K7="$(wire_fixture "$W/g")"; rm -f "$W/g/.cursor/hooks/flaky-kit-self-protection
 # `_wiring_*`: reached only through the composition, a helper's locals can be unobservable.
 LOCAL_NAMES="kit tier root f p t s slots cmd g gate got want out wc wu ws h c u ev tool line key k owner recorded actual expected wiring rc"
 LOCAL_NAMES="$LOCAL_NAMES m did did_c did_u did_s harness dest src target waited want_stop rcs one which w"
+# residual R2 added three more: `changed` inside _wr_register and the caller's `rcc`/`rcu`. A leaked
+# 0 is still a leak — the probe tests non-emptiness, so a flag that leaks as "0" is caught too.
+LOCAL_NAMES="$LOCAL_NAMES changed rcc rcu"
 ( for v in $LOCAL_NAMES; do unset "$v"; done
   . "$HERE/../_integrity.sh"
   integrity_owner_uid   "$K1/core"                                     >/dev/null
@@ -939,9 +942,16 @@ OUT="$(wiring_repair "$R/notakit" degraded unregistered 2>&1 >/dev/null)"
 rm -rf "$R"
 
 # It narrates on stderr and nothing reaches stdout — four entrypoints emit a contract there.
+#
+# The settings file is reset to `{}` between the two calls, and that is load-bearing since REPAIRED
+# became conditional on the document actually CHANGING: the stdout call below is a real repair, so
+# without the reset the second call is an idempotent no-op that correctly says nothing, and the
+# stderr assertion would be asserting the absence of a line it means to require. Same reset, same
+# fixture, one genuine repair each.
 R="$(mktemp -d)"; W="$(wire_fixture "$R")"; echo '{}' > "$R/.claude/settings.json"
 [ -z "$(wiring_repair "$W" degraded unregistered 2>/dev/null)" ] \
   && ok || bad "wiring_repair must never write to stdout"
+echo '{}' > "$R/.claude/settings.json"
 case "$(wiring_repair "$W" degraded unregistered 2>&1 >/dev/null)" in
   *REPAIRED*) ok ;; *) bad "a repair must say so on stderr" ;;
 esac
@@ -1295,6 +1305,81 @@ _wr_register_stop "$R/broken.json" "$DGCMD"; RCS=$?
 [ "$RCS" = 1 ] && ok || bad "_wr_register_stop must return 1 when the merge does not land (got $RCS)"
 rm -rf "$R"
 
+# --- residual R2: the state the re-review reproduced live ----------------------------------------
+# `wiring_repair` re-merges EVERY slot whenever the axis reports any failure at all, so a FULLY
+# HEALTHY install driven at `unregistered` reaches all three registrars, all three merges are
+# idempotent no-ops — and two of the three announced a repair anyway. On a mixed state that put a
+# false line beside a true one with nothing to tell a reader which was which. Nothing may be
+# announced here, and all three registrations must survive: "nothing said" has to mean "nothing to
+# do", never "the merge ate it".
+R="$(mktemp -d)"; R="$(cd "$R" && pwd -P)"; K="$(dg_fixture "$R")"
+printf 'all stop\n' > "$K/core/.harness"
+[ "$(integrity_wiring "$K" degraded)" = wired ] \
+  && ok || bad "CONTROL: the fixture must be fully healthy BEFORE the repair, or 'nothing announced' proves nothing (got $(integrity_wiring "$K" degraded))"
+OUT="$(wiring_repair "$K" degraded unregistered 2>&1 >/dev/null)"
+[ -z "$OUT" ] && ok || bad "a repair over a fully healthy install must say nothing at all — a merge succeeding is not a repair happening — got: $OUT"
+[ "$(integrity_wiring "$K" degraded)" = wired ] \
+  && ok || bad "...and it must still read wired afterwards — silence must mean 'nothing to do', not 'the merge broke it' (got $(integrity_wiring "$K" degraded))"
+rm -rf "$R"
+
+# --- residual R2: the SAME three outcomes for the two siblings, driven directly ------------------
+# All three registrars now answer one question — did the merge land, and did it change anything —
+# because the REPAIRED line each of them feeds is a claim about a state change, and there is no state
+# change in an idempotent no-op. `_wr_register_stop` had this test for one wave while `_wr_register`
+# and `_wr_register_cursor` returned 0 for a no-op, so the branch shipped two flags meaning different
+# things under one name. The caller reads a return CODE, so the code is the contract: 0 = landed and
+# changed, 2 = landed and changed nothing, 1 = did not land.
+R="$(mktemp -d)"; R="$(cd "$R" && pwd -P)"
+SPCMD='"$CLAUDE_PROJECT_DIR/.claude/hooks/flaky-kit-self-protection-gate.sh"'
+printf '{}\n' > "$R/s.json"
+_wr_register "$R/s.json" "$SPCMD" 'Write|Edit' 'Bash'; RCC=$?
+[ "$RCC" = 0 ] && ok || bad "_wr_register must return 0 when it actually adds the registration (got $RCC)"
+_wr_register "$R/s.json" "$SPCMD" 'Write|Edit' 'Bash'; RCC=$?
+[ "$RCC" = 2 ] && ok || bad "_wr_register must return 2 for an idempotent no-op — 0 there is what made did_c unconditional (got $RCC)"
+# PARTIAL: one matcher already registered, the other dropped. Something IS added, so it is a repair —
+# the multi-matcher loop must OR its changes, not report the last matcher's answer.
+jq '.hooks.PreToolUse |= map(select(.matcher != "Bash"))' "$R/s.json" > "$R/t" && mv "$R/t" "$R/s.json"
+_wr_register "$R/s.json" "$SPCMD" 'Write|Edit' 'Bash'; RCC=$?
+[ "$RCC" = 0 ] && ok || bad "_wr_register must return 0 when only SOME of its matchers were missing — one added matcher is still a change (got $RCC)"
+# Reformatting is not a repair, for the same reason the Stop registrar states: jq rewrites the whole
+# document, so a byte comparison would call a hand-indented settings file repaired.
+SPJSON="$(jq -n --arg c "$SPCMD" '$c')"
+printf '{\n  "hooks" : {\n    "PreToolUse" : [\n      { "matcher":"Write|Edit", "hooks":[ { "type":"command", "command":%s, "timeout":10 } ] },\n      { "matcher":"Bash", "hooks":[ { "type":"command", "command":%s, "timeout":10 } ] }\n    ]\n  }\n}\n' \
+  "$SPJSON" "$SPJSON" > "$R/hand.json"
+_wr_register "$R/hand.json" "$SPCMD" 'Write|Edit' 'Bash'; RCC=$?
+[ "$RCC" = 2 ] && ok || bad "reformatting is not a repair — a hand-indented settings file with both matchers already present must return 2 (got $RCC)"
+# FAILURE DOMINATES a change: the Bash matcher would have been added, but nothing can be merged into
+# a PreToolUse string, and a document the merge could not land on is exactly the state that needs the
+# caller's diagnostic rather than its boast.
+printf '{"hooks":{"PreToolUse":"not-an-array"}}\n' > "$R/broken.json"
+_wr_register "$R/broken.json" "$SPCMD" 'Write|Edit' 'Bash'; RCC=$?
+[ "$RCC" = 1 ] && ok || bad "_wr_register must return 1 when the merge does not land (got $RCC)"
+
+CUCMD='.cursor/hooks/flaky-kit-self-protection-gate.sh'
+printf '{"version":1,"hooks":{}}\n' > "$R/h.json"
+_wr_register_cursor "$R/h.json" "$CUCMD"; RCU=$?
+[ "$RCU" = 0 ] && ok || bad "_wr_register_cursor must return 0 when it actually adds the registration (got $RCU)"
+_wr_register_cursor "$R/h.json" "$CUCMD"; RCU=$?
+[ "$RCU" = 2 ] && ok || bad "_wr_register_cursor must return 2 for an idempotent no-op — 0 there is what made did_u unconditional (got $RCU)"
+# One of its two slots present and the other gone is still a change: the missing one is genuinely added.
+jq 'del(.hooks.preToolUse)' "$R/h.json" > "$R/t" && mv "$R/t" "$R/h.json"
+_wr_register_cursor "$R/h.json" "$CUCMD"; RCU=$?
+[ "$RCU" = 0 ] && ok || bad "_wr_register_cursor must return 0 when only one of its two slots was missing (got $RCU)"
+printf '{"version":1,"hooks":{"preToolUse":"not-an-array"}}\n' > "$R/hbroken.json"
+_wr_register_cursor "$R/hbroken.json" "$CUCMD"; RCU=$?
+[ "$RCU" = 1 ] && ok || bad "_wr_register_cursor must return 1 when the merge does not land (got $RCU)"
+# A merge that jq computes fine but that never REACHES DISK is also 1. `_wr_register` has always
+# guarded its `mv`; this function fell through to a bare `return 0` and reported a write that did not
+# happen. Forced by making the containing DIRECTORY unwritable — rename needs write permission there,
+# while the file itself stays perfectly readable, so jq succeeds and only the mv fails.
+mkdir -p "$R/ro"; printf '{"version":1,"hooks":{}}\n' > "$R/ro/h.json"; chmod 555 "$R/ro"
+_wr_register_cursor "$R/ro/h.json" "$CUCMD" 2>/dev/null; RCU=$?
+chmod 755 "$R/ro"
+[ "$RCU" = 1 ] && ok || bad "_wr_register_cursor must return 1 when the merge computes but the mv cannot land (got $RCU)"
+[ -z "$(_wiring_cover "$(_wiring_slots "$R/ro/h.json")" beforeShellExecution '*')" ] \
+  && ok || bad "CONTROL: the unwritable-directory fixture must really have kept the merge off disk, or the assertion above proves nothing"
+rm -rf "$R"
+
 # A HEALTHY delivery gate must not be overwritten just because the self-protection gate is missing —
 # the same rule the Cursor block above pins, one file over. Different content at the restore source
 # makes an overwrite observable rather than merely unannounced.
@@ -1452,14 +1537,42 @@ rm -rf "$R"
 # leaving a failing Claude merge unregistered AND unmentioned beside a healthy Cursor one.
 # core/.harness=all forces both branches to run; Claude's settings are corrupted the same way as
 # above (merge fails), Cursor's are left exactly as wire_fixture built them (already fully
-# registered, so its merge is a trivial, successful no-op) — the asymmetry the OR was hiding.
+# registered, so its merge lands and changes nothing).
+#
+# THE CURSOR ASSERTION HERE WAS INVERTED by the residual wave, and the reasoning is recorded at the
+# assertion rather than in a commit message, because the previous wave read this line as a deliberate
+# ruling and scoped its own fix around it. It used to REQUIRE the no-op Cursor merge to be announced
+# — which made this file pin two contradictory rules at once: announce-on-merge here, announce-only-
+# on-change for the Stop registrar 200 lines up. What the block was actually written to protect is
+# per-harness ATTRIBUTION ("not folded into one shared REPAIRED"), and the no-op-ness of this
+# fixture's Cursor merge is incidental to that: the comment above says Cursor's settings are "left
+# exactly as wire_fixture built them", i.e. chosen for convenience, not because a no-op deserves an
+# announcement. Nothing consumes these lines but a human — `grep -rn REPAIRED` outside core/tests/
+# matches only _wiring_repair.sh's own three echoes and its comments — so no caller depends on the
+# line appearing. The attribution property is re-pinned NON-VACUOUSLY in the block below, on a
+# fixture whose Cursor registration is genuinely absent, so the announcement it requires is true.
 R="$(mktemp -d)"; W="$(wire_fixture "$R")"
 printf 'all\n' > "$W/core/.harness"
 jq '.hooks.PreToolUse = "not-an-array"' "$R/.claude/settings.json" > "$R/s" && mv "$R/s" "$R/.claude/settings.json"
 OUT="$(wiring_repair "$W" degraded unregistered 2>&1 >/dev/null)"
 case "$OUT" in *"Claude gate registration merge failed"*) ok ;; *) bad "a failing Claude merge alongside a healthy Cursor one must still name Claude's failure — got: $OUT" ;; esac
-case "$OUT" in *"REPAIRED — the Cursor gate registration has been rewritten."*) ok ;; *) bad "a healthy Cursor merge must still be announced BY NAME, not folded into one shared REPAIRED — got: $OUT" ;; esac
+case "$OUT" in *"REPAIRED — the Cursor gate registration has been rewritten."*) bad "an idempotent Cursor merge must not be announced as a repair — a merge succeeding is not a repair happening — got: $OUT" ;; *) ok ;; esac
 case "$OUT" in *"REPAIRED — the Claude gate registration has been rewritten."*) bad "Claude must not be reported REPAIRED when its own merge failed — got: $OUT" ;; *) ok ;; esac
+[ -n "$(_wiring_cover "$(_wiring_slots "$R/.cursor/hooks.json")" beforeShellExecution '*')" ] \
+  && ok || bad "CONTROL: 'nothing announced' for Cursor must mean 'nothing to do', not 'the merge broke it' — the registration must still be there"
+rm -rf "$R"
+
+# ...and the attribution property that block exists for, on a fixture where the Cursor merge
+# genuinely ADDS. Without this, inverting the assertion above would leave "did_u is ever set at all"
+# unasserted at the wiring_repair level, and an implementation that never sets it would pass.
+R="$(mktemp -d)"; W="$(wire_fixture "$R")"
+printf 'all\n' > "$W/core/.harness"
+jq '.hooks.PreToolUse = "not-an-array"' "$R/.claude/settings.json" > "$R/s" && mv "$R/s" "$R/.claude/settings.json"
+printf '{"version":1,"hooks":{}}\n' > "$R/.cursor/hooks.json"      # Cursor: genuinely unregistered
+OUT="$(wiring_repair "$W" degraded unregistered 2>&1 >/dev/null)"
+case "$OUT" in *"REPAIRED — the Cursor gate registration has been rewritten."*) ok ;; *) bad "a Cursor merge that genuinely ADDS the registration must be announced BY NAME, not folded into one shared REPAIRED — got: $OUT" ;; esac
+case "$OUT" in *"Claude gate registration merge failed"*) ok ;; *) bad "the failing Claude merge beside it must still be named as a failure — got: $OUT" ;; esac
+case "$OUT" in *"REPAIRED — the Claude gate registration has been rewritten."*) bad "Claude must not be reported REPAIRED when its own merge failed, even beside a Cursor merge that succeeded — got: $OUT" ;; *) ok ;; esac
 rm -rf "$R"
 
 # --- Task 4: integrity_guard calls wiring_repair between detection and reporting ------------------
