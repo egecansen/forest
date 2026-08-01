@@ -116,7 +116,7 @@ integrity_project_root() {
 # install starts failing an axis it was never asked to satisfy. Scanned from the WHOLE record (not
 # just tokens after the first) because it is independent of which harness was selected.
 #
-# Two arms below OVERRIDE the parsed `$tok` value rather than trust it, for two different reasons:
+# Two arms below OVERRIDE the parsed `$s` value rather than trust it, for two different reasons:
 #   - `agents` forces it to 0 unconditionally: an AGENTS.md-only install has no Claude Stop hook to
 #     register at all, so the capability cannot apply regardless of what the record says.
 #   - `cursor` forces it to 0 unconditionally too (fix round 1, Minor 2): the delivery gate is a
@@ -132,13 +132,33 @@ integrity_project_root() {
 # EXACT token match is required, not a substring one: a bare `case "$h" in *" stop"*)` reads
 # `claude stopwatch` as carrying the `stop` capability too, the same proxy-standing-in-for-a-property
 # shape this kit has retracted repeatedly (see `_wiring_slots`'s header, four counted instances
-# before this one). Iterating `$h`'s own word-split tokens and comparing each one for exact equality
-# has no such false-positive.
+# before this one).
+#
+# The exact match is a PADDED-STRING comparison (`case " $h " in *" stop "*)`), not a `for tok in $h`
+# word-split loop — a fix round 2 correction. `$h` is unquoted in that loop, so bash performs
+# PATHNAME EXPANSION on it as well as word-splitting: with a file literally named `stop` sitting in
+# the caller's current working directory and a record of `claude *`, the loop iterated the glob's
+# expansion — which includes that file — instead of the record's own two tokens, and reported the
+# capability required. Measured directly: `_wiring_want` returned `1 0 1` for that combination before
+# this fix. That trades the substring proxy this same round already retracted for a FILESYSTEM proxy
+# — the capability requirement depending on which directory the caller happened to be in, not on the
+# record's content, which is exactly the property-vs-proxy shape this file has now retracted five
+# times. The padded-string form does no word-splitting and no pathname expansion at all: `" $h "` and
+# the pattern `*" stop "*` are both plain strings compared by `case`, with no unquoted expansion of
+# `$h` anywhere. Preferred over `set -f`/`set +f` around the loop for the same reason `_wiring_resolve`
+# above prefers parameter expansion over a subprocess: fewer moving parts, and no shell-option state
+# to save, restore, and get wrong inside a library sourced by thirteen entrypoints that must never
+# wedge a caller.
+#
+# One consequence stated rather than engineered around: the padded match treats the record as
+# SPACE-separated, so a tab-separated record would not match. This is a documented property, not a
+# gap — `install.sh:89` writes `printf '%s stop\n'` with a literal space, and the record format is
+# space-separated by definition (see this function's own header above).
 _wiring_want() {
-  local kit="${1:-}" root="${2:-}" h first c=0 u=0 s=0 tok
+  local kit="${1:-}" root="${2:-}" h first c=0 u=0 s=0
   h="$(cat "$kit/core/.harness" 2>/dev/null)"
   first="${h%% *}"
-  for tok in $h; do case "$tok" in stop) s=1 ;; esac; done
+  case " $h " in *" stop "*) s=1 ;; esac
   case "$first" in
     all|both) echo "1 1 $s"; return 0 ;;
     claude)   echo "1 0 $s"; return 0 ;;

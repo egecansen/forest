@@ -1672,5 +1672,26 @@ wiring_repair "$W" degraded partial >/dev/null 2>&1
   && ok || bad "three repeated repairs must not duplicate the Stop registration"
 rm -rf "$R"
 
+# --- Fix round 2 -------------------------------------------------------------------------------
+
+# The exact-token match must not glob-expand. Fix round 1's `for tok in $h; do ...; done` left `$h`
+# unquoted in a list context, so bash performed PATHNAME EXPANSION on it in addition to
+# word-splitting: a record of "claude *" evaluated with a file literally named `stop` sitting in the
+# caller's current working directory iterated the GLOB'S expansion instead of the record's own two
+# tokens, and reported the capability required regardless of what the record actually said. That
+# traded the substring proxy this same round already retracted for a FILESYSTEM proxy -- the
+# capability requirement depending on which directory the caller happened to be in, not on the
+# record's content. Fixture actually changes the CWD (a subshell `cd`, scoped to the command
+# substitution so nothing leaks out) at the moment `_wiring_want` is called, and plants the colliding
+# filename there -- without both of those this assertion would pass for the wrong reason and pin
+# nothing.
+R="$(mktemp -d)"; mkdir -p "$R/kit/core"
+printf 'claude *\n' > "$R/kit/core/.harness"
+: > "$R/stop"                                    # a file literally named "stop", sitting in $R
+GOT="$(cd "$R" && _wiring_want "$R/kit" "$R")"
+[ "$GOT" = "1 0 0" ] \
+  && ok || bad "a glob metacharacter in the record, evaluated from a CWD containing a file named 'stop', must not report the stop capability -- the parse must never touch the filesystem (got '$GOT')"
+rm -rf "$R"
+
 echo "integrity-test: $pass passed, $fail failed"
 [ "$fail" -eq 0 ]
