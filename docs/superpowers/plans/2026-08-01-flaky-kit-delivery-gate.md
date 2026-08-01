@@ -192,6 +192,14 @@ case "$(run "$WORK/t4")" in *c1*) ok ;; *) bad "the I11 block must name the open
 # --- the hard block has NO stop_hook_active escape --------------------------------------------
 blocked "$(run "$WORK/t4" true)" && ok || bad "I11 must block even on a re-triggered stop"
 
+# --- a check that cannot run is not a verdict: fail open, and SAY so ---------------------------
+# `ledger.sh` exits 67 for I11 and 75 for a lock timeout; only 67 means a cluster is open. Treating
+# every non-zero as "open" would block on a transient lock, and treating every non-67 as "clean"
+# silently passes a session whose state nobody could read.
+jq -n '{clusters:"not-an-array",events:[]}' > "$WORK/bad.json"
+tx "$WORK/t4b" "Done." "$KIT/core/apply.sh c1" "$KIT/core/ledger.sh cluster-state $WORK/bad.json c1 applied"
+[ -z "$(run "$WORK/t4b")" ] && ok || bad "a ledger the checker cannot read must fail open, not block"
+
 # --- closing the cluster clears it -------------------------------------------------------------
 jq -n '{clusters:[{id:"c1",status:"green",title:"t",passes:5,runs:5}],events:[]}' > "$L"
 [ -z "$(run "$WORK/t4")" ] && ok || bad "a terminal cluster must let the session end"
@@ -288,10 +296,17 @@ FOUND_LEDGER=0
 for L in $LEDGERS; do
   [ -r "$L" ] || continue
   FOUND_LEDGER=1
-  MSG="$(bash "$_DIR/../../core/ledger.sh" validate "$L" --final 2>&1)" || {
-    case "$MSG" in *"NOT FINAL"*) OPEN="$OPEN
-$MSG" ;; esac
-  }
+  MSG="$(bash "$LEDGER_SH" validate "$L" --final 2>&1)"; RC=$?
+  case "$RC" in
+    0)  : ;;                                   # final: no selected/applied cluster left
+    67) OPEN="$OPEN
+$MSG" ;;                                       # I11's own exit — the one that blocks
+    *)  # Anything else is the CHECK failing, not the run failing. `ledger.sh` exits 75 on a lock
+        # timeout and 65 on a malformed ledger, and neither tells us a cluster is open. Fail open —
+        # but say so, because a silent pass here is indistinguishable from a clean ledger, and the
+        # difference is exactly what a reader needs when a session ends that should not have.
+        hektor_audit "delivery-gate: validate --final on $L exited $RC, not a verdict — failing open" ;;
+  esac
 done
 
 if [ -n "$OPEN" ]; then
