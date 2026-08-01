@@ -82,8 +82,9 @@ What it sets up, by hand if you prefer:
 - **PreToolUse `deny` enforcement** is honored by Claude Code (verified); Cursor blocks via `cc_deny`;
   bare harnesses rely on `lock-kit.sh`. Don't assume the in-process gate is a wall outside Claude/Cursor.
 - **The delivery gate** (Stop hook enforcing I11 + hedge-scan) has nothing to port to: it needs a
-  session-end event, and neither Cursor nor a bare terminal harness has one. See `core/lock-kit.sh`'s
-  residual #14, `core/README.md`'s `delivery-gate` row, and this kit's `README.md`.
+  session-end event, and neither Cursor nor a bare terminal harness has one. See the Claude-only
+  entry in `core/lock-kit.sh`'s STILL NOT COVERED header, `core/README.md`'s `delivery-gate` row,
+  and this kit's `README.md`.
 
 ## Distribution note
 

@@ -151,6 +151,12 @@ step by hand and not a substitute for the header; if the two ever disagree, the 
 11. **The kit repairs its own registration only.** A neighbouring pack's stale registration is not the kit's to fix and is not fixed.
 12. **Below a root-owned tree the restore source has no more protection than anything else** — a poisoned `core/gate-src` restores a poisoned gate. That is what the lower tiers already mean.
 13. **The registration repair is purely additive, never a purge.** `install.sh` drops a pre-relocation registration before merging; the repair does not, so a dead command it finds stays registered forever alongside whatever the repair adds. It does not block convergence — the relocated path sorts ahead of the pre-relocation one *within one settings file* (not guaranteed split across `settings.json`/`settings.local.json`: `integrity_wiring` concatenates each file's `unique` output in file order and `_wiring_cover` takes the first line, so there is no cross-file sort. Measured with the dead entry in `settings.json` and the relocated one in `settings.local.json`, the cover for `PreToolUse:Bash` is the *pre-relocation* command and the verdict is `dangling`). The repair still converges there, because it always writes into `settings.json`, which is read first — measured, `dangling` on the read before and `wired` on the read after a single repair call. So once the relocated gate file exists the axis reads `wired` while a harness that runs every registered hook, not only the one this axis checks, still attempts the dead command on every matching call: the original symptom, now invisible to the axis that used to catch it. Re-running the installer, which does purge it, is the actual fix.
+14. **The delivery gate is Claude-only** — Cursor has no Stop event, so on Cursor I11 and hedge-scan
+remain what they were before this change: prose the agent is trusted to honour.
+15. **The gate reads the transcript the harness wrote, not the session itself** — it proves what
+was recorded, not what happened; a ledger the agent never named on a command line is invisible to it.
+16. **`core/apply`/`core/rerun` is the dividing line for "work was done"** — a session that changed
+things some other way and left no ledger is not caught.
 ```bash
 core/lock-kit.sh lock        # hardens (chown to root) when sudo is available; degrades to a
                               # chmod-only read-only bit otherwise. Ends with `sudo -k`, so the
