@@ -1335,6 +1335,79 @@ case "$OUT" in *"delivery gate"*) bad "an install without the stop capability mu
   && ok || bad "an install without the stop capability must not gain a delivery gate it never asked for"
 rm -rf "$R"
 
+# --- whole-branch review, Important 2: the wiring messages must name WHICH gate ------------------
+# Verified before this block existed: a delivery-gate-only failure printed "the kit's self-protection
+# gate is not going to run as registered" and "a harness registration points at a gate file that does
+# not exist" while the self-protection gate was registered and its file present. A reader follows the
+# sentence to the wrong file; at hardened/stale the remedy beside it costs a password to carry out.
+#
+# The label is `_wiring_compute`'s second field. `integrity_wiring` is a projection of that one
+# computation, so the public single-word contract has to be asserted here too — a second field
+# leaking into it would break ~80 assertions in this file and every `[ "$(integrity_wiring …)" = X ]`
+# a caller might write.
+R="$(mktemp -d)"; R="$(cd "$R" && pwd -P)"; K="$(dg_fixture "$R")"
+WOUT="$(integrity_wiring "$K" degraded)"
+[ "$WOUT" = wired ] && ok || bad "CONTROL: integrity_wiring must still return ONE bare word (got '$WOUT')"
+case "$WOUT" in *"	"*) bad "integrity_wiring must not leak the label field into its public output — got '$WOUT'" ;; *) ok ;; esac
+
+rm -f "$R/.claude/hooks/flaky-kit-delivery-gate.sh"
+[ "$(printf '%s' "$(_wiring_compute "$K" degraded)" | cut -f2)" = "the delivery gate (Claude, Stop)" ] \
+  && ok || bad "a delivery-gate-only failure must be attributed to the delivery gate (got '$(printf '%s' "$(_wiring_compute "$K" degraded)" | cut -f2)')"
+GOUT="$(integrity_guard "$K" 2>&1 >/dev/null)"
+case "$GOUT" in *"the delivery gate (Claude, Stop)"*) ok ;; *) bad "the WIRING message must name the delivery gate — got: $GOUT" ;; esac
+case "$GOUT" in *"self-protection gate"*) bad "a delivery-gate-only failure must not send the reader to the self-protection gate — got: $GOUT" ;; *) ok ;; esac
+rm -rf "$R"
+
+# The mirror image, or the assertion above is satisfied by a label that says "delivery gate" always.
+R="$(mktemp -d)"; R="$(cd "$R" && pwd -P)"; K="$(dg_fixture "$R")"
+rm -f "$R/.claude/hooks/flaky-kit-self-protection-gate.sh"
+[ "$(printf '%s' "$(_wiring_compute "$K" degraded)" | cut -f2)" = "the self-protection gate (Claude, PreToolUse)" ] \
+  && ok || bad "a self-protection-gate-only failure must still be attributed to the self-protection gate"
+GOUT="$(integrity_guard "$K" 2>&1 >/dev/null)"
+case "$GOUT" in *"the self-protection gate (Claude, PreToolUse)"*) ok ;; *) bad "the WIRING message must name the self-protection gate — got: $GOUT" ;; esac
+case "$GOUT" in *"delivery gate (Claude, Stop) is not going to run"*) bad "a self-protection-only failure must not be reported as a delivery-gate one — got: $GOUT" ;; *) ok ;; esac
+rm -rf "$R"
+
+# ...and the third block, whose harness is named because the two self-protection gates are two files.
+R="$(mktemp -d)"; R="$(cd "$R" && pwd -P)"; K="$(dg_fixture "$R")"
+printf 'all stop\n' > "$K/core/.harness"
+rm -f "$R/.cursor/hooks/flaky-kit-self-protection-gate.sh"
+[ "$(printf '%s' "$(_wiring_compute "$K" degraded)" | cut -f2)" = "the self-protection gate (Cursor)" ] \
+  && ok || bad "a Cursor-only failure must name the Cursor gate, not the Claude one"
+rm -rf "$R"
+
+# The honest limit, asserted rather than left implicit: the axis reports ONE verdict for the whole
+# project, so when two blocks are equally bad the label names the first one evaluated. Both gates
+# missing is `dangling` from both blocks; the message names the self-protection gate, and that is a
+# property of the single-verdict axis, not a claim that the delivery gate is fine.
+R="$(mktemp -d)"; R="$(cd "$R" && pwd -P)"; K="$(dg_fixture "$R")"
+rm -f "$R/.claude/hooks/flaky-kit-self-protection-gate.sh" "$R/.claude/hooks/flaky-kit-delivery-gate.sh"
+[ "$(printf '%s' "$(_wiring_compute "$K" degraded)" | cut -f1)" = dangling ] \
+  && ok || bad "CONTROL: both gates missing must read dangling"
+[ "$(printf '%s' "$(_wiring_compute "$K" degraded)" | cut -f2)" = "the self-protection gate (Claude, PreToolUse)" ] \
+  && ok || bad "on a tie the label names the first block evaluated — a documented property of a one-verdict axis"
+rm -rf "$R"
+
+# _wiring_which asks _wiring_worse whether the answer CHANGED; it does not re-spell the ordering.
+_wiring_which partial dangling && ok || bad "_wiring_which must accept a strictly worse verdict"
+_wiring_which dangling partial && bad "_wiring_which must reject a better verdict" || ok
+_wiring_which dangling dangling && bad "_wiring_which must reject a tie — the first block evaluated keeps the label" || ok
+_wiring_which absent wired     && ok || bad "_wiring_which must accept the first real verdict over the absent seed"
+
+# Every wiring value's detail line must carry the label, not just the shared header — swapping the
+# header alone would leave three of four messages pointing at the wrong file.
+for w in dangling unregistered partial foreign; do
+  case "$(integrity_report hardened "$w" "the delivery gate (Claude, Stop)" 2>&1 >/dev/null)" in
+    *"the delivery gate (Claude, Stop)"*) ok ;;
+    *) bad "the $w detail line must name the gate it is about" ;;
+  esac
+done
+# ...and the two-argument form still says something true, because the whole test suite drives it.
+case "$(integrity_report hardened dangling 2>&1 >/dev/null)" in
+  *"a gate this kit registers"*) ok ;;
+  *) bad "integrity_report called with two arguments must still name something true" ;;
+esac
+
 # ...and the Cursor call must never ask for one. `_wr_restore_gate` tests the capability and nothing
 # else — the harness decision lives at the CALL SITE, which passes a literal 0 — so this is the
 # assertion that keeps that literal honest. A delivery-gate source is PLANTED under

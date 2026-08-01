@@ -314,7 +314,31 @@ _wiring_worse() {
   return 0
 }
 
-# integrity_wiring <kit_root> <tier> -> wired|unregistered|dangling|foreign|partial|absent
+# _wiring_which <acc> <new> -> 0 when <new> is STRICTLY worse than the accumulated verdict, i.e.
+# when it becomes the answer and its gate is the one the report must name.
+#
+# It asks `_wiring_worse`; it does not re-spell it. The ordering rule has exactly one implementation,
+# and this is the question "did that rule change the answer?" asked of it. Spelling the comparison
+# out at each of `_wiring_compute`'s three call sites is how the three copies drift.
+_wiring_which() {
+  [ "$(_wiring_worse "${1:-}" "${2:-}")" = "${2:-}" ] && [ "${1:-}" != "${2:-}" ]
+}
+
+# _wiring_compute <kit_root> <tier> -> "<verdict><TAB><the gate the verdict is about>"
+#
+# The whole axis, and the ONLY implementation of it — `integrity_wiring` below is a two-line wrapper
+# that drops the second field, so the public single-word contract is unchanged and nothing recomputes
+# anything. The second field exists because the axis merges three independent blocks into one word
+# and `integrity_report` then had to describe that word without knowing which block produced it: it
+# said "the kit's self-protection gate is not going to run as registered" and "a harness registration
+# points at a gate file that does not exist" for a DELIVERY-gate-only failure, verified, while the
+# self-protection gate was registered and present. A reader who follows that sentence opens the wrong
+# file; at `hardened`/`stale` the remedy it prints costs a password to carry out.
+#
+# It is a RETURN VALUE, not a variable this file sets as a side effect. A module-level global would
+# make the detector stateful across calls and would also trip this file's own "no $UPPERCASE is read
+# here" assertion if it were named the obvious way; a second function that recomputes "which" would
+# be the two-spellings-of-one-rule defect this file has retracted five times.
 #
 # The SECOND axis, deliberately separate from integrity_tier. A hardened install can be miswired and
 # a never-locked one can be wired perfectly; folding them into one vocabulary would repeat the
@@ -334,11 +358,12 @@ _wiring_worse() {
 # the record present, silence there is a false all-clear on a chmod or a truncation an agent can
 # perform. Pinned by fixture for all three record-present cases (deleted / unreadable / malformed),
 # because the distinction is load-bearing at the refusing tiers.
-integrity_wiring() {
-  local kit="${1:-}" tier="${2:-}" root f p t s slots cmd g gate got want out=absent wc wu ws
+_wiring_compute() {
+  local kit="${1:-}" tier="${2:-}" root f p t s slots cmd g gate got want one out=absent wc wu ws
+  local which="a gate this kit registers"
   root="$(integrity_project_root "$kit")"
-  [ -n "$root" ] || { echo absent; return 0; }
-  command -v jq >/dev/null 2>&1 || { echo absent; return 0; }
+  [ -n "$root" ] || { printf 'absent\t%s\n' "$which"; return 0; }
+  command -v jq >/dev/null 2>&1 || { printf 'absent\t%s\n' "$which"; return 0; }
 
   # Which harnesses this kit was installed for. EVERY variable is declared local above, loop
   # variables included: this file is sourced by thirteen entrypoints, and `t`, `p`, `cmd` and `out`
@@ -370,7 +395,9 @@ integrity_wiring() {
       # gate does not run for that tool call, and `dangling` is the honest answer for the set.
       if [ ! -f "$g" ] || [ -z "$gate" ]; then gate="$g"; fi
     done
-    out="$(_wiring_worse "$out" "$(_wiring_one "$gate" "$tier" "$got" "$want")")"
+    one="$(_wiring_one "$gate" "$tier" "$got" "$want")"
+    _wiring_which "$out" "$one" && which="the self-protection gate (Claude, PreToolUse)"
+    out="$(_wiring_worse "$out" "$one")"
   fi
 
   # Cursor: one file, the same three slots in that harness's spelling. `beforeShellExecution` is where
@@ -388,7 +415,9 @@ integrity_wiring() {
       g="$(_wiring_resolve "$cmd" "$root")"
       if [ ! -f "$g" ] || [ -z "$gate" ]; then gate="$g"; fi
     done
-    out="$(_wiring_worse "$out" "$(_wiring_one "$gate" "$tier" "$got" "$want")")"
+    one="$(_wiring_one "$gate" "$tier" "$got" "$want")"
+    _wiring_which "$out" "$one" && which="the self-protection gate (Cursor)"
+    out="$(_wiring_worse "$out" "$one")"
   fi
 
   # The delivery gate is a second, independent slot: its own file, its own event (Stop, not
@@ -408,10 +437,23 @@ integrity_wiring() {
     got=0; want=1; gate=''
     cmd="$(_wiring_cover "$slots" Stop '*')"
     if [ -n "$cmd" ]; then got=1; gate="$(_wiring_resolve "$cmd" "$root")"; fi
-    out="$(_wiring_worse "$out" "$(_wiring_one "$gate" "$tier" "$got" "$want")")"
+    one="$(_wiring_one "$gate" "$tier" "$got" "$want")"
+    _wiring_which "$out" "$one" && which="the delivery gate (Claude, Stop)"
+    out="$(_wiring_worse "$out" "$one")"
   fi
 
-  echo "$out"
+  printf '%s\t%s\n' "$out" "$which"
+  return 0
+}
+
+# integrity_wiring <kit_root> <tier> -> wired|unregistered|dangling|foreign|partial|absent
+#
+# The public single-word contract, unchanged since it was written and asserted in ~80 places. It is a
+# projection of `_wiring_compute` above, never a second computation of the same thing.
+integrity_wiring() {
+  local w
+  w="$(_wiring_compute "${1:-}" "${2:-}")"
+  printf '%s\n' "${w%%$'\t'*}"
   return 0
 }
 
@@ -467,8 +509,22 @@ integrity_tier() {
 # seam, it is a hole. The seam now runs through the function boundary instead of through the
 # environment, so nothing in production reads an override at all — the test suite greps this file
 # to make sure that variable never reappears here.
+# `$3` is the gate the wiring verdict is ABOUT — `_wiring_compute`'s second field, threaded through
+# `integrity_guard`. It defaults, so the two-argument form the test suite drives this with still
+# works and still says something true. Without it the messages named the self-protection gate for
+# every verdict: verified, a delivery-gate-only failure printed "the kit's self-protection gate is
+# not going to run as registered" and "a harness registration points at a gate file that does not
+# exist" while that gate was registered and its file present. The reader follows the sentence to the
+# wrong file, and at `hardened`/`stale` the remedy beside it costs a password.
+#
+# It stays a PURE function of its arguments. The label is computed by the axis, not looked up here —
+# a second derivation of "which gate" inside the reporter is how the two would come to disagree.
+#
+# The default is deliberately apostrophe-free. bash 3.2 — the macOS system shell this kit targets —
+# cannot parse a `'` inside a `${x:-word}` default even within double quotes ("unexpected EOF while
+# looking for matching `''"), so "the kit's gate" here is a syntax error, not a style choice.
 integrity_report() {
-  local tier="$1" wiring="$2" rc=0
+  local tier="$1" wiring="$2" which="${3:-a gate this kit registers}" rc=0
   case "$tier" in
     hardened) rc=0 ;;
     stale)
@@ -495,12 +551,12 @@ integrity_report() {
   case "$wiring" in
     wired|absent) : ;;
     *)
-      echo "integrity: WIRING $wiring — the kit's self-protection gate is not going to run as registered." >&2
+      echo "integrity: WIRING $wiring — $which is not going to run as registered." >&2
       case "$wiring" in
-        dangling)     echo "integrity: a harness registration points at a gate file that does not exist (a pre-relocation path, or the file was removed)." >&2 ;;
-        unregistered) echo "integrity: a harness settings file is required here but carries no registration for the kit's gate — or cannot be read or parsed, which the harness cannot load hooks from either." >&2 ;;
-        partial)      echo "integrity: the gate is registered for some of the tools it must cover but not all of them, so part of the surface is unguarded." >&2 ;;
-        foreign)      echo "integrity: the registered gate file is not root-owned while this tree is, so it is not the file this kit installed." >&2 ;;
+        dangling)     echo "integrity: a harness registration points at a gate file that does not exist — $which (a pre-relocation path, or the file was removed)." >&2 ;;
+        unregistered) echo "integrity: a harness settings file is required here but carries no registration for $which — or cannot be read or parsed, which the harness cannot load hooks from either." >&2 ;;
+        partial)      echo "integrity: $which is registered for some of the tools it must cover but not all of them, so part of the surface is unguarded." >&2 ;;
+        foreign)      echo "integrity: the registered file for $which is not root-owned while this tree is, so it is not the file this kit installed." >&2 ;;
       esac
       # The remedy has to be one the reader can actually execute. install.sh REFUSES with 75 whenever
       # $SKILL_DIR/core is root-owned — true at exactly the two tiers that refuse below — so "re-run
@@ -528,9 +584,13 @@ integrity_report() {
 # the INTEGRITY_FAKE_UID hole this kit removed, under a new name and past a name-specific test.
 # Recomputing costs at most three jq calls per entrypoint. That is the price of the check being real.
 integrity_guard() {
-  local kit="${1:-}" tier wiring
+  local kit="${1:-}" tier wiring w which
   tier="$(integrity_tier "$(integrity_owner_uid "$kit/core")" "$(integrity_state "$kit")")"
-  wiring="$(integrity_wiring "$kit" "$tier")"
+  # `_wiring_compute`, not `integrity_wiring`: the same one computation, read for both of its fields.
+  # Calling the public wrapper and then asking something else which gate it meant would be two
+  # derivations of one fact, free to disagree — the shape this file keeps retracting.
+  w="$(_wiring_compute "$kit" "$tier")"
+  wiring="${w%%$'\t'*}"; which="${w#*$'\t'}"
   # Repair first, report the PRE-repair verdict. `wiring_repair` may write the registration and the
   # gate file; at every tier that refuses — `hardened`, `stale`, `mismatch` — it writes NOTHING: a
   # registration written there would read as `wired` on the very next entrypoint (this recomputes
@@ -541,5 +601,5 @@ integrity_guard() {
   # this on ownership was tried once, missed `mismatch`, and is the mistake `core/README.md`'s
   # `_integrity` row repeated until this same correction.)
   wiring_repair "$kit" "$tier" "$wiring"
-  integrity_report "$tier" "$wiring"
+  integrity_report "$tier" "$wiring" "$which"
 }
