@@ -201,7 +201,7 @@ _wr_restore_gate() {
 
 # wiring_repair <kit_root> <tier> <wiring> -> narrates to stderr, always returns 0.
 wiring_repair() {
-  local kit="${1:-}" tier="${2:-}" wiring="${3:-}" root wc wu ws s did_c=0 did_u=0
+  local kit="${1:-}" tier="${2:-}" wiring="${3:-}" root wc wu ws s did_c=0 did_u=0 did_s=0
   case "$wiring" in
     unregistered|partial|dangling) : ;;
     *) return 0 ;;                      # wired, absent, foreign: nothing to do or nothing that is ours
@@ -258,15 +258,28 @@ wiring_repair() {
         else
           echo "integrity: the Claude gate registration merge failed — $s was not repaired." >&2
         fi
-        # The delivery gate (Stop) rides the SAME lock already held on this file and the SAME
-        # per-harness did_c flag: it is Claude's second control, not a third harness, so a repair
-        # that touches either one is reported the one way "the Claude gate registration has been
-        # rewritten" already means. Gated on `ws`, the capability the record actually requires — an
-        # install that predates the delivery gate (no `stop` token in core/.harness) must not gain a
-        # Stop registration it never asked for; that is the same no-brick rule `_wiring_want` encodes.
+        # The delivery gate (Stop) rides the SAME lock already held on this file, but tracks its OWN
+        # per-harness `did_s` flag rather than reusing `did_c`. `did_c` means specifically "the Claude
+        # SELF-PROTECTION gate registration was rewritten" — that is what its printed message says —
+        # and this is a second, independent control on the same harness, not a rename of the first.
+        # Reusing `did_c` re-opens exactly the defect Task 2's review split the original OR'd `did`
+        # into `did_c`/`did_u` to close: a failed self-protection merge alongside a SUCCEEDING Stop
+        # merge (a genuinely reachable combination — the two merges touch different keys, `.hooks.
+        # PreToolUse` vs `.hooks.Stop`, so one can error while the other lands) would set `did_c=1`
+        # from the Stop merge alone and announce "the Claude gate registration has been rewritten"
+        # while the self-protection gate — the thing that sentence is actually about — stays
+        # unregistered. Measured directly against the brief's own failing-PreToolUse fixture, with
+        # only the record changed to `claude stop`: `_wr_register` failed (PreToolUse stayed the
+        # string it was mutated to), `_wr_register_stop` succeeded (it never touches PreToolUse), and
+        # the shared-flag version printed "REPAIRED — the Claude gate registration has been
+        # rewritten." over a still-broken self-protection gate. `did_s` and its own message line below
+        # keep the two controls' success/failure reporting as independent as the merges themselves.
+        # Gated on `ws`, the capability the record actually requires — an install that predates the
+        # delivery gate (no `stop` token in core/.harness) must not gain a Stop registration it never
+        # asked for; that is the same no-brick rule `_wiring_want` encodes.
         if [ "$ws" = 1 ]; then
           if _wr_register_stop "$s" '"$CLAUDE_PROJECT_DIR/.claude/hooks/flaky-kit-delivery-gate.sh"'; then
-            did_c=1
+            did_s=1
           else
             echo "integrity: the Claude delivery gate registration merge failed — $s was not repaired." >&2
           fi
@@ -302,6 +315,7 @@ wiring_repair() {
   fi
 
   [ "$did_c" = 1 ] && echo "integrity: REPAIRED — the Claude gate registration has been rewritten." >&2
+  [ "$did_s" = 1 ] && echo "integrity: REPAIRED — the Claude delivery gate registration has been rewritten." >&2
   [ "$did_u" = 1 ] && echo "integrity: REPAIRED — the Cursor gate registration has been rewritten." >&2
   return 0
 }

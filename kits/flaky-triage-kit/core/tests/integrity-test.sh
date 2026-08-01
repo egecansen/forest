@@ -295,6 +295,10 @@ LOCAL_NAMES="kit tier root f p t s slots cmd g gate got want out wc wu ws h c u 
   mkdir -p "$W/leakrec/core"; printf 'claude\n' > "$W/leakrec/core/.harness"
   _wiring_want          "$W/leakrec" "$W/a"                            >/dev/null
   _wiring_slots         "$W/a/.claude/settings.json"                   >/dev/null
+  # fix round 1, Minor 5: _wiring_slots_stop is reached by integrity_wiring only through $( ), the
+  # same as every other helper in this list — its own direct call belongs here for the same reason,
+  # regardless of it declaring no locals today (the rule is not conditioned on that).
+  _wiring_slots_stop    "$W/a/.claude/settings.json"                   >/dev/null
   _wiring_cover         "$(printf 'PreToolUse:Write\tsome-command')" PreToolUse Write >/dev/null
   _wiring_resolve       'x/y.sh' "$W/a"                                >/dev/null
   _wiring_one           '' degraded 0 3                                >/dev/null
@@ -1573,6 +1577,100 @@ for T in hardened stale mismatch; do
   cmp -s "$R/before.json" "$P/.claude/settings.json" && ok || bad "$T: a refusing tier must not write the Stop slot either"
   rm -rf "$R"
 done
+
+# --- Fix round 1 -----------------------------------------------------------------------------
+
+# Important 1: did_c must not be shared between the self-protection registration and the delivery
+# gate registration. They are two independent controls on the same file; a failure in one and a
+# success in the other must be reported by name, not folded into one shared flag — the exact defect
+# Task 2's review split the original OR'd `did` into `did_c`/`did_u` to close, now reopened one
+# control over. `.hooks.PreToolUse = "not-an-array"` breaks ONLY the self-protection merge (jq
+# errors on `string and array cannot be added`); `_wr_register_stop` never touches `.hooks.PreToolUse`
+# at all, so it succeeds independently in the SAME call. Reproduced against the pre-fix code before
+# writing this: the shared-`did_c` version printed "REPAIRED — the Claude gate registration has been
+# rewritten." over a settings file whose PreToolUse was still the broken string.
+R="$(mktemp -d)"; W="$(wire_fixture "$R")"
+printf 'claude stop\n' > "$W/core/.harness"
+jq '.hooks.PreToolUse = "not-an-array"' "$R/.claude/settings.json" > "$R/s" && mv "$R/s" "$R/.claude/settings.json"
+OUT="$(wiring_repair "$W" degraded unregistered 2>&1 >/dev/null)"
+case "$OUT" in *"Claude gate registration merge failed"*) ok ;; *) bad "the self-protection merge failure must still be named — got: $OUT" ;; esac
+case "$OUT" in
+  *"REPAIRED — the Claude gate registration has been rewritten."*)
+    bad "the self-protection gate must NOT be announced REPAIRED when its own merge failed, even though the Stop merge succeeded in the same call — got: $OUT" ;;
+  *) ok ;;
+esac
+case "$OUT" in *"REPAIRED — the Claude delivery gate registration has been rewritten."*) ok ;; *) bad "a succeeding Stop merge alongside a failing self-protection merge must still be announced BY ITS OWN NAME — got: $OUT" ;; esac
+[ "$(jq -r '.hooks.PreToolUse | type' "$R/.claude/settings.json")" = string ] \
+  && ok || bad "the self-protection gate's PreToolUse merge must genuinely still be broken (control for this fixture)"
+[ "$(jq -r '[.hooks.Stop[]?|(.hooks//[])[]?|.command|select(test("flaky-kit-delivery-gate"))]|length' "$R/.claude/settings.json")" = 1 ] \
+  && ok || bad "the Stop registration must have landed despite the self-protection merge failing in the same call"
+rm -rf "$R"
+
+# Important 2: the third field on 'all'/'both' (install.sh's --harness DEFAULT — the record a real
+# install actually writes most often) and the deliberately-hardcoded 'agents' zero. Both untested
+# before this round: mutating the `all|both` arm to a hardcoded "1 1 0" and the `agents` arm to
+# "0 0 $s" left the whole suite green, because no fixture ever wrote a two-token record on either
+# arm. Driven directly through `_wiring_want`, the same way the K12/K13/K14 arm-pinning fixtures
+# above already are.
+R="$(mktemp -d)"; K="$(wire_fixture "$R/all-stop")"
+printf 'all stop\n' > "$K/core/.harness"
+[ "$(_wiring_want "$K" "$R/all-stop")" = "1 1 1" ] \
+  && ok || bad "an 'all stop' record — install.sh's DEFAULT once it ships the delivery gate — must require claude+cursor+stop (got $(_wiring_want "$K" "$R/all-stop"))"
+K2="$(wire_fixture "$R/agents-stop")"
+printf 'agents stop\n' > "$K2/core/.harness"
+[ "$(_wiring_want "$K2" "$R/agents-stop")" = "0 0 0" ] \
+  && ok || bad "an 'agents stop' record must still force the third field to 0 — an AGENTS.md-only install has no Claude Stop hook to register regardless of what a stray token claims (got $(_wiring_want "$K2" "$R/agents-stop"))"
+rm -rf "$R"
+
+# Minor 1: the capability token must be matched EXACTLY, not as a substring. `case "$h" in *" stop"*)`
+# read `claude stopwatch` as carrying the `stop` capability too — the same proxy-standing-in-for-a-
+# property shape this kit has retracted repeatedly. Fixed by iterating $h's word-split tokens and
+# comparing each one for exact equality.
+R="$(mktemp -d)"; K="$(wire_fixture "$R/sw")"
+printf 'claude stopwatch\n' > "$K/core/.harness"
+[ "$(_wiring_want "$K" "$R/sw")" = "1 0 0" ] \
+  && ok || bad "a trailing token that merely CONTAINS 'stop' ('stopwatch') must not satisfy the capability check — exact token match only (got $(_wiring_want "$K" "$R/sw"))"
+rm -rf "$R"
+
+# Minor 2: 'cursor stop' must not become an unrepairable wedge. The delivery gate is a CLAUDE
+# control (Claude Code's Stop event; Cursor has no equivalent), so a 'cursor stop' record names a
+# capability that harness can never satisfy — before this fix it required the Stop slot anyway (the
+# Claude settings files are examined regardless of which harness the record selects) with no code
+# path that could ever register it, refusing every entrypoint at the hardened tier forever. The
+# 'cursor' arm now forces the third field to 0, the same way 'agents' already did.
+R="$(mktemp -d)"; K="$(wire_fixture "$R/cs")"
+printf 'cursor stop\n' > "$K/core/.harness"
+[ "$(_wiring_want "$K" "$R/cs")" = "0 1 0" ] \
+  && ok || bad "a 'cursor stop' record must force the third field to 0 — Cursor has no Stop event, so the capability can never be satisfied there (got $(_wiring_want "$K" "$R/cs"))"
+rm -rf "$R"
+
+# Important 3: _wiring_slots must never be taught the delivery gate's filename. Enforced only by
+# construction today (a separate emitter, `_wiring_slots_stop`, with its own regex) — this pins the
+# BEHAVIOUR that construction is meant to guarantee, so folding the filename into `_wiring_slots`'s
+# `gate` predicate (a one-token edit a future maintainer could plausibly make as "deduplication")
+# reddens this assertion instead of shipping silently. A PreToolUse registration of the DELIVERY gate
+# must not satisfy the self-protection gate's Write/Edit/Bash slots — if it did, a project could
+# register the wrong script under PreToolUse and still read `wired` for the self-protection axis.
+R="$(mktemp -d)"; W="$(wire_fixture "$R")"
+jq --arg c '"$CLAUDE_PROJECT_DIR/.claude/hooks/flaky-kit-delivery-gate.sh"' \
+   '.hooks.PreToolUse |= map(.hooks |= map(.command = $c))' \
+   "$R/.claude/settings.json" > "$R/s" && mv "$R/s" "$R/.claude/settings.json"
+[ "$(integrity_wiring "$W" degraded)" = unregistered ] \
+  && ok || bad "a PreToolUse registration of the DELIVERY gate must not satisfy the self-protection gate's slots — _wiring_slots must not have learned its filename (got $(integrity_wiring "$W" degraded))"
+rm -rf "$R"
+
+# Minor 4: the Stop merge must not duplicate across repeated repairs. wiring_repair runs on every
+# entrypoint, so a non-idempotent merge would grow settings.json without bound and fire the delivery
+# gate N times per session. Mirrors the sibling PreToolUse duplicate-guard assertion above (search
+# "must not duplicate a matcher"), which exists for the identical reason on the other gate.
+R="$(mktemp -d)"; W="$(wire_fixture "$R")"; P="$(dirname "$(dirname "$(dirname "$W")")")"
+printf 'claude stop\n' > "$W/core/.harness"
+wiring_repair "$W" degraded partial >/dev/null 2>&1
+wiring_repair "$W" degraded partial >/dev/null 2>&1
+wiring_repair "$W" degraded partial >/dev/null 2>&1
+[ "$(jq -r '[.hooks.Stop[]?|(.hooks//[])[]?|.command|select(test("flaky-kit-delivery-gate"))]|length' "$P/.claude/settings.json")" = 1 ] \
+  && ok || bad "three repeated repairs must not duplicate the Stop registration"
+rm -rf "$R"
 
 echo "integrity-test: $pass passed, $fail failed"
 [ "$fail" -eq 0 ]

@@ -114,19 +114,35 @@ integrity_project_root() {
 # that predates the delivery gate, and must go on requiring exactly what it required before. That is
 # the whole no-brick guarantee: force this field to `1` unconditionally and every pre-delivery-gate
 # install starts failing an axis it was never asked to satisfy. Scanned from the WHOLE record (not
-# just tokens after the first) because it is independent of which harness was selected — `s=0` is
-# the only value install.sh's own writer can currently produce here, but the parse does not assume
-# that; the `agents` arm below still forces it to 0 regardless, since an AGENTS.md-only install has
-# no Claude Stop hook to register at all.
+# just tokens after the first) because it is independent of which harness was selected.
+#
+# Two arms below OVERRIDE the parsed `$tok` value rather than trust it, for two different reasons:
+#   - `agents` forces it to 0 unconditionally: an AGENTS.md-only install has no Claude Stop hook to
+#     register at all, so the capability cannot apply regardless of what the record says.
+#   - `cursor` forces it to 0 unconditionally too (fix round 1, Minor 2): the delivery gate is a
+#     CLAUDE control — it runs at Claude Code's `Stop` event, which Cursor has no equivalent of — so
+#     a `cursor stop` record names a capability that harness can never satisfy. Before this fix that
+#     record required the Stop slot anyway (the Claude settings files, examined regardless of which
+#     harness the record selects), and no code path can ever register it — an unrepairable wedge that
+#     refuses every entrypoint at the hardened tier forever, with no remedy the reader can carry out.
+#     `install.sh` itself never writes this combination (`stop` is appended only in the `do_claude=1`
+#     branch), so `s` being computed-but-discarded here, same as `agents`, is what keeps a
+#     hand-edited or future record from reopening that wedge.
+#   Tokens after the first genuinely matter (the `stop` capability lives there), which is why an
+# EXACT token match is required, not a substring one: a bare `case "$h" in *" stop"*)` reads
+# `claude stopwatch` as carrying the `stop` capability too, the same proxy-standing-in-for-a-property
+# shape this kit has retracted repeatedly (see `_wiring_slots`'s header, four counted instances
+# before this one). Iterating `$h`'s own word-split tokens and comparing each one for exact equality
+# has no such false-positive.
 _wiring_want() {
   local kit="${1:-}" root="${2:-}" h first c=0 u=0 s=0 tok
   h="$(cat "$kit/core/.harness" 2>/dev/null)"
   first="${h%% *}"
-  case "$h" in *" stop"*|*" stop") s=1 ;; esac
+  for tok in $h; do case "$tok" in stop) s=1 ;; esac; done
   case "$first" in
     all|both) echo "1 1 $s"; return 0 ;;
     claude)   echo "1 0 $s"; return 0 ;;
-    cursor)   echo "0 1 $s"; return 0 ;;
+    cursor)   echo "0 1 0"; return 0 ;;   # Cursor has no Stop event; the capability cannot apply here
     agents)   echo "0 0 0"; return 0 ;;
   esac
   { [ -r "$root/.claude/settings.json" ] || [ -r "$root/.claude/settings.local.json" ]; } && c=1
