@@ -1485,10 +1485,66 @@ _wiring_which absent wired     && ok || bad "_wiring_which must accept the first
 
 # Every wiring value's detail line must carry the label, not just the shared header — swapping the
 # header alone would leave three of four messages pointing at the wrong file.
+#
+# READ AS A WHOLE OUTPUT, this loop is satisfied by the HEADER alone: the header is printed for every
+# wiring value and already carries the label, so a detail line naming the wrong gate — or a remedy
+# paragraph naming one — passes it. That is exactly how residual R1 survived a full review. The two
+# loops below read the two lines this one cannot see, each grepped out on its own.
 for w in dangling unregistered partial foreign; do
   case "$(integrity_report hardened "$w" "the delivery gate (Claude, Stop)" 2>&1 >/dev/null)" in
     *"the delivery gate (Claude, Stop)"*) ok ;;
     *) bad "the $w detail line must name the gate it is about" ;;
+  esac
+done
+
+# --- residual R1: the BODY, line by line, not the output as one blob -----------------------------
+# The DETAIL line on its own — the header is dropped by the grep, so this cannot be satisfied by it.
+for w in dangling unregistered partial foreign; do
+  DLINE="$(integrity_report hardened "$w" "the delivery gate (Claude, Stop)" 2>&1 >/dev/null | grep -v 'WIRING' | grep -v '^integrity: refusing' | grep -v '^integrity: to repair')"
+  [ -n "$DLINE" ] && ok || bad "CONTROL: $w must print a detail line distinct from the header, or the assertion below reads an empty string"
+  case "$DLINE" in
+    *"the delivery gate (Claude, Stop)"*) ok ;;
+    *) bad "the $w detail line must name the gate it is about, on its own and not via the header — got: $DLINE" ;;
+  esac
+done
+
+# The REMEDY paragraph a reader at a refusing tier actually acts on. `$which` was threaded through the
+# header and all four detail lines one wave earlier and stopped here, so this paragraph went on
+# claiming that "the gate also carries the out-of-tree shadow record, so losing it means losing the
+# only detector for a replaced kit tree" — a property of the SELF-PROTECTION gate
+# (.claude/hooks/.flaky-kit-expect) and false of the delivery gate, printed directly under a header
+# naming the delivery gate. Verified before this block existed. It is the one paragraph whose remedy
+# costs the sudo password to carry out.
+#
+# BOTH refusing tiers and every wiring value, because the paragraph is one arm shared by all eight
+# combinations; and grepped out ALONE, so neither the header nor the detail line can satisfy it.
+for T in hardened stale; do
+  for w in dangling unregistered partial foreign; do
+    RLINE="$(integrity_report "$T" "$w" "the delivery gate (Claude, Stop)" 2>&1 >/dev/null | grep '^integrity: refusing')"
+    [ -n "$RLINE" ] \
+      && ok || bad "CONTROL: $T/$w must actually print a refusing paragraph, or the two assertions below read an empty string"
+    case "$RLINE" in
+      *"the delivery gate (Claude, Stop)"*) ok ;;
+      *) bad "$T/$w: the remedy paragraph must name the gate it is about — got: $RLINE" ;;
+    esac
+    case "$RLINE" in
+      *"shadow record"*|*"flaky-kit-expect"*)
+        bad "$T/$w: the remedy must not tell a delivery-gate reader about the self-protection gate's out-of-tree shadow record — the delivery gate carries none — got: $RLINE" ;;
+      *) ok ;;
+    esac
+  done
+done
+# ...and the mirror, or "must name the gate" is satisfied by a paragraph that says "delivery gate"
+# unconditionally: the two self-protection labels must come back in the same paragraph.
+for L in "the self-protection gate (Claude, PreToolUse)" "the self-protection gate (Cursor)"; do
+  RLINE="$(integrity_report hardened dangling "$L" 2>&1 >/dev/null | grep '^integrity: refusing')"
+  case "$RLINE" in
+    *"$L"*) ok ;;
+    *) bad "the remedy paragraph must name '$L' when that is the gate the verdict is about — got: $RLINE" ;;
+  esac
+  case "$RLINE" in
+    *"delivery gate"*) bad "a self-protection failure's remedy must not name the delivery gate — got: $RLINE" ;;
+    *) ok ;;
   esac
 done
 # ...and the two-argument form still says something true, because the whole test suite drives it.

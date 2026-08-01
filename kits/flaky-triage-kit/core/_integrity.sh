@@ -565,9 +565,26 @@ integrity_report() {
       # ones, where the repair genuinely costs the password. Printing an instruction that cannot be
       # carried out is how a wedged kit stays wedged, and `dangling` is the defect this axis exists
       # to catch.
+      #
+      # The refusing paragraph carries `$which` for the same reason the four detail lines above do,
+      # and it is the LAST sentence here to get it. It used to say "the gate also carries the
+      # out-of-tree shadow record, so losing it means losing the only detector for a replaced kit
+      # tree" — which is a property of the SELF-PROTECTION gate (`.claude/hooks/.flaky-kit-expect`,
+      # read by both harnesses' copies of it) and simply false of the delivery gate, which carries no
+      # such record. Verified: `integrity_report hardened dangling "the delivery gate (Claude, Stop)"`
+      # printed a header and two details naming the delivery gate and then that sentence about a
+      # different one. It is the one paragraph a reader at a refusing tier acts on, and the remedy
+      # beside it costs the password.
+      #
+      # ONE sentence, true of whichever gate `$which` names, rather than a `case` over the label. The
+      # label is computed by the axis; branching on its TEXT here would be a second derivation of
+      # "which gate", free to drift from the first — the shape this file has retracted five times —
+      # and it is the same resolution `wiring_repair`'s own refusal message reached for the same
+      # reason ("one sentence has to be true of all three"). What each gate specifically protects is
+      # the detail line's business, and the detail line already names it.
       case "$tier" in
         hardened|stale)
-          echo "integrity: refusing — the tree is root-owned, and the gate also carries the out-of-tree shadow record, so losing it means losing the only detector for a replaced kit tree. That is weaker than the protection actually in place." >&2
+          echo "integrity: refusing — the tree is root-owned, so this run would report the hardened tier while $which is not going to run at all. That is weaker than the protection the tier claims, and nothing short of the password can close the gap." >&2
           echo "integrity: to repair, unlock FIRST — the installer refuses to overwrite a root-owned tree: HEKTOR_FLAKYKIT_UNLOCK=1 core/lock-kit.sh unlock, then re-run the kit installer against this project, then core/lock-kit.sh lock." >&2
           rc=76 ;;
         *)
