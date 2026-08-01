@@ -41,6 +41,17 @@ PROJ="$(cd "$PROJ" && pwd)"
 KIT=".claude/skills/hektor-flaky-triage"
 SKILL_DIR="$PROJ/$KIT"
 
+# Set by the Claude block's Stop merge when it does not land, read by the closing block at the very
+# bottom. Declared HERE, at top level, rather than inside that block: `set -u` is on, and the closing
+# block runs for every --harness value including the ones that never enter the Claude arm.
+#
+# The install RUNS TO COMPLETION either way and only the ending changes. A partial install that
+# aborts in the middle is worse than one that finishes and reports: the engine, the skill, the
+# self-protection gate and the other harnesses' registrations are all independent of this one merge,
+# and leaving them half-written would turn one repairable failure into several.
+stop_failed=0
+stop_failed_file=""
+
 # --- engine + skill: the canonical home for EVERY harness (the gate's surface + the AGENTS.md/rule
 #     pointers all reference this path; the engine runs from here in any terminal). Always installed. ---
 mkdir -p "$SKILL_DIR/core"
@@ -241,6 +252,14 @@ if [ "$do_claude" = 1 ]; then
   else
     echo "install: Claude Code wired (.claude/settings.json: PreToolUse Write|Edit + Bash)"
     echo "install: WARN the delivery gate's Stop registration did NOT land — $S could not be merged (most likely .hooks.Stop is present but is not an array). core/.harness records the 'stop' capability, so the wiring axis will report 'unregistered' from now on, and after 'core/lock-kit.sh lock' that refuses EVERY entrypoint with 76. Fix .hooks.Stop in that file (it must be an array) and re-run this installer." >&2
+    # A WARN on stderr is not enough on its own: the script went on to exit 0, print "install: done"
+    # and name "run core/lock-kit.sh lock" as step 2. A scripted or CI install could not tell this
+    # state from a clean one, and a reader who follows step 2 converts a warning into rc 76 on all
+    # thirteen entrypoints — at which point the remedy printed there ("re-run the kit installer") is
+    # itself refused with 75 on the now-root-owned tree, so the real repair becomes unlock
+    # (password) -> fix -> reinstall -> relock. The closing block reads these two.
+    stop_failed=1
+    stop_failed_file="$S"
   fi
 fi
 
@@ -300,6 +319,31 @@ EOF
   fi
 fi
 
+# --- the ending, and there are two of them ------------------------------------------------------
+# Everything above has already run. What differs here is what the script CLAIMS and what it hands
+# back to whoever called it: the pack-level installer branches on this rc and warns by kit name, and
+# `hektor-triage-kit install` execs this script, so the rc is the CLI's own.
+if [ "$stop_failed" = 1 ]; then
+  cat >&2 <<EOF
+
+install: INCOMPLETE ($HARNESS) in $PROJ
+The engine, the skill, the self-protection gate and every other registration ARE in place. The
+delivery gate's Stop registration is NOT (the WARN above says why), and it is the control that
+enforces I11 at end-of-session.
+DO NOT run '$KIT/core/lock-kit.sh lock' yet. $KIT/core/.harness records the 'stop' capability
+deliberately — dropping it would make the wiring axis stop checking the slot, which is a silent
+downgrade — so the axis reads 'unregistered' from now on. That is a warning while the tree is yours
+and rc 76 from all thirteen entrypoints once it is root-owned, where the remedy it prints (re-run
+this installer) is itself refused with 75. Locking now turns one repairable failure into
+unlock (password) -> fix -> reinstall -> relock.
+repair, in this order:
+  1) fix .hooks.Stop in $stop_failed_file  (it must be an ARRAY)
+  2) re-run this installer against this project
+  3) only then  $KIT/core/lock-kit.sh lock
+EOF
+  exit 74
+fi
+
 cat >&2 <<EOF
 
 install: done ($HARNESS) in $PROJ
@@ -314,3 +358,4 @@ EOF
 echo "install: then HARDEN the kit so its safety surface cannot be edited from agent context:" >&2
 echo "install:   $SKILL_DIR/core/lock-kit.sh lock          # asks for your password (chowns core/ to root)" >&2
 echo "install: WITHOUT that step nothing is protected — a fresh install has no lock state and its files stay plainly writable by you, and therefore by any agent running as you. It is not read-only; 'degraded' (read-only but reversible with one chmod) is what you get on a machine where lock ran but sudo was unavailable." >&2
+exit 0

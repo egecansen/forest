@@ -141,7 +141,7 @@ cat > "$SHIM/mktemp" <<'SH'
 case "$#" in 0) exec /usr/bin/mktemp "$MKTEMP_DIR/tmp.XXXXXXXX" ;; *) exec /usr/bin/mktemp "$@" ;; esac
 SH
 chmod +x "$SHIM/mktemp"
-OUT="$(MKTEMP_DIR="$TD" PATH="$SHIM:$PATH" "$KITSRC/install.sh" --harness claude --project "$P3" 2>&1)"
+OUT="$(MKTEMP_DIR="$TD" PATH="$SHIM:$PATH" "$KITSRC/install.sh" --harness claude --project "$P3" 2>&1)"; RC3=$?
 case "$OUT" in *"Stop)"*) bad "the installer must not claim the Stop registration landed when the merge failed — got: $OUT" ;; *) ok ;; esac
 case "$OUT" in *"Stop registration did NOT land"*) ok ;; *) bad "a failed Stop merge must say so — got: $OUT" ;; esac
 cmp -s "$P3/before.json" "$S3" && ok || bad "a failed Stop merge must leave the settings file exactly as it found it"
@@ -154,12 +154,41 @@ cmp -s "$P3/before.json" "$S3" && ok || bad "a failed Stop merge must leave the 
 # stop checking the Stop slot and nothing would ever say the delivery gate is not running.
 [ "$(cat "$P3/.claude/skills/hektor-flaky-triage/core/.harness")" = "claude stop" ] \
   && ok || bad "a failed Stop merge must not quietly drop the capability the install was asked for"
+
+# --- residual R3: the WARN was the whole of the loudness, and the script still exited 0 -----------
+# It went on to print "install: done" and to name "run core/lock-kit.sh lock" as step 2. A scripted
+# or CI install could not tell this state from a clean one; a reader who follows step 2 converts a
+# warning into rc 76 on all thirteen entrypoints, at which point the remedy printed there (re-run the
+# installer) is itself refused with 75 on the now-root-owned tree, and the real repair becomes
+# unlock (password) -> fix -> reinstall -> relock. Three separate properties, because "it exits
+# non-zero" alone would pass against a version that exits 74 AFTER telling the reader to lock.
+[ "$RC3" = 74 ] && ok || bad "a failed Stop merge must exit non-zero (74) so a scripted install can see it — got rc $RC3"
+case "$OUT" in *"install: done"*) bad "a failed Stop merge must not print 'install: done' as if the install were clean — got: $OUT" ;; *) ok ;; esac
+case "$OUT" in *"HARDEN (do not skip"*) bad "a failed Stop merge must not print the HARDEN step — following it is what converts this into the rc-76 state — got: $OUT" ;; *) ok ;; esac
+case "$OUT" in *"INCOMPLETE"*) ok ;; *) bad "a failed Stop merge must SAY the install is incomplete, not merely return a number — got: $OUT" ;; esac
+case "$OUT" in *"DO NOT run"*) ok ;; *) bad "the incomplete ending must tell the reader not to lock yet — that is the step that makes it expensive — got: $OUT" ;; esac
+# ...and it must FINISH the install before saying so. A partial install that aborts mid-way is worse
+# than one that completes and reports: these four are all written AFTER the Stop merge in the script,
+# or are the things a reader would lose if it bailed at the merge.
+[ -x "$P3/.claude/hooks/flaky-kit-self-protection-gate.sh" ] \
+  && ok || bad "the failing path must still install the self-protection gate — the merge that failed is a different control"
+[ -x "$P3/.claude/hooks/flaky-kit-delivery-gate.sh" ] \
+  && ok || bad "the failing path must still install the delivery gate FILE — only its registration failed"
+[ "$(jq '[.hooks.PreToolUse[]?.hooks[]?.command] | map(select(contains("flaky-kit"))) | length' "$S3")" = 2 ] \
+  && ok || bad "the failing path must still land the PreToolUse registrations — they are a separate merge on a separate key"
+[ -f "$P3/.claude/skills/hektor-flaky-triage/core/gate-src/claude/flaky-kit-delivery-gate.sh" ] \
+  && ok || bad "the failing path must still vendor the restore source — the repair path depends on it"
+
 # ...and the control that keeps all of the above from passing against an installer that never claims
-# Stop at all: the healthy path still says it.
-case "$("$KITSRC/install.sh" --harness claude --project "$P" 2>&1)" in
+# Stop at all, or that exits 74 on every install: the healthy path still says it, and still exits 0.
+OUTH="$("$KITSRC/install.sh" --harness claude --project "$P" 2>&1)"; RCH=$?
+case "$OUTH" in
   *"PreToolUse Write|Edit + Bash, Stop)"*) ok ;;
   *) bad "CONTROL: a healthy install must still report the Stop registration" ;;
 esac
+[ "$RCH" = 0 ] && ok || bad "CONTROL: a healthy install must still exit 0 — got rc $RCH"
+case "$OUTH" in *"install: done"*) ok ;; *) bad "CONTROL: a healthy install must still print 'install: done'" ;; esac
+case "$OUTH" in *"INCOMPLETE"*) bad "CONTROL: a healthy install must not call itself incomplete" ;; *) ok ;; esac
 
 # --- carried forward from the gate's own task: the audit-lib fallback is a SILENT no-op ------------
 # (`hektor_audit() { :; }`) whenever lib/audit.sh is not beside the installed gate, which would turn

@@ -180,7 +180,14 @@ for kit_installer in "$HERE"/kits/*/install.sh; do
   else
     # Never fail the whole pack install because one kit's installer did — the pack's
     # skills/hooks are already in place and useful on their own. Say so loudly instead.
-    echo "install: WARN kit '$kit_name' installer FAILED (exit $kit_rc) — pack assets are installed, that kit is NOT; re-run $kit_installer to see why" >&2
+    #
+    # "did not install cleanly", NOT "is NOT installed". A kit installer's non-zero exit no longer
+    # implies nothing landed: flaky-triage-kit finishes its whole install and THEN exits 74 when the
+    # delivery gate's Stop registration could not be merged, precisely so a partial install is not
+    # left half-written. Telling the reader that kit is absent would send them looking for files that
+    # are there and away from the one message that says what actually failed — which its own output,
+    # already on this terminal, states in full.
+    echo "install: WARN kit '$kit_name' installer did NOT finish cleanly (exit $kit_rc) — pack assets are installed; read that kit's own output above for what it could not do, or re-run $kit_installer to see it again" >&2
   fi
 done
 

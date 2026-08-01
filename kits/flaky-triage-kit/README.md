@@ -39,6 +39,17 @@ Scope it with `--harness claude|cursor|agents|both` if you want only some. It's 
 (re-runnable, no duplicate registrations, preserves existing settings/AGENTS.md). **Restart Claude
 Code / Cursor** so the hooks load; the engine works from a terminal immediately.
 
+**Check the exit status if you script it.** `0` is a clean install and the only status that ends with
+`install: done`. `74` means the install FINISHED but the delivery gate's `Stop` registration could not
+be merged into `.claude/settings.json` (almost always: `.hooks.Stop` exists and is not an array) — the
+engine, the skill and every other registration are in place, the ending says `install: INCOMPLETE`, and
+it deliberately does **not** print the "harden next" step. Do not run `core/lock-kit.sh lock` in that
+state: `core/.harness` still records the `stop` capability on purpose, so the wiring axis reads
+`unregistered`, which is a warning while the tree is yours and **rc 76 from every entrypoint** once it
+is root-owned — where the remedy it prints (re-run the installer) is itself refused with `75`. Fix
+`.hooks.Stop`, re-run the installer, *then* lock. (`64` bad arguments, `66` no such project, `69` no
+`jq`, `75` the target kit is already root-owned — unlock first.)
+
 ## Configure (the only edit needed for a same-infra team)
 Edit `<repo>/.claude/skills/hektor-flaky-triage/core/config.json`:
 - `source_roots` — your test/page packages (where `apply` is allowed to write). **Required.**
