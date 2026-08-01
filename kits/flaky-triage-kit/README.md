@@ -134,8 +134,9 @@ Without `sudo` it **degrades** to a chmod-only read-only bit the same user (and 
 running as them) can reverse — friction, not a wall. `lock-kit.sh status` names the tier actually in
 effect and prints the OWNER of every surface path, which is the only way to spot a `chown` that applied
 to some paths and not others. **Read `core/lock-kit.sh`'s header before calling a kit protected:** it
-is the authoritative list of what the hardened tier does not cover, and it currently has thirteen entries.
-All thirteen, so this page does not under-describe the tier the way it used to:
+is the authoritative, living list of what the hardened tier does not cover — that file, not this page,
+is the one to trust for the current count. What follows is a copy for this page's convenience, kept in
+step by hand and not a substitute for the header; if the two ever disagree, the header wins:
 
 1. **Shadowing** — `mv` the kit dir aside and replace it. Detected via the out-of-tree record, not prevented.
 2. **That record is itself deletable** — its directory must stay user-owned, so the same actor can erase the expectation.

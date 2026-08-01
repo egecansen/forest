@@ -12,6 +12,7 @@ layer and the enforcement gate are harness-specific, and both degrade gracefully
 | **MCP** (qagent, Jira — advisory) | ✅ | ✅ | ✅ if the harness speaks MCP |
 | **Gate — block a Bash *write* to the kit** | PreToolUse:Bash hook | `beforeShellExecution` hook (`.cursor/hooks/flaky-kit-self-protection-gate.sh`) | only if the harness has a pre-shell hook |
 | **Gate — block an *edit* of the kit** | PreToolUse:Write\|Edit hook | best-effort `preToolUse` Write\|Edit (Cursor has no reliable pre-edit block) | usually none |
+| **Gate — block an unproven session end (I11 + hedge-scan)** | Stop hook (`adapters/claude/flaky-kit-delivery-gate.sh`; details: `core/README.md`'s `delivery-gate` row, this kit's `README.md`) | none — no Stop event | none — needs a session-end hook the harness would have to provide |
 | **Wall — hardened tier stops ALL writers**\* | `core/lock-kit.sh lock` | `core/lock-kit.sh lock` | `core/lock-kit.sh lock` ← **the universal floor** |
 
 \* Only at the **hardened** tier (`core/**` + the kit root chown'd to root by `lock` — reopening needs a
@@ -80,6 +81,9 @@ What it sets up, by hand if you prefer:
   Other harnesses have their own model selection — apply the same *principle* with their mechanism.
 - **PreToolUse `deny` enforcement** is honored by Claude Code (verified); Cursor blocks via `cc_deny`;
   bare harnesses rely on `lock-kit.sh`. Don't assume the in-process gate is a wall outside Claude/Cursor.
+- **The delivery gate** (Stop hook enforcing I11 + hedge-scan) has nothing to port to: it needs a
+  session-end event, and neither Cursor nor a bare terminal harness has one. See `core/lock-kit.sh`'s
+  residual #14, `core/README.md`'s `delivery-gate` row, and this kit's `README.md`.
 
 ## Distribution note
 

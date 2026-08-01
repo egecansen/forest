@@ -31,7 +31,8 @@ and calls these; it MUST NOT mutate state except through them (kernel P2).
 
 I1 ingest · I2 rerun · I3 apply · I4 (skill, evidence-gated) · I5 ledger ·
 I6 cluster · I7 summary · I8 (skill — never commit/ticket/disable) · I9 rerun + gate ·
-I10 apply · I11 rerun (per-test completeness) + gate (the accept/reject decision).
+I10 apply · I11 rerun (per-test completeness) + gate (the accept/reject decision) + ledger
+(`validate --final` gates session end) + `delivery-gate` (the same check, enforced at Stop).
 P3/P5/P6 config · P7 ledger · P4 `<project>/.claude/hooks/flaky-kit-self-protection-gate.sh`
 (**outside** the kit tree, so renaming the tree cannot take its own detector along) + `lock-kit` /
 `_integrity`.
