@@ -281,7 +281,16 @@ K7="$(wire_fixture "$W/g")"; rm -f "$W/g/.cursor/hooks/flaky-kit-self-protection
 # the subshell's pass/fail exit status crosses back out, and `ok`/`bad` (which touch this file's
 # pass/fail counters) are called out here in the main shell, not inside the subshell where their
 # effect would be lost when it exits.
+# `_wiring_repair.sh` is swept by the SAME probe, not a second one, and its names are appended to the
+# same list (whole-branch review, locals-leak probe): it is sourced by `_integrity.sh` itself, so its
+# functions are in the sourcing shell's namespace for exactly the thirteen entrypoints this rule
+# protects, and a leak from either file lands in the same place. Probed directly and found clean when
+# this was written — this closes a MISSING TEST, not a live defect — but `wiring_repair` gained locals
+# in this same wave (`want_stop`, `did`, `rcs`), which is precisely when an unprobed file starts
+# leaking. Every `_wr_*` helper gets its own call for the reason the block below already states about
+# `_wiring_*`: reached only through the composition, a helper's locals can be unobservable.
 LOCAL_NAMES="kit tier root f p t s slots cmd g gate got want out wc wu ws h c u ev tool line key k owner recorded actual expected wiring rc"
+LOCAL_NAMES="$LOCAL_NAMES m did did_c did_u did_s harness dest src target waited want_stop rcs"
 ( for v in $LOCAL_NAMES; do unset "$v"; done
   . "$HERE/../_integrity.sh"
   integrity_owner_uid   "$K1/core"                                     >/dev/null
@@ -307,13 +316,32 @@ LOCAL_NAMES="kit tier root f p t s slots cmd g gate got want out wc wu ws h c u 
   integrity_wiring      "$K1" degraded                                 >/dev/null
   integrity_report      degraded wired                                 >/dev/null 2>&1
   integrity_guard       "$K1"                                          >/dev/null 2>&1
+  # --- core/_wiring_repair.sh, on its own fixture so nothing here writes to K1 -------------------
+  # `wiring_repair` is driven at two verdicts, for the same reason `_wiring_want` is called twice
+  # above: `unregistered` never enters the restore path, so a local declared only there would have no
+  # value to leak and the probe would pass against a missing `local`.
+  LK="$(wire_fixture "$W/leakrepair")"
+  printf 'all stop\n' > "$LK/core/.harness"
+  mkdir -p "$LK/core/gate-src/claude/lib"
+  printf '#!/bin/sh\nexit 0\n' > "$LK/core/gate-src/claude/flaky-kit-self-protection-gate.sh"
+  printf '#!/bin/sh\nexit 0\n' > "$LK/core/gate-src/claude/flaky-kit-delivery-gate.sh"
+  printf 'audit\n' > "$LK/core/gate-src/claude/lib/audit.sh"
+  rm -f "$W/leakrepair/.claude/hooks/flaky-kit-self-protection-gate.sh"
+  wiring_repair         "$LK" degraded dangling                        >/dev/null 2>&1
+  wiring_repair         "$LK" degraded unregistered                    >/dev/null 2>&1
+  _wr_restore_gate      "$LK" claude "$W/leakrepair/.claude/hooks" 1   >/dev/null 2>&1
+  _wr_register          "$W/leakrepair/.claude/settings.json" 'cmd' 'Write|Edit' 'Bash' >/dev/null 2>&1
+  _wr_register_cursor   "$W/leakrepair/.cursor/hooks.json" 'cmd'       >/dev/null 2>&1
+  _wr_register_stop     "$W/leakrepair/.claude/settings.json" 'cmd'    >/dev/null 2>&1
+  _wr_lock              "$W/leakrepair/.claude/settings.json"          >/dev/null 2>&1
+  _wr_unlock                                                            >/dev/null 2>&1
   leaked=""
   for v in $LOCAL_NAMES; do
     eval "probe=\${$v:-}"
     [ -z "$probe" ] || leaked="$leaked $v"
   done
   [ -z "$leaked" ] || { echo "leaked:$leaked" >&2; exit 1; }
-) 2>/dev/null && ok || bad "core/_integrity.sh must not leak ANY of its locals ($LOCAL_NAMES) into the sourcing shell"
+) 2>/dev/null && ok || bad "core/_integrity.sh and core/_wiring_repair.sh must not leak ANY of their locals ($LOCAL_NAMES) into the sourcing shell"
 
 # --- review round 2, Finding 1: dangling/wired must be decided on the RESOLVED registered path, not
 # --- a hardcoded canonical one. A settings.json shared across machines (or hand-edited) can carry a
@@ -1012,9 +1040,11 @@ done
 # the tier the outer guard would have refused at, it restores — because the tier is not its business
 # and is no longer one of its parameters. Two things are pinned here: that the rule has exactly ONE
 # implementation (the block above proves the outer guard enforces it; this proves the inner function
-# does not, so neither can drift from the other), and the three-argument signature itself — the
-# five-parameter version carried two never-read slots (`$root` at all, `$tier` only in the dead arm),
-# which is how a mis-ordered call gets written and never noticed.
+# does not, so neither can drift from the other), and the signature itself — the five-parameter
+# version carried two never-read slots (`$root` at all, `$tier` only in the dead arm), which is how a
+# mis-ordered call gets written and never noticed. The signature is FOUR arguments since fix round 2
+# (`<kit> <harness> <dest> <want_stop>`); the fourth is read on every call and defaults to 0, so a
+# three-argument call restores the self-protection gate exactly as it always did.
 R="$(mktemp -d)"; K="$(wire_fixture "$R")"
 mkdir -p "$K/core/gate-src/claude/lib"
 printf '#!/bin/sh\nexit 0\n' > "$K/core/gate-src/claude/flaky-kit-self-protection-gate.sh"
@@ -1031,7 +1061,9 @@ rm -rf "$R"
 # The dead parameters are gone for real, not merely unused: a call written to the OLD five-argument
 # shape must not silently half-work. With `$root` and `$tier` still leading, `$2` (a project root) is
 # read as the harness name and `$3` (a tier string) as the destination directory, so the restore lands
-# nowhere near the gate path — the failure a five-slot signature with two dead slots invites.
+# nowhere near the gate path — the failure a five-slot signature with two dead slots invites. (The
+# live signature grew a fourth slot since, so the old shape's 5th argument is now simply ignored; the
+# first three are still misread the same way, which is what this assertion is about.)
 R="$(mktemp -d)"; K="$(wire_fixture "$R")"
 mkdir -p "$K/core/gate-src/claude/lib"
 printf '#!/bin/sh\nexit 0\n' > "$K/core/gate-src/claude/flaky-kit-self-protection-gate.sh"
@@ -1165,6 +1197,163 @@ cmp -s "$R/before-cursor-gate.sh" "$R/.cursor/hooks/flaky-kit-self-protection-ga
   && ok || bad "a healthy Cursor gate must not be overwritten just because Claude's is dangling"
 case "$OUT" in *"restored the cursor gate"*) bad "a healthy Cursor gate must not be announced as restored — got: $OUT" ;; *) ok ;; esac
 case "$OUT" in *"restored the claude gate"*) ok ;; *) bad "the actually-broken Claude gate must still be restored and announced — got: $OUT" ;; esac
+rm -rf "$R"
+
+# --- whole-branch review, Important 1: a dangling DELIVERY gate must actually be repairable --------
+# install.sh has always vendored core/gate-src/claude/flaky-kit-delivery-gate.sh and
+# install-guard-test.sh has always asserted it exists — and nothing ever read it. The restore's
+# presence test returned early whenever the SELF-PROTECTION gate was there, which is exactly the
+# state that matters: the delivery gate deleted on its own. Reproduced before writing this, at the
+# `unprotected` tier with that file gone and its registration intact: `dangling` before the repair
+# and `dangling` after it, on every entrypoint, with "REPAIRED — the Claude delivery gate
+# registration has been rewritten." printed over it — an announcement of a repair that did not
+# happen, over a state that never converged. At `hardened` that same state is rc 76 from all
+# thirteen entrypoints with a password-priced remedy.
+#
+# `dg_fixture <dir>` = wire_fixture plus everything a stop-capable install has: the record, the Stop
+# registration, both gate files and both restore sources. Every assertion below removes exactly one
+# thing from it, so what is being tested is never in doubt.
+dg_fixture() {
+  local d="$1" k
+  k="$(wire_fixture "$d")"
+  printf 'claude stop\n' > "$k/core/.harness"
+  mkdir -p "$k/core/gate-src/claude/lib"
+  printf '#!/bin/sh\nexit 0\n' > "$k/core/gate-src/claude/flaky-kit-self-protection-gate.sh"
+  printf '#!/bin/sh\n# delivery\nexit 0\n' > "$k/core/gate-src/claude/flaky-kit-delivery-gate.sh"
+  chmod +x "$k/core/gate-src/claude/flaky-kit-self-protection-gate.sh" \
+           "$k/core/gate-src/claude/flaky-kit-delivery-gate.sh"
+  printf 'audit\n' > "$k/core/gate-src/claude/lib/audit.sh"
+  printf '#!/bin/sh\n# delivery\nexit 0\n' > "$d/.claude/hooks/flaky-kit-delivery-gate.sh"
+  chmod +x "$d/.claude/hooks/flaky-kit-delivery-gate.sh"
+  t="$(mktemp)"; jq '.hooks.Stop = [{hooks:[{type:"command",command:"\"$CLAUDE_PROJECT_DIR/.claude/hooks/flaky-kit-delivery-gate.sh\""}]}]' \
+    "$d/.claude/settings.json" > "$t" && mv "$t" "$d/.claude/settings.json"
+  echo "$k"
+}
+
+R="$(mktemp -d)"; R="$(cd "$R" && pwd -P)"; K="$(dg_fixture "$R")"
+[ "$(integrity_wiring "$K" degraded)" = wired ] \
+  && ok || bad "CONTROL: dg_fixture must start wired, or every delivery-gate restore assertion below is testing the wrong state (got $(integrity_wiring "$K" degraded))"
+rm -f "$R/.claude/hooks/flaky-kit-delivery-gate.sh"                # ONLY the delivery gate is gone
+[ -e "$R/.claude/hooks/flaky-kit-self-protection-gate.sh" ] \
+  && ok || bad "CONTROL: the self-protection gate must still be present — the early return this finding names only fires when it is"
+[ "$(integrity_wiring "$K" degraded)" = dangling ] \
+  && ok || bad "CONTROL: a missing delivery gate must read dangling BEFORE the repair (got $(integrity_wiring "$K" degraded))"
+OUT="$(wiring_repair "$K" degraded dangling 2>&1 >/dev/null)"
+[ -x "$R/.claude/hooks/flaky-kit-delivery-gate.sh" ] \
+  && ok || bad "the delivery gate must be restored from the source install.sh has always vendored — got: $OUT"
+case "$OUT" in *"restored the claude delivery gate"*) ok ;; *) bad "the delivery-gate restore needs its own narration line, not the self-protection gate's — got: $OUT" ;; esac
+[ "$(integrity_wiring "$K" degraded)" = wired ] \
+  && ok || bad "the verdict must CONVERGE after the repair — dangling before and dangling after is the defect (got $(integrity_wiring "$K" degraded))"
+rm -rf "$R"
+
+# A merge succeeding is not a repair happening. With the registration already correct, the Stop merge
+# is an idempotent no-op and nothing may be announced — the pre-fix code returned 0 there, set
+# `did_s` unconditionally, and printed the REPAIRED line on every entrypoint forever.
+R="$(mktemp -d)"; R="$(cd "$R" && pwd -P)"; K="$(dg_fixture "$R")"
+rm -f "$R/.claude/hooks/flaky-kit-self-protection-gate.sh"         # something else is broken
+OUT="$(wiring_repair "$K" degraded dangling 2>&1 >/dev/null)"
+case "$OUT" in
+  *"REPAIRED — the Claude delivery gate registration has been rewritten."*)
+    bad "an idempotent Stop merge must not be announced as a repair — got: $OUT" ;;
+  *) ok ;;
+esac
+[ "$(jq -r '[.hooks.Stop[]?|(.hooks//[])[]?|.command|select(test("flaky-kit-delivery-gate"))]|length' "$R/.claude/settings.json")" = 1 ] \
+  && ok || bad "CONTROL: the Stop registration must still be there exactly once — 'nothing announced' must mean 'nothing to do', not 'the merge broke it'"
+rm -rf "$R"
+
+# ...and the flip side, or the assertion above is satisfied by a flag that is never set at all: a
+# genuinely ABSENT Stop registration must still be announced when the merge adds it.
+R="$(mktemp -d)"; R="$(cd "$R" && pwd -P)"; K="$(dg_fixture "$R")"
+t="$(mktemp)"; jq 'del(.hooks.Stop)' "$R/.claude/settings.json" > "$t" && mv "$t" "$R/.claude/settings.json"
+[ "$(integrity_wiring "$K" degraded)" = unregistered ] \
+  && ok || bad "CONTROL: deleting the Stop registration must read unregistered (got $(integrity_wiring "$K" degraded))"
+OUT="$(wiring_repair "$K" degraded unregistered 2>&1 >/dev/null)"
+case "$OUT" in *"REPAIRED — the Claude delivery gate registration has been rewritten."*) ok ;; *) bad "a Stop registration that was genuinely absent must still be announced when the merge adds it — got: $OUT" ;; esac
+rm -rf "$R"
+
+# _wr_register_stop's three outcomes, driven directly — the caller reads a return code, so the code
+# is the contract. 0 = landed and changed, 2 = landed and changed nothing, 1 = did not land.
+R="$(mktemp -d)"; R="$(cd "$R" && pwd -P)"
+DGCMD='"$CLAUDE_PROJECT_DIR/.claude/hooks/flaky-kit-delivery-gate.sh"'
+printf '{}\n' > "$R/s.json"
+_wr_register_stop "$R/s.json" "$DGCMD"; RCS=$?
+[ "$RCS" = 0 ] && ok || bad "_wr_register_stop must return 0 when it actually adds the registration (got $RCS)"
+_wr_register_stop "$R/s.json" "$DGCMD"; RCS=$?
+[ "$RCS" = 2 ] && ok || bad "_wr_register_stop must return 2 for an idempotent no-op — 0 there is what made did_s unconditional (got $RCS)"
+# Whitespace is not a change: jq reformats, so a byte comparison would call a hand-indented file
+# repaired. The no-op above is re-asserted against a document jq did NOT write.
+printf '{\n    "hooks" :  {\n        "Stop" : [ { "hooks" : [ { "type":"command", "command":%s, "timeout":20 } ] } ]\n    }\n}\n' \
+  "$(jq -n --arg c "$DGCMD" '$c')" > "$R/hand.json"
+_wr_register_stop "$R/hand.json" "$DGCMD"; RCS=$?
+[ "$RCS" = 2 ] && ok || bad "reformatting is not a repair — a hand-indented settings file with the registration already present must return 2 (got $RCS)"
+printf '{"hooks":{"Stop":"not-an-array"}}\n' > "$R/broken.json"
+_wr_register_stop "$R/broken.json" "$DGCMD"; RCS=$?
+[ "$RCS" = 1 ] && ok || bad "_wr_register_stop must return 1 when the merge does not land (got $RCS)"
+rm -rf "$R"
+
+# A HEALTHY delivery gate must not be overwritten just because the self-protection gate is missing —
+# the same rule the Cursor block above pins, one file over. Different content at the restore source
+# makes an overwrite observable rather than merely unannounced.
+R="$(mktemp -d)"; R="$(cd "$R" && pwd -P)"; K="$(dg_fixture "$R")"
+printf '#!/bin/sh\n# DIFFERENT\nexit 0\n' > "$K/core/gate-src/claude/flaky-kit-delivery-gate.sh"
+cp "$R/.claude/hooks/flaky-kit-delivery-gate.sh" "$R/before-delivery.sh"
+rm -f "$R/.claude/hooks/flaky-kit-self-protection-gate.sh"
+OUT="$(wiring_repair "$K" degraded dangling 2>&1 >/dev/null)"
+cmp -s "$R/before-delivery.sh" "$R/.claude/hooks/flaky-kit-delivery-gate.sh" \
+  && ok || bad "a healthy delivery gate must not be overwritten while its sibling is being restored"
+case "$OUT" in *"restored the claude delivery gate"*) bad "a healthy delivery gate must not be announced as restored — got: $OUT" ;; *) ok ;; esac
+case "$OUT" in *"restored the claude gate"*) ok ;; *) bad "the actually-broken self-protection gate must still be restored — got: $OUT" ;; esac
+rm -rf "$R"
+
+# A ZERO-BYTE delivery-gate restore source must not be installed, for a sharper reason than its
+# sibling's: an empty Stop hook exits 0 on every stop, so I11 stops being enforced while
+# `_wiring_one`'s `[ -f ]` reads `wired` — a loud, repairable dangling silently flipping to a false
+# all-clear.
+R="$(mktemp -d)"; R="$(cd "$R" && pwd -P)"; K="$(dg_fixture "$R")"
+: > "$K/core/gate-src/claude/flaky-kit-delivery-gate.sh"
+rm -f "$R/.claude/hooks/flaky-kit-delivery-gate.sh"
+OUT="$(wiring_repair "$K" degraded dangling 2>&1 >/dev/null)"
+[ ! -e "$R/.claude/hooks/flaky-kit-delivery-gate.sh" ] \
+  && ok || bad "a zero-byte delivery-gate restore source must not be installed"
+[ "$(integrity_wiring "$K" degraded)" = dangling ] \
+  && ok || bad "a zero-byte delivery-gate source must leave the verdict dangling, not flip it to wired (got $(integrity_wiring "$K" degraded))"
+case "$OUT" in *"no usable restore source"*) ok ;; *) bad "a zero-byte delivery-gate source must say why it was refused — got: $OUT" ;; esac
+rm -rf "$R"
+
+# NO-BRICK / NO-NOISE: an install that predates the delivery gate (a bare `claude` record) has no
+# source vendored and no Stop registration, and is owed silence — not a warning on every entrypoint
+# about a control it never had. This is `_wiring_want`'s third field applied to the narration.
+R="$(mktemp -d)"; R="$(cd "$R" && pwd -P)"; K="$(wire_fixture "$R")"
+printf 'claude\n' > "$K/core/.harness"
+mkdir -p "$K/core/gate-src/claude/lib"
+printf '#!/bin/sh\nexit 0\n' > "$K/core/gate-src/claude/flaky-kit-self-protection-gate.sh"
+chmod +x "$K/core/gate-src/claude/flaky-kit-self-protection-gate.sh"
+rm -f "$R/.claude/hooks/flaky-kit-self-protection-gate.sh"
+OUT="$(wiring_repair "$K" degraded dangling 2>&1 >/dev/null)"
+case "$OUT" in *"delivery gate"*) bad "an install without the stop capability must not be told anything about a delivery gate — got: $OUT" ;; *) ok ;; esac
+[ ! -e "$R/.claude/hooks/flaky-kit-delivery-gate.sh" ] \
+  && ok || bad "an install without the stop capability must not gain a delivery gate it never asked for"
+rm -rf "$R"
+
+# ...and the Cursor call must never ask for one. `_wr_restore_gate` tests the capability and nothing
+# else — the harness decision lives at the CALL SITE, which passes a literal 0 — so this is the
+# assertion that keeps that literal honest. A delivery-gate source is PLANTED under
+# `core/gate-src/cursor` (a state install.sh never produces) precisely so the "nothing was written"
+# half is not vacuous: with the capability passed through instead of the literal, that source is what
+# would land at `.cursor/hooks/flaky-kit-delivery-gate.sh`.
+R="$(mktemp -d)"; R="$(cd "$R" && pwd -P)"; K="$(dg_fixture "$R")"
+printf 'all stop\n' > "$K/core/.harness"
+mkdir -p "$K/core/gate-src/cursor/lib"
+printf '#!/bin/sh\nexit 0\n' > "$K/core/gate-src/cursor/flaky-kit-self-protection-gate.sh"
+printf '#!/bin/sh\n# planted\nexit 0\n' > "$K/core/gate-src/cursor/flaky-kit-delivery-gate.sh"
+chmod +x "$K/core/gate-src/cursor/flaky-kit-self-protection-gate.sh" \
+         "$K/core/gate-src/cursor/flaky-kit-delivery-gate.sh"
+rm -f "$R/.cursor/hooks/flaky-kit-self-protection-gate.sh"
+OUT="$(wiring_repair "$K" degraded dangling 2>&1 >/dev/null)"
+[ ! -e "$R/.cursor/hooks/flaky-kit-delivery-gate.sh" ] \
+  && ok || bad "no delivery gate may be written under .cursor/hooks — Cursor has no stop event"
+case "$OUT" in *"cursor delivery gate"*) bad "the Cursor arm must not say a word about a delivery gate — got: $OUT" ;; *) ok ;; esac
+case "$OUT" in *"restored the cursor gate"*) ok ;; *) bad "CONTROL: the Cursor self-protection gate must still be restored, or the assertions above prove nothing — got: $OUT" ;; esac
 rm -rf "$R"
 
 # --- carried forward from Task 2 review, Finding 1: a failed merge must not be completely silent -
