@@ -207,14 +207,41 @@ if [ "$do_claude" = 1 ]; then
         (if any(.hooks[]?; .command==$c) then . else .hooks += [{type:"command", command:$c, timeout:10}] end)
         else . end)' "$S" > "$t" && mv "$t" "$S"
   done
-  # --- register the delivery gate at Stop, idempotently (the guard below is what makes a
+  # --- register the delivery gate at Stop, idempotently (the `any` guard below is what makes a
   # second install a no-op instead of a second registration) ---
+  #
+  # `[ -s "$t" ]` and the `rm -f` are the same two guards `core/_wiring_repair.sh`'s
+  # `_wr_register_stop` carries, and that function's comment claims an install and a repair "cannot
+  # disagree about" this merge. They did: this merge had neither guard and printed its success line
+  # unconditionally. Measured against a project whose `.hooks.Stop` was a non-array (valid JSON, so
+  # nothing upstream rejects it), jq errored, `mv` never ran, the temp file was left behind, and the
+  # installer printed "Claude Code wired (… Stop)" over a settings file with nothing registered —
+  # while `core/.harness` recorded the `stop` capability, so the wiring axis read `unregistered` and
+  # every entrypoint refused with 76 at the hardened and stale tiers.
+  #
+  # The record still says `stop` even when this merge fails, deliberately. It states what the install
+  # was ASKED for, and dropping the token here would turn a loud, repairable failure into a silent
+  # downgrade: the axis would simply stop checking the Stop slot, and nothing would ever say the
+  # delivery gate is not running. A capability record that quietly forgets a capability is the
+  # "absent silences everything" trap the wiring axis was already taught to avoid.
   D='"$CLAUDE_PROJECT_DIR/.claude/hooks/flaky-kit-delivery-gate.sh"'
-  t="$(mktemp)"; jq --arg c "$D" '
+  stop_ok=0
+  t="$(mktemp)"
+  if jq --arg c "$D" '
     .hooks //= {} | .hooks.Stop //= [] |
     (if any(.hooks.Stop[]?; (.hooks // []) | any(.command==$c)) then .
-     else .hooks.Stop += [{hooks:[{type:"command", command:$c, timeout:20}]}] end)' "$S" > "$t" && mv "$t" "$S"
-  echo "install: Claude Code wired (.claude/settings.json: PreToolUse Write|Edit + Bash, Stop)"
+     else .hooks.Stop += [{hooks:[{type:"command", command:$c, timeout:20}]}] end)' "$S" > "$t" 2>/dev/null \
+     && [ -s "$t" ] && mv "$t" "$S"; then
+    stop_ok=1
+  else
+    rm -f "$t"
+  fi
+  if [ "$stop_ok" = 1 ]; then
+    echo "install: Claude Code wired (.claude/settings.json: PreToolUse Write|Edit + Bash, Stop)"
+  else
+    echo "install: Claude Code wired (.claude/settings.json: PreToolUse Write|Edit + Bash)"
+    echo "install: WARN the delivery gate's Stop registration did NOT land — $S could not be merged (most likely .hooks.Stop is present but is not an array). core/.harness records the 'stop' capability, so the wiring axis will report 'unregistered' from now on, and after 'core/lock-kit.sh lock' that refuses EVERY entrypoint with 76. Fix .hooks.Stop in that file (it must be an array) and re-run this installer." >&2
+  fi
 fi
 
 # --- Cursor: rule + gate + vendored libs + hooks.json registration ---

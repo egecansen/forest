@@ -117,6 +117,50 @@ cmp -s "$GSC/flaky-kit-self-protection-gate.sh" "$P2/.cursor/hooks/flaky-kit-sel
   && ok || bad "a second install must not duplicate the Stop registration"
 [ "$(cat "$SKILL_DIR/core/.harness")" = "claude stop" ] && ok || bad "a second install must not duplicate the capability token"
 
+# --- whole-branch review, Minor 3: the Stop merge must not report a success it did not have -------
+# `core/_wiring_repair.sh`'s `_wr_register_stop` carries `[ -s "$t" ]` and an `rm -f "$t"`, and its
+# comment claims an install and a repair "cannot disagree about" this merge. They did: this merge had
+# neither guard and printed its success line unconditionally. Driven against a project whose
+# `.hooks.Stop` is a non-array — valid JSON, so nothing upstream rejects it — jq errors, `mv` never
+# runs, and the pre-fix installer printed "Claude Code wired (… Stop)" with nothing registered, while
+# `core/.harness` still recorded the `stop` capability: the axis then reads `unregistered`, which is
+# rc 76 from every entrypoint at the hardened and stale tiers.
+P3="$TMP/proj-stopfail"; mkdir -p "$P3"; git -C "$P3" init -q
+"$KITSRC/install.sh" --harness claude --project "$P3" >/dev/null 2>&1
+S3="$P3/.claude/settings.json"
+t="$TMP/s3.tmp"; jq '.hooks.Stop = "not-an-array"' "$S3" > "$t" && mv "$t" "$S3"
+cp "$S3" "$P3/before.json"
+# A `mktemp` SHIM, not `TMPDIR`: BSD `mktemp` (macOS, the system shell this kit targets) ignores
+# TMPDIR entirely when called with no template — verified — so a TMPDIR-based version of the leak
+# assertion below is vacuous and passes against an installer that leaks every temp file it makes.
+# Same seam as the `stat` shim above: only the no-argument form is intercepted, everything else falls
+# through to the real binary. install.sh calls `mktemp` with no arguments in all six places.
+TD="$TMP/tmpdir"; mkdir -p "$TD" "$SHIM"
+cat > "$SHIM/mktemp" <<'SH'
+#!/bin/bash
+case "$#" in 0) exec /usr/bin/mktemp "$MKTEMP_DIR/tmp.XXXXXXXX" ;; *) exec /usr/bin/mktemp "$@" ;; esac
+SH
+chmod +x "$SHIM/mktemp"
+OUT="$(MKTEMP_DIR="$TD" PATH="$SHIM:$PATH" "$KITSRC/install.sh" --harness claude --project "$P3" 2>&1)"
+case "$OUT" in *"Stop)"*) bad "the installer must not claim the Stop registration landed when the merge failed — got: $OUT" ;; *) ok ;; esac
+case "$OUT" in *"Stop registration did NOT land"*) ok ;; *) bad "a failed Stop merge must say so — got: $OUT" ;; esac
+cmp -s "$P3/before.json" "$S3" && ok || bad "a failed Stop merge must leave the settings file exactly as it found it"
+[ "$(jq -r '[.hooks.Stop?] | length' "$S3")" = 1 ] && [ "$(jq -r '.hooks.Stop | type' "$S3")" = string ] \
+  && ok || bad "CONTROL: .hooks.Stop must still be the non-array this fixture set, or the merge did not actually fail"
+[ "$(find "$TD" -type f 2>/dev/null | wc -l | tr -d ' ')" = 0 ] \
+  && ok || bad "a failed merge must remove its temp file — $(find "$TD" -type f 2>/dev/null | wc -l | tr -d ' ') left behind"
+# The record still says `stop`, deliberately: it states what the install was asked for, and dropping
+# the token would turn a loud, repairable failure into a silent downgrade — the axis would simply
+# stop checking the Stop slot and nothing would ever say the delivery gate is not running.
+[ "$(cat "$P3/.claude/skills/hektor-flaky-triage/core/.harness")" = "claude stop" ] \
+  && ok || bad "a failed Stop merge must not quietly drop the capability the install was asked for"
+# ...and the control that keeps all of the above from passing against an installer that never claims
+# Stop at all: the healthy path still says it.
+case "$("$KITSRC/install.sh" --harness claude --project "$P" 2>&1)" in
+  *"PreToolUse Write|Edit + Bash, Stop)"*) ok ;;
+  *) bad "CONTROL: a healthy install must still report the Stop registration" ;;
+esac
+
 # --- carried forward from the gate's own task: the audit-lib fallback is a SILENT no-op ------------
 # (`hektor_audit() { :; }`) whenever lib/audit.sh is not beside the installed gate, which would turn
 # every one of the delivery gate's "fail open and SAY so" paths quiet. install.sh vendors the lib
