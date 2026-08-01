@@ -27,7 +27,14 @@
 # not have.
 set -uo pipefail
 
-_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# Builtins only — no `dirname`. Everything this gate can do hangs off $_DIR (the audit lib AND the
+# engine), so a PATH without coreutils would leave $_DIR empty, silently disable hektor_audit, and
+# turn every "fail open and SAY so" path back into a quiet exit 0. Found while covering the missing-jq
+# case: a degraded PATH is exactly the environment where that guarantee has to hold.
+case "${BASH_SOURCE[0]}" in
+  */*) _DIR="$(cd "${BASH_SOURCE[0]%/*}" && pwd)" ;;
+  *)   _DIR="$(pwd)" ;;
+esac
 
 # --- where the audit log and the engine live ----------------------------------------------------
 # Both are resolved RELATIVE TO THIS SCRIPT, and from nothing else. Two layouts are real:
@@ -70,8 +77,34 @@ TRANSCRIPT="$(printf '%s' "$INPUT" | "$JQ" -r '.transcript_path // empty' 2>/dev
 ACTIVE="$(printf '%s' "$INPUT" | "$JQ" -r '.stop_hook_active // false' 2>/dev/null || echo false)"
 
 # Every shell command the session ran, one per line.
-CMDS="$("$JQ" -rs '[ .[] | (.message.content? // .content? // []) | if type=="array" then .[] else empty end
-                    | select(.type?=="tool_use") | (.input.command? // "") ] | .[]' "$TRANSCRIPT" 2>/dev/null || true)"
+#
+# Parsed line by line with `fromjson?` rather than slurped with -s, and the reason is the difference
+# between a gate and a decoration. A JSONL transcript being appended to LIVE normally ends mid-record,
+# and `jq -s` rejects the whole file for that one truncated tail — so the strict form loses every
+# command the session ran, `KIT_USED` falls to 0, and the gate exits saying nothing. That silence is
+# indistinguishable from "the kit was never used", which is the exact state this file's header
+# forbids, and a partial trailing line is the COMMON case, not an exotic one. Unparseable lines are
+# dropped and counted; the session is judged on the records that did parse.
+#
+# The count rides on the first output line so this stays one pass over the transcript. `|| true` is
+# deliberately absent: jq's exit status is the only signal that the read itself failed, and swallowing
+# it is what turned this whole gate into a silent no-op.
+RAW="$("$JQ" -Rrs '
+  [ split("\n")[] | select(length > 0) ] as $lines
+  | [ $lines[] | (fromjson? // empty) ] as $docs
+  | "\($lines | length) \($docs | length)",
+    ( $docs[] | (.message.content? // .content? // []) | if type=="array" then .[] else empty end
+              | select(.type?=="tool_use") | (.input.command? // "") )
+' "$TRANSCRIPT" 2>/dev/null)"; JQ_RC=$?
+[ "$JQ_RC" -eq 0 ] || { hektor_audit "delivery-gate: could not read the transcript $TRANSCRIPT (jq exited $JQ_RC), failing open"; exit 0; }
+
+COUNTS="$(printf '%s\n' "$RAW" | head -1)"
+CMDS="$(printf '%s\n' "$RAW" | tail -n +2)"
+LINES="${COUNTS%% *}"; DOCS="${COUNTS##* }"
+[ "${DOCS:-0}" -gt 0 ] 2>/dev/null \
+  || { hektor_audit "delivery-gate: nothing in the transcript $TRANSCRIPT parsed as JSON ($LINES lines read), failing open"; exit 0; }
+[ "$DOCS" = "$LINES" ] \
+  || hektor_audit "delivery-gate: $((LINES - DOCS)) of $LINES transcript lines did not parse (a transcript still being written ends mid-record); judging this session on the $DOCS that did"
 
 # Did the session run the kit at all, and did it CHANGE anything? apply/rerun is where a session
 # stops reading and starts changing things, and it is the point a ledger is owed.
@@ -97,10 +130,13 @@ block() { "$JQ" -n --arg r "$1" '{decision:"block", reason:$r}'; exit 0; }
 LEDGERS="$(printf '%s\n' "$CMDS" \
   | awk '{ for (i = 1; i <= NF; i++) if ($i ~ /core\/ledger/) print $(i + 2) }' \
   | tr -d "\"'" | grep -v '^$' | sort -u)"
+LEDGER_NAMED=0
+case "$CMDS" in *core/ledger*) LEDGER_NAMED=1 ;; esac
 OPEN=""
 FOUND_LEDGER=0
 while IFS= read -r L; do
-  [ -n "$L" ] && [ -r "$L" ] || continue
+  # -f as well as -r: a path split on a space can land on a DIRECTORY, and a directory is readable.
+  [ -n "$L" ] && [ -f "$L" ] && [ -r "$L" ] || continue
   FOUND_LEDGER=1
   MSG="$(bash "$CORE/ledger.sh" validate "$L" --final 2>&1)"; RC=$?
   case "$RC" in
@@ -133,7 +169,15 @@ flagged, or deferred — then finish again. This gate does not block once and le
 the ledger says the work is done."
 fi
 
-if [ "$FOUND_LEDGER" = 0 ] && [ "$CHANGED" = 1 ]; then
+if [ "$FOUND_LEDGER" = 0 ] && [ "$CHANGED" = 1 ] && [ "$LEDGER_NAMED" = 1 ]; then
+  # The session DID name core/ledger; this gate just could not turn the words into a readable file —
+  # a path with a space in it, most likely, since the extraction above splits on whitespace, or a
+  # ledger since moved. Blocking here would be unanswerable: the I11 half has no stop_hook_active
+  # escape and no bypass, so following this block's own remedy — re-run core/ledger.sh with that same
+  # path — reproduces the identical block, and the session loops with no way out. A check that cannot
+  # run is not a verdict, so it fails open and says so, the same rule as a non-verdict exit above.
+  hektor_audit "delivery-gate: the session named core/ledger but no readable ledger file could be resolved from the transcript (a path containing spaces, or a file since moved) — not blocking on 'no ledger', failing open"
+elif [ "$FOUND_LEDGER" = 0 ] && [ "$CHANGED" = 1 ]; then
   hektor_audit "delivery-gate: blocked, no ledger for a run that changed things"
   block "[flaky-kit delivery-gate] This session ran core/apply or core/rerun and left no ledger.
 
@@ -144,11 +188,17 @@ fi
 # --- the hedge half: blocks ONCE ----------------------------------------------------------------
 [ "$ACTIVE" = "true" ] && exit 0
 
-LAST="$("$JQ" -rs '[ .[] | select(.type=="assistant" or (.message.role? // "")=="assistant")
-                    | ((.message.content? // .content? // []))
-                    | if type=="array" then ([ .[] | select(.type?=="text") | .text ] | join("\n"))
-                      elif type=="string" then . else "" end ]
-                  | map(select(. != "")) | (.[-1] // "")' "$TRANSCRIPT" 2>/dev/null || true)"
+# Same tolerant read, and re-read rather than reused: the transcript is being written while this runs,
+# so the file can have grown (or gained a truncated tail) since the pass above.
+LAST="$("$JQ" -Rrs '
+  [ split("\n")[] | select(length > 0) | (fromjson? // empty) ]
+  | [ .[] | select(.type=="assistant" or (.message.role? // "")=="assistant")
+      | ((.message.content? // .content? // []))
+      | if type=="array" then ([ .[] | select(.type?=="text") | .text ] | join("\n"))
+        elif type=="string" then . else "" end ]
+  | map(select(. != "")) | (.[-1] // "")' "$TRANSCRIPT" 2>/dev/null)"; JQ_RC=$?
+[ "$JQ_RC" -eq 0 ] \
+  || { hektor_audit "delivery-gate: could not re-read the transcript $TRANSCRIPT for the final message (jq exited $JQ_RC), failing open"; exit 0; }
 [ -n "$LAST" ] || exit 0
 
 HIT="$(printf '%s' "$LAST" | bash "$CORE/hedge-scan.sh" 2>/dev/null)" && exit 0

@@ -137,6 +137,27 @@ jq -n '{clusters:[{id:"c1",status:"green",title:"t",passes:5,runs:5}],events:[]}
 tx "$WORK/t4q" "Done." "$KIT/core/apply.sh c1" "\"$KIT/core/ledger.sh\" cluster-state \"$L\" c1 green"
 [ -z "$(run "$WORK/t4q")" ] && ok || bad "a quoted ledger path must be found, not read as a missing ledger"
 
+# --- a ledger path with a space in it: fail open, never an inescapable block --------------------
+# The extraction splits on whitespace, so this path cannot be recovered. What matters is which way it
+# fails. Blocking would be UNANSWERABLE: the I11 half has no stop_hook_active escape and no bypass, so
+# following the block's own remedy — re-run core/ledger.sh with that path — reproduces the identical
+# block and the session loops with no way out. `mktemp -d` never contains a space, which is precisely
+# why no other fixture here can catch this.
+SPACED="$WORK/a dir with spaces"; mkdir -p "$SPACED"
+jq -n '{clusters:[{id:"c1",status:"green",title:"t",passes:5,runs:5}],events:[]}' > "$SPACED/led.json"
+A_SPACE="$(audit_home space)"
+tx "$WORK/t4sp" "Done." "$KIT/core/apply.sh c1" "$KIT/core/ledger.sh cluster-state $SPACED/led.json c1 green"
+[ -z "$(run_in "$GATE" "$A_SPACE" "$WORK/t4sp")" ] \
+  && ok || bad "a ledger path containing a space must not produce a block the session cannot answer"
+case "$(audit_log "$A_SPACE")" in *"no readable ledger file could be resolved"*) ok ;; *) bad "the unresolvable-ledger fail-open must say so — it is the difference between 'clean' and 'could not tell'" ;; esac
+
+# The same path quoted, which is how an agent is likeliest to write it, must fail open too and not
+# fall through to a block by a different route.
+A_SPACEQ="$(audit_home spaceq)"
+tx "$WORK/t4spq" "Done." "$KIT/core/apply.sh c1" "$KIT/core/ledger.sh cluster-state \"$SPACED/led.json\" c1 green"
+[ -z "$(run_in "$GATE" "$A_SPACEQ" "$WORK/t4spq")" ] \
+  && ok || bad "a quoted ledger path containing a space must not produce an unanswerable block either"
+
 # --- the hedge half: blocks once ---------------------------------------------------------------
 tx "$WORK/t5" "It should probably work, I only ran it once." "$KIT/core/apply.sh c1" "$KIT/core/ledger.sh cluster-state $L c1 green"
 blocked "$(run "$WORK/t5")" && ok || bad "a hedged final message must block"
@@ -146,12 +167,56 @@ blocked "$(run "$WORK/t5")" && ok || bad "a hedged final message must block"
 tx "$WORK/t6" "Cluster c1 is green: 5/5 passes, verified by core/gate." "$KIT/core/apply.sh c1" "$KIT/core/ledger.sh cluster-state $L c1 green"
 [ -z "$(run "$WORK/t6")" ] && ok || bad "a proven, unhedged summary must pass"
 
+# --- hedge-scan says nothing when it finds nothing ---------------------------------------------
+# The gate's `… | hedge-scan.sh` && exit 0` is an EQUIVALENT mutant — deleting it changes no
+# observable behaviour, because the next line exits on an empty $HIT anyway. That equivalence is a
+# property of hedge-scan.sh (it writes to stdout only on the branch that exits 2), not of the gate,
+# and nothing coupled the two until here. If hedge-scan ever starts printing on a clean scan, the
+# gate would block a proven summary on empty-looking evidence, and this is the assertion that says so.
+HS_OUT="$(printf '%s' "Cluster c1 is green: 5/5 passes, verified by core/gate." | bash "$KIT/core/hedge-scan.sh" 2>/dev/null)"; HS_RC=$?
+{ [ "$HS_RC" -eq 0 ] && [ -z "$HS_OUT" ]; } \
+  && ok || bad "a clean hedge-scan must exit 0 AND print nothing (rc=$HS_RC, out='$HS_OUT') — the gate's clean-scan exit is only redundant while this holds"
+
 # --- fail open: no transcript, unreadable transcript, no jq ------------------------------------
 [ -z "$(run_in "$GATE" "$MAIN_HOME" /nonexistent/x)" ] && ok || bad "a missing transcript must fail open"
 [ -z "$( cd "$MAIN_HOME" && printf '' | bash "$GATE" 2>/dev/null )" ] && ok || bad "empty stdin must fail open"
 A_TX="$(audit_home transcript)"
 run_in "$GATE" "$A_TX" /nonexistent/x >/dev/null 2>&1
 case "$(audit_log "$A_TX")" in *"no readable transcript"*) ok ;; *) bad "an unreadable transcript must leave an audit line — the gate read nothing, and that is not the same as reading a clean session" ;; esac
+
+# --- a transcript with a truncated trailing record: the COMMON case ----------------------------
+# A JSONL transcript being appended to live normally ends mid-record. Slurping it (`jq -s`) rejects
+# the whole file for that one tail, which empties the command list, which reads as "the kit was never
+# used" — the gate disables itself on the ordinary case while still exiting 0 and looking healthy.
+# The session below is the same one that blocks on I11 above, so anything other than a block here
+# means the truncated tail silently switched the gate off.
+cp "$WORK/t4" "$WORK/t4trunc"
+jq -n '{clusters:[{id:"c1",status:"applied",title:"t"}],events:[]}' > "$L"   # reopen c1
+printf '{"type":"assistant","message":{"role":"assist' >> "$WORK/t4trunc"
+A_TRUNC="$(audit_home truncated)"
+blocked "$(run_in "$GATE" "$A_TRUNC" "$WORK/t4trunc")" \
+  && ok || bad "a truncated trailing record must not disable the gate — the parsed records still carry the session"
+case "$(audit_log "$A_TRUNC")" in *"did not parse"*) ok ;; *) bad "dropping transcript lines must be audited — the verdict was reached on less than the whole session" ;; esac
+
+# --- a transcript nothing can be read from: fail open, and SAY so ------------------------------
+printf 'not json at all\n{"also": not json\n' > "$WORK/tjunk"
+A_JUNK="$(audit_home junk)"
+[ -z "$(run_in "$GATE" "$A_JUNK" "$WORK/tjunk")" ] \
+  && ok || bad "a transcript with no parseable record must fail open"
+case "$(audit_log "$A_JUNK")" in *"parsed as JSON"*) ok ;; *) bad "a transcript nothing parsed from must leave an audit line — silence there is indistinguishable from a clean session" ;; esac
+
+# --- no jq: the gate cannot do anything, and must say that rather than pass quietly ------------
+# jq lives in /usr/bin on this box, so trimming PATH is not enough; the shim holds everything
+# hektor_audit needs to keep working (that is the point — the audit line must still land) and no jq.
+NOJQ="$WORK/nojq-bin"; mkdir -p "$NOJQ"
+for _b in bash sed git mkdir date basename uname cat chflags chattr; do
+  _p="$(command -v "$_b" 2>/dev/null)" && ln -sf "$_p" "$NOJQ/$_b"
+done
+A_NOJQ="$(audit_home nojq)"
+NOJQ_OUT="$( cd "$A_NOJQ" && printf '{"transcript_path":"%s","stop_hook_active":false}' "$WORK/t4" \
+             | PATH="$NOJQ" bash "$GATE" 2>/dev/null )"
+[ -z "$NOJQ_OUT" ] && ok || bad "a gate with no jq must fail open, not emit a half-built verdict"
+case "$(audit_log "$A_NOJQ")" in *"no jq"*) ok ;; *) bad "a gate with no jq must leave an audit line — it decided nothing, and that must not read as a clean session" ;; esac
 
 # --- the engine it checks against may be missing: fail open, and SAY so ------------------------
 # The gate ships to <proj>/.claude/hooks/ and the engine to <proj>/.claude/skills/hektor-flaky-
@@ -174,8 +239,13 @@ OUT="$(run "$WORK/t1")"
 [ -z "$OUT" ] && ok || bad "an allow must print nothing at all on stdout"
 
 # --- no environment override may enter the gate ------------------------------------------------
-grep -v '^[[:space:]]*#' "$GATE" | grep -qE '(^|[^\\])\$\{?HEKTOR[A-Z_]*' \
-  && bad "the delivery gate must carry no environment bypass — the pack's does; this kit ruled it out" || ok
+# HEKTOR* is the bypass the pack ships and this kit ruled out. CLAUDE_PROJECT_DIR is the other half:
+# the sibling self-protection gate anchors on it legitimately (it hunts the PROJECT'S kit tree), but
+# this gate resolves its OWN engine, and anchoring that on an environment variable would let the
+# subject of the check choose which ledger.sh judges it. Both belong in the same alternation, or the
+# decision to anchor solely on $BASH_SOURCE could be reverted with nothing noticing.
+grep -v '^[[:space:]]*#' "$GATE" | grep -qE '(^|[^\\])\$\{?(HEKTOR[A-Z_]*|CLAUDE_PROJECT_DIR)' \
+  && bad "the delivery gate must carry no environment bypass and no environment-anchored engine lookup" || ok
 
 echo "delivery-gate-test: $pass passed, $fail failed"
 [ "$fail" -eq 0 ]
