@@ -167,9 +167,10 @@ case "$OUT" in *"install: done"*) bad "a failed Stop merge must not print 'insta
 case "$OUT" in *"HARDEN (do not skip"*) bad "a failed Stop merge must not print the HARDEN step — following it is what converts this into the rc-76 state — got: $OUT" ;; *) ok ;; esac
 case "$OUT" in *"INCOMPLETE"*) ok ;; *) bad "a failed Stop merge must SAY the install is incomplete, not merely return a number — got: $OUT" ;; esac
 case "$OUT" in *"DO NOT run"*) ok ;; *) bad "the incomplete ending must tell the reader not to lock yet — that is the step that makes it expensive — got: $OUT" ;; esac
-# ...and it must FINISH the install before saying so. A partial install that aborts mid-way is worse
-# than one that completes and reports: these four are all written AFTER the Stop merge in the script,
-# or are the things a reader would lose if it bailed at the merge.
+# ...and the failed merge must take nothing else down with it. These four are written BEFORE it — so
+# they say the failure did not roll anything back, which is NOT the same claim as "the install ran to
+# the end". That claim needs work scheduled AFTER the Stop merge, and with --harness claude there is
+# none; it is asserted on its own fixture below.
 [ -x "$P3/.claude/hooks/flaky-kit-self-protection-gate.sh" ] \
   && ok || bad "the failing path must still install the self-protection gate — the merge that failed is a different control"
 [ -x "$P3/.claude/hooks/flaky-kit-delivery-gate.sh" ] \
@@ -178,6 +179,21 @@ case "$OUT" in *"DO NOT run"*) ok ;; *) bad "the incomplete ending must tell the
   && ok || bad "the failing path must still land the PreToolUse registrations — they are a separate merge on a separate key"
 [ -f "$P3/.claude/skills/hektor-flaky-triage/core/gate-src/claude/flaky-kit-delivery-gate.sh" ] \
   && ok || bad "the failing path must still vendor the restore source — the repair path depends on it"
+
+# THE INSTALL MUST RUN TO COMPLETION and only then report — a partial install that aborts in the
+# middle is worse than one that finishes and says what it could not do. The Cursor block and the
+# AGENTS.md block are the only work scheduled AFTER the Claude Stop merge, so `--harness all` is the
+# only fixture that can tell "finished, then exited 74" from "bailed at the merge". An early `exit`
+# at the WARN would leave both absent and both assertions red.
+P4="$TMP/proj-stopfail-all"; mkdir -p "$P4"; git -C "$P4" init -q
+mkdir -p "$P4/.claude"
+printf '{"hooks":{"Stop":"not-an-array"}}\n' > "$P4/.claude/settings.json"
+OUT4="$("$KITSRC/install.sh" --harness all --project "$P4" 2>&1)"; RC4=$?
+[ "$RC4" = 74 ] && ok || bad "CONTROL: the --harness all fixture must also hit the failing Stop merge — got rc $RC4"
+[ -n "$(jq -r '[.hooks.beforeShellExecution[]?.command|select(test("flaky-kit"))]|length|select(.>0)' "$P4/.cursor/hooks.json" 2>/dev/null)" ] \
+  && ok || bad "the Cursor registration is written AFTER the failing Claude Stop merge and must still land — the install completes, then reports"
+grep -qF 'hektor-flaky-triage:begin' "$P4/AGENTS.md" 2>/dev/null \
+  && ok || bad "the AGENTS.md pointer is the LAST thing the installer writes and must still land before it exits 74"
 
 # ...and the control that keeps all of the above from passing against an installer that never claims
 # Stop at all, or that exits 74 on every install: the healthy path still says it, and still exits 0.

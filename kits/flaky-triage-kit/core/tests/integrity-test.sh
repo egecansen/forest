@@ -1603,9 +1603,9 @@ rm -rf "$R"
 # per-harness ATTRIBUTION ("not folded into one shared REPAIRED"), and the no-op-ness of this
 # fixture's Cursor merge is incidental to that: the comment above says Cursor's settings are "left
 # exactly as wire_fixture built them", i.e. chosen for convenience, not because a no-op deserves an
-# announcement. Nothing consumes these lines but a human — `grep -rn REPAIRED` outside core/tests/
-# matches only _wiring_repair.sh's own three echoes and its comments — so no caller depends on the
-# line appearing. The attribution property is re-pinned NON-VACUOUSLY in the block below, on a
+# announcement. Nothing consumes these lines but a human — `grep -rn REPAIRED` across the kit, outside
+# core/tests/, matches only _wiring_repair.sh's own three echoes and its comments — so no caller
+# depends on the line appearing. The attribution property is re-pinned NON-VACUOUSLY below, on a
 # fixture whose Cursor registration is genuinely absent, so the announcement it requires is true.
 R="$(mktemp -d)"; W="$(wire_fixture "$R")"
 printf 'all\n' > "$W/core/.harness"

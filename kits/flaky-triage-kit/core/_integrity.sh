@@ -578,10 +578,10 @@ integrity_report() {
       #
       # ONE sentence, true of whichever gate `$which` names, rather than a `case` over the label. The
       # label is computed by the axis; branching on its TEXT here would be a second derivation of
-      # "which gate", free to drift from the first — the shape this file has retracted five times —
-      # and it is the same resolution `wiring_repair`'s own refusal message reached for the same
-      # reason ("one sentence has to be true of all three"). What each gate specifically protects is
-      # the detail line's business, and the detail line already names it.
+      # "which gate", free to drift from the first — the two-spellings-of-one-rule shape this file
+      # keeps retracting — and it is the same resolution `wiring_repair`'s own refusal message
+      # reached for the same reason ("one sentence has to be true of all three"). What each gate
+      # specifically protects is the detail line's business, and the detail line already names it.
       case "$tier" in
         hardened|stale)
           echo "integrity: refusing — the tree is root-owned, so this run would report the hardened tier while $which is not going to run at all. That is weaker than the protection the tier claims, and nothing short of the password can close the gap." >&2
