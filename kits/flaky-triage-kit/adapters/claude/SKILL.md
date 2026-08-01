@@ -65,7 +65,10 @@ per-cluster confirmation rerun happens after the pick, before applying that clus
    never round it up to fixed. One green run is NOT proof (a flake passes ~half the time, so a
    single green is the most likely false "fixed"). Before you report a cluster fixed, pipe your own
    one-line summary through `core/hedge-scan`; a hit (exit 2) means your own wording says you
-   aren't sure — go get the proof instead of shipping the hedge. Record progress with
+   aren't sure — go get the proof instead of shipping the hedge. This is checked either way: the
+   Stop hook (`flaky-kit-delivery-gate.sh`) re-runs `hedge-scan` on your final message and blocks
+   once on a hit — self-checking here means you catch it before that costs you a turn, not that the
+   check is optional. Record progress with
    core/ledger.sh cluster-state (selected → applied --passes/--runs → green|flagged), and phase
    transitions with core/ledger.sh event phase-enter --phase <p>. For vrt-bucket clusters, record
    each failing test's vrt_url (ingest tags it) via core/ledger.sh cluster-vrt <id> <fqcn> <url> so

@@ -153,6 +153,13 @@
 #      while a harness still runs the dead hook on every matching call, invisibly. Re-running the
 #      installer, which purges it, is the real fix.
 #
+#  14. The delivery gate is Claude-only. Cursor has no stop event, so on Cursor I11 and hedge-scan
+#      remain what they were before this: prose the agent is trusted to honour.
+#  15. The gate reads the transcript the harness wrote. It proves what the session RECORDED, not
+#      what the session did; a ledger the agent never named on a command line is invisible to it.
+#  16. `core/apply`/`core/rerun` is the dividing line for "work was done". A session that changed
+#      things some other way and left no ledger is not caught.
+#
 # Closed since this list was first written, recorded here so the change stays legible instead of
 # quietly vanishing: `core/shell-guard.py` honoured `HEKTOR_FK_SURFACE` by REPLACING its surface
 # pattern wholesale, so any value matching nothing (`HEKTOR_FK_SURFACE=/definitely/nowhere`) turned

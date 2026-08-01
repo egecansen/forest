@@ -59,6 +59,27 @@ echo '{"file":"…","old":"…","new":"…"}' | "$KIT/apply.sh"   # working-tree
 "$KIT/summary.sh" < ledger.json                        # convergence report (structured tokens only)
 ```
 
+## Delivery gate
+On Claude Code, the delivery gate — installed to `.claude/hooks/flaky-kit-delivery-gate.sh` (source:
+`adapters/claude/flaky-kit-delivery-gate.sh`) — runs at session **Stop** and refuses to let a session
+end unproven. It carries two checks, deliberately at different hardness:
+
+- **I11** — derives the ledger path(s) straight out of the transcript and runs
+  `core/ledger.sh validate --final` on each. This blocks **every** stop while any cluster is still
+  `selected`/`applied`: no `stop_hook_active` escape, and **no environment bypass** — the remedy is
+  entirely in the agent's hands (move each cluster to green/flagged/deferred and finish again). A
+  session that ran `core/apply` or `core/rerun` and left no ledger at all is blocked the same way; a
+  session that only `ingest`ed or `cluster`ed passes with no check; a session that never touched the
+  kit is silent.
+- **hedge-scan** — re-runs the same scan `SKILL.md` already asks the agent to pipe its own summary
+  through, this time over the session's last assistant message. This blocks **once**: a false
+  positive costs one extra turn, not the rest of the session.
+
+Every path the gate can't evaluate — no `jq`, an unreadable transcript, the engine not found, a
+`validate --final` that exits something other than a verdict — fails open and writes one audit line;
+it never wedges a caller and never fails silently. It is Claude-only: Cursor has no Stop event, so on
+Cursor these two remain what they always were, prose the agent is trusted to honour.
+
 ## Self-protection
 The kit guards its own `core/` · `SKILL.md` — plus its own protection gate at
 `.claude/hooks/flaky-kit-self-protection-gate.sh`, that gate's vendored `lib/`, the Cursor gate and
