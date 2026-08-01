@@ -99,11 +99,17 @@
 #      including hardened, because the harness itself keeps editing them for reasons that have
 #      nothing to do with this kit. Their only protection is the PreToolUse gate: Bash denies any
 #      command naming one of them alongside a mutating verb, and Write/Edit denies only an edit that
-#      would drop the kit's registration. That is a heuristic policy layer, not an ownership wall —
-#      there is no chown floor under it the way core/** has one, and it shares the same escape
-#      classes already named for the Bash gate (`base64 … | bash`, `eval`, process substitution, a
-#      compiled writer, or any construct that is not a literal, parseable command naming a
-#      recognized verb).
+#      would drop a registration the file carries today — since 2026-08-01 that means the `Stop`
+#      registration of the delivery gate as well as the `PreToolUse` registration of the
+#      self-protection gate, both derived from one slot model. (Until then it meant the second only,
+#      and a `del(.hooks.Stop)` with `PreToolUse` left intact was a verified ALLOW.) That is a
+#      heuristic policy layer, not an ownership wall — there is no chown floor under it the way
+#      core/** has one, and it shares the same escape classes already named for the Bash gate
+#      (`base64 … | bash`, `eval`, process substitution, a compiled writer, or any construct that is
+#      not a literal, parseable command naming a recognized verb). The rule is still "would lose what
+#      it has", never "must always end registered": a settings file carrying no registration at all —
+#      including every install that predates the delivery gate — is not this kit's business, which is
+#      what keeps the kit from freezing a project out of its own settings file.
 #   8. The wiring check (`core/_integrity.sh`'s `integrity_wiring`) reads the same settings files an
 #      agent can also write. It proves a registration is present and, at the hardened or stale tier,
 #      that it points at a file this kit still owns — below those, existence is all it checks. It
@@ -113,10 +119,13 @@
 #   9. A BARE `.claude` operand matches no surface pattern the gates carry — every alternative names
 #      something INSIDE it (`.claude/hooks`, `.claude/skills/hektor-flaky-triage`,
 #      `.claude/settings.json`), so `rm -rf .claude` is an ALLOW at every tier. At the hardened tier
-#      it still unlinks the root-owned gate script, the vendored audit lib and `.flaky-kit-expect`
-#      (item 3's parent-directory problem, one level higher), and now also the registration item 8's
-#      wiring check exists to verify — so the one detector that would notice goes with the thing it
-#      detects. Deliberately NOT fixed here and scheduled as separate work: widening the pattern to a
+#      it still unlinks the root-owned self-protection gate, the root-owned DELIVERY gate, the
+#      vendored audit lib and `.flaky-kit-expect` (item 3's parent-directory problem, one level
+#      higher), and now also the registration item 8's wiring check exists to verify — so the one
+#      detector that would notice goes with the thing it detects, and it now takes BOTH controls,
+#      not one. The item always covered the class; the delivery gate is named because a list of what
+#      one allowed command carries away is exactly the kind of list that goes stale silently.
+#      Deliberately NOT fixed here and scheduled as separate work: widening the pattern to a
 #      bare `.claude` changes the surface from "the kit's files" to "the harness's entire
 #      configuration tree", which is a different promise with its own false-positive cost, and it
 #      needs its own design round rather than a line appended to a fix wave.
@@ -159,6 +168,26 @@
 #      what the session did; a ledger the agent never named on a command line is invisible to it.
 #  16. `core/apply`/`core/rerun` is the dividing line for "work was done". A session that changed
 #      things some other way and left no ledger is not caught.
+#  17. **The delivery gate's own protection is entirely second-order.** It is a `Stop` hook: it runs
+#      once, at end-of-session, and observes no tool call, so it can never deny the call that removes
+#      it. Everything that DOES deny that call — the surface match on
+#      `.claude/hooks/flaky-kit-delivery-gate.sh`, and the outcome test that refuses an edit dropping
+#      its `Stop` registration — lives in the PreToolUse self-protection gate. Unregister or defeat
+#      THAT gate first (item 7's escape classes, or item 9's bare `.claude`), and the delivery gate
+#      falls with no further friction. Root-owning its file (`harden_targets` below) buys less here
+#      than item 3 already concedes: the registration is not chown'd at any tier, and unregistering
+#      is cheaper than editing. This is the honest shape of the control — a check that is guarded by
+#      a different check, not one that guards itself. Detected afterwards by the wiring axis
+#      (`dangling`/`unregistered`), which at the hardened and stale tiers refuses every entrypoint —
+#      but only on the NEXT entrypoint, and a session whose whole goal is to stop never runs one.
+#  18. **The no-ledger block has a one-token escape, by design.** The `apply`/`rerun`-with-no-ledger
+#      block only fires when the transcript names no `core/ledger` at all: a session that mentions
+#      the token (`true # core/ledger`) takes the fail-open arm instead — audited, not blocked. That
+#      arm exists because a ledger path containing a space cannot be resolved by the transcript scan,
+#      and blocking there would be unanswerable (the I11 half has no `stop_hook_active` escape, so
+#      the block's own printed remedy reproduces the block). The choice is deliberate: a false block
+#      with no way out is worse than a hole one line of audit log records. Item 15's limit is the
+#      general case; this is the specific, cheapest instance of it.
 #
 # Closed since this list was first written, recorded here so the change stays legible instead of
 # quietly vanishing: `core/shell-guard.py` honoured `HEKTOR_FK_SURFACE` by REPLACING its surface
@@ -275,13 +304,17 @@ surface_dirs() {
 # live OUTSIDE $KIT by design so a rename of the kit dir cannot take them along — which is exactly
 # why they are listed one by one.
 #
-# BOTH gates and BOTH audit libs, not just the Claude gate: `install.sh` installs the Cursor gate
-# whenever `--harness` includes cursor, and `SURF_RE`, `core/shell-guard.py`'s `SURF`, the CODEOWNERS
-# block and `README.md` all declare the Cursor gate, the Cursor libs and `.claude/hooks/lib/audit.sh`
-# part of the safety surface. Leaving them out meant a Cursor user could run `lock`, read "the safety
-# surface … is owned by root", and still have their only gate — plus the audit lib that records the
-# unlock — plainly user-writable. Header item 3 states precisely what root-owning these FILES does
-# and does not buy, because their parents stay user-owned.
+# ALL THREE gate files and BOTH audit libs, not just the Claude self-protection gate — the list below
+# holds the Claude self-protection gate, the Claude DELIVERY gate (`Stop`, added with that gate) and
+# the Cursor self-protection gate; an earlier version of this sentence said "BOTH gates" and went
+# stale the moment the third file joined the list. `install.sh` installs the Cursor gate whenever
+# `--harness` includes cursor, and `SURF_RE`, `core/shell-guard.py`'s `SURF`, the CODEOWNERS block and
+# `README.md` all declare every one of these files part of the safety surface. Leaving the Cursor pair
+# out meant a Cursor user could run `lock`, read "the safety surface … is owned by root", and still
+# have their only gate — plus the audit lib that records the unlock — plainly user-writable. Header
+# item 3 states precisely what root-owning these FILES does and does not buy, because their parents
+# stay user-owned; item 17 states what root-owning the delivery gate does NOT buy, which is more than
+# item 3, because that gate cannot observe the tool call that removes it.
 harden_targets() {
   printf '%s\n' "$KIT/core"
   [ -d "$KIT/hooks" ] && printf '%s\n' "$KIT/hooks"

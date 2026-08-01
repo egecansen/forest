@@ -65,12 +65,25 @@ On Claude Code, the delivery gate — installed to `.claude/hooks/flaky-kit-deli
 end unproven. It carries two checks, deliberately at different hardness:
 
 - **I11** — derives the ledger path(s) straight out of the transcript and runs
-  `core/ledger.sh validate --final` on each. This blocks **every** stop while any cluster is still
-  `selected`/`applied`: no `stop_hook_active` escape, and **no environment bypass** — the remedy is
-  entirely in the agent's hands (move each cluster to green/flagged/deferred and finish again). A
-  session that ran `core/apply` or `core/rerun` and left no ledger at all is blocked the same way; a
-  session that only `ingest`ed or `cluster`ed passes with no check; a session that never touched the
-  kit is silent.
+  `core/ledger.sh validate <ledger> --final` on each (that argument order: the file first, the flag
+  after — reversed, the command exits 65 "not a ledger" rather than I11's own 67). This blocks **every** stop
+  while any cluster is still `selected`/`applied`: no `stop_hook_active` escape, and **no environment
+  bypass** — the remedy is entirely in the agent's hands (move each cluster to green/flagged/deferred
+  and finish again). A session that ran `core/apply` or `core/rerun` and left no ledger at all is
+  blocked the same way; a session that only `ingest`ed or `cluster`ed passes with no check; a session
+  that never touched the kit is silent.
+
+  **The no-ledger half has a one-token escape, and it is deliberate.** It fires only when the
+  transcript names no `core/ledger` at all. A session that ran `core/apply` and also mentions the
+  token — `true # core/ledger` is enough — takes the fail-open arm instead: audited, not blocked
+  (verified: `core/apply.sh c3` alone blocks; the same session plus that one command passes). That
+  arm exists because a ledger path containing a space cannot be resolved by a transcript scan that
+  splits on whitespace, and blocking there would be unanswerable — the I11 half has no
+  `stop_hook_active` escape, so following the block's own printed remedy reproduces the block and the
+  session loops with no way out. A false block with no exit is worse than a hole that leaves an audit
+  line, so the hole stays and is named here rather than left for a reader to find. **The
+  open-cluster half above has no such escape**: it reads the ledger's state, not the transcript's
+  wording.
 - **hedge-scan** — re-runs the same scan `SKILL.md` already asks the agent to pipe its own summary
   through, this time over the session's last assistant message. This blocks **once**: a false
   positive costs one extra turn, not the rest of the session.
@@ -147,13 +160,13 @@ step by hand and not a substitute for the header; if the two ever disagree, the 
 
 1. **Shadowing** — `mv` the kit dir aside and replace it. Detected via the out-of-tree record, not prevented.
 2. **That record is itself deletable** — its directory must stay user-owned, so the same actor can erase the expectation.
-3. **Every out-of-tree surface path** (both gate scripts, the vendored libs) is protected against *edit*, not against *replacement*: their parents stay user-owned.
+3. **Every out-of-tree surface path** (all three gate scripts — both self-protection gates and the delivery gate — and the vendored libs) is protected against *edit*, not against *replacement*: their parents stay user-owned.
 4. **Social engineering** a human into running the unlock.
 5. **Anything after the password is typed** — `lock`/`unlock` end with `sudo -k`, but the window between the prompt and the end of the privileged section remains.
 6. **Partial hardening** — a `chown` can succeed on some operands and fail on others; the tier is sampled from `core/` alone. Announced and diagnosable, not prevented.
-7. **The harness settings files are not chown'd at any tier**, hardened included — the harness keeps editing them for its own reasons. Their only protection is the PreToolUse gate described above: a heuristic policy layer with no ownership floor under it.
+7. **The harness settings files are not chown'd at any tier**, hardened included — the harness keeps editing them for its own reasons. Their only protection is the PreToolUse gate described above, which since 2026-08-01 covers the delivery gate's `Stop` registration as well as the self-protection gate's `PreToolUse` one: a heuristic policy layer with no ownership floor under it. It denies only a change that would *lose* a registration the file carries today, never "must always end registered".
 8. **The wiring check reads the same settings files an agent can write.** It proves a registration is present and, where the tree is root-owned, that it points at a file this kit still owns. It cannot prove the harness will *honour* that registration at any tier.
-9. **A bare `.claude` operand matches no surface pattern**, so `rm -rf .claude` is allowed — and at the hardened tier it unlinks the root-owned gate, the audit lib, `.flaky-kit-expect` and the registration itself. Pre-existing and scheduled as separate work: widening the pattern to a bare `.claude` changes the surface from "the kit's files" to "the harness's entire configuration tree" and needs its own design round.
+9. **A bare `.claude` operand matches no surface pattern**, so `rm -rf .claude` is allowed — and at the hardened tier it unlinks the root-owned self-protection gate, the root-owned delivery gate, the audit lib, `.flaky-kit-expect` and both registrations. Pre-existing and scheduled as separate work: widening the pattern to a bare `.claude` changes the surface from "the kit's files" to "the harness's entire configuration tree" and needs its own design round.
 10. **A repair arms on the next session, never the one that made it.** The harness reads hook config at startup, so between the repair and a restart the gate is registered and not running.
 11. **The kit repairs its own registration only.** A neighbouring pack's stale registration is not the kit's to fix and is not fixed.
 12. **Below a root-owned tree the restore source has no more protection than anything else** — a poisoned `core/gate-src` restores a poisoned gate. That is what the lower tiers already mean.
@@ -164,6 +177,17 @@ remain what they were before this change: prose the agent is trusted to honour.
 was recorded, not what happened; a ledger the agent never named on a command line is invisible to it.
 16. **`core/apply`/`core/rerun` is the dividing line for "work was done"** — a session that changed
 things some other way and left no ledger is not caught.
+17. **The delivery gate's own protection is entirely second-order.** It is a `Stop` hook: it runs
+once, at end-of-session, and observes no tool call, so it can never deny the call that removes it.
+Everything that does deny that call — the surface match on its file, and the outcome test that
+refuses an edit dropping its `Stop` registration — lives in the *PreToolUse self-protection gate*.
+Defeat that gate first (residual 7's escape classes, or residual 9's bare `.claude`) and the delivery
+gate falls with no further friction. Root-owning its file buys less here than residual 3 concedes:
+the registration is not chown'd at any tier, and unregistering is cheaper than editing. Detected
+afterwards by the wiring axis — but only on the *next* entrypoint, and a session whose whole goal is
+to stop never runs one.
+18. **The no-ledger block has a one-token escape, by design** — see the delivery-gate section above
+for what it is, why it is there, and why it audits instead of blocking.
 ```bash
 core/lock-kit.sh lock        # hardens (chown to root) when sudo is available; degrades to a
                               # chmod-only read-only bit otherwise. Ends with `sudo -k`, so the
