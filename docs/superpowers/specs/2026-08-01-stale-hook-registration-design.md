@@ -3,7 +3,19 @@
 **Date:** 2026-08-01
 **Repos affected:** `APPS/forest` (the launcher). `SKLS/hektor` was in scope and
 was dropped — see Part 1.
-**Status:** Part 2 approved by Egecan, pending implementation. Part 1 dropped.
+**Status:** Part 2 IMPLEMENTED (verified 2026-08-03). Part 1 dropped.
+
+`launchDecision` is at `lib/actions.mjs:31-44` and returns the
+`blocked: 'missing-hooks'` payload with `repairable` derived from the provision
+record; the route wires it at `:323` and journals the block; the client handles
+it at `public/app.js:583` and sends `force: true` for "Launch anyway"
+(`:623`). Covered by `lib/actions.test.mjs:131` and `:174`. Suite 168/168.
+
+One detail worth keeping in view because it is deliberate and easy to mistake
+for a bug: a failure to resolve scope **allows** the launch. The guard exists to
+warn about missing gates and must never become the reason forest cannot start a
+session — the same fail-open-never-silently rule the kit applies to its own
+gates.
 
 ## Problem
 
