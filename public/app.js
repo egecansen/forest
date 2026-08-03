@@ -918,8 +918,9 @@ async function startSession() {
           // true for a unit whose files WERE deleted but whose id could not be
           // dropped from the record — the reason above says which happened.
           + 'Either way, forest\'s record still names them, so the next launch meets this guard again. '
-          + 'Unlock a hardened kit and remove again, retry if the record update itself failed, or choose '
-          + '"Launch anyway" to leave them running unmanaged.',
+          + 'Unlock a hardened kit and remove again, make .claude/.forest-provision.json writable and '
+          + 'remove again if it was the record update that failed, or choose "Launch anyway" to proceed '
+          + 'regardless of what is listed above.',
         );
         return;
       }
