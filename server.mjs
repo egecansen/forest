@@ -2,7 +2,7 @@ import http from 'node:http';
 import { readFile } from 'node:fs/promises';
 import { extname, join, normalize } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { loadConfig } from './lib/config.mjs';
+import { loadConfig, publicConfig } from './lib/config.mjs';
 import { buildSnapshot } from './lib/discover.mjs';
 import { createRegistry } from './lib/agents.mjs';
 import { createJournal } from './lib/journal.mjs';
@@ -17,6 +17,7 @@ const PUBLIC = join(ROOT, 'public');
 const CLAUDE_PROJECTS = `${process.env.HOME}/.claude/projects`;
 
 const config = await loadConfig(join(ROOT, 'config.json'));
+const clientConfig = publicConfig(config);
 const registry = createRegistry();
 const journal = createJournal({ max: 300 });
 const sizes = new Map();
@@ -113,7 +114,7 @@ const server = http.createServer(async (req, res) => {
     req.on('close', () => clients.delete(res));
     return;
   }
-  if (url === '/api/config') return sendJson(res, config);
+  if (url === '/api/config') return sendJson(res, clientConfig);
   if (url === '/api/worktrees') return sendJson(res, await snapshot());
   if (url === '/api/journal') return sendJson(res, journal.recent());
   if (url === '/api/packs') return sendJson(res, { packs: await listPacks(config.packsDir) });

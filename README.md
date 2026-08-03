@@ -50,6 +50,24 @@ terminal-first. The header **Guided ⟷ Auto** toggle decides whether an action 
 in your terminal (you stay fluent) or in the background (logged to the journal).
 Both modes confirm destructive actions and never touch a repo's primary worktree.
 
+## Worktree descriptions
+
+Each worktree's drawer carries a description. It starts out composed from the
+branch's ticket — the issue title, then the browse link — and reads as plain
+text with the ticket URL clickable. **Edit** turns it into a box you can write
+anything in; that button becomes **Save**, with **Cancel** to back out and
+**Reset to auto** to restore the ticket text. The `Description` heading collapses
+the section, and the choice is remembered.
+
+Overrides are stored per branch in `<repo>/.forest/descriptions.json`, so they
+survive removing and re-creating the worktree.
+
+Branch names in the deck are deliberately not links — clicking a row opens its
+drawer, and the ticket link lives in the description.
+
+Reading titles needs `jiraBaseUrl` and `jiraToken` (below). Without them the
+description falls back to the link alone — everything else still works.
+
 ## Config
 
 `config.json` (gitignored, per-machine) overrides the built-in defaults; every
@@ -63,6 +81,9 @@ key also has a `FOREST_*` env-var override. Copy `config.example.json` to
 | `packsDir` | `FOREST_PACKS_DIR` | `<root>/SKLS` | skill packs the launch picker offers |
 | `port` | `FOREST_PORT` | `5577` | server port |
 | `jiraBaseUrl` | `FOREST_JIRA_URL` | `""` | links branch tickets to Jira |
+| `jiraProjectKey` | `FOREST_JIRA_PROJECT_KEY` | `""` | re-keys the branch's ticket (`WEBT-1` → `SHBDN-1`); empty = use the branch's own key |
+| `jiraToken` | `FOREST_JIRA_TOKEN` | `""` | PAT used to read issue titles; never sent to the browser |
+| `jiraEmail` | `FOREST_JIRA_EMAIL` | `""` | set only for Jira Cloud, which wants Basic `email:token` |
 | `staleDays` | — | `14` | age before a worktree is flagged stale |
 | `defaultMode` | — | `guided` | `guided` or `auto` |
 | `terminalApp` / `openEditorCmd` / `setupScript` | — | macOS defaults | launch helpers |

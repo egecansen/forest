@@ -59,10 +59,12 @@ function agentCell(a) {
 }
 function ageCell(w) { return w.ageDays == null ? '—' : w.ageDays === 0 ? 'today' : `${w.ageDays}d`; }
 function sizeCell(w) { return w.sizeBytes == null ? '—' : `${(w.sizeBytes / 1e9).toFixed(1)}G`; }
-function ticketCell(w) {
-  if (w.ticket && state.config.jiraBaseUrl) {
-    return `<a class="ticket-link" href="${state.config.jiraBaseUrl}/browse/${encodeURIComponent(w.ticket)}" target="_blank" onclick="event.stopPropagation()">${esc(w.branch)}</a>`;
-  }
+// Plain text, deliberately not a link: clicking anywhere on a row opens that
+// worktree's drawer, and a branch name that navigated to Jira instead made the
+// widest click target in the row the one that left the app. The ticket link
+// lives in the drawer's description, where it is asked for rather than hit by
+// accident.
+function branchCell(w) {
   return esc(w.branch) || '(detached)';
 }
 
@@ -76,7 +78,7 @@ function rowHtml(w, repo) {
   const enc = encodeURIComponent(w.path);
   const pruneable = (w.stale || w.merged) && !w.isPrimary;
   return `<div class="row ${w.isPrimary ? '' : 'nested'}" data-path="${enc}">
-    <div class="col-branch branch">${ticketCell(w)}</div>
+    <div class="col-branch branch">${branchCell(w)}</div>
     <div class="col-status">${statusBadge(w)}${gateBadge(w)}</div>
     <div class="col-owner">${esc(w.owner)}</div>
     <div class="col-agent">${agentCell(w.agent)}</div>
@@ -230,9 +232,20 @@ function renderDiff(text) {
   }).join('');
 }
 
+// Which worktree the drawer is currently showing. Async panels (description,
+// diff) check it before writing, so a slow response for the worktree you just
+// navigated away from cannot land in the drawer for the one you opened.
+let drawerPath = null;
+
+function closeDrawer() {
+  $('#drawer').classList.add('hidden');
+  drawerPath = null;
+}
+
 async function openDrawer(path) {
   const w = findWorktree(path);
   if (!w) return;
+  drawerPath = path;
   const d = $('#drawer');
   d.classList.remove('hidden');
   const sibs = siblingWorktrees(w);
@@ -255,11 +268,13 @@ async function openDrawer(path) {
     <h3>${esc(w.branch) || '(detached)'}</h3>
     <p class="meta-line">${esc(w.repo)} · ${esc(w.owner)} · ${ageCell(w)} · ${sizeCell(w)}</p>
     ${applyHtml}
+    <h4 class="desc-head"><button id="desc-toggle" class="desc-toggle" aria-expanded="true">Description</button></h4>
+    <div id="desc-panel" class="desc"><p class="desc-loading">loading…</p></div>
     <div id="task-panel"></div>
     <h4>Diff</h4><div id="diff" class="diffview">loading…</div>
     ${removeHtml}
     ${ejectHtml}`;
-  $('#drawer-close').onclick = () => d.classList.add('hidden');
+  $('#drawer-close').onclick = closeDrawer;
   const finishBtn = $('#drawer-finish');
   if (finishBtn) finishBtn.onclick = () => openFinish(w.path);
   const ejectBtn = $('#eject-go');
@@ -277,7 +292,7 @@ async function openDrawer(path) {
     const r = await removeWorktree(w);
     rmBtn.disabled = false;
     // In auto mode the worktree is gone — close the drawer. SSE refreshes the deck.
-    if (r && !r.error && state.mode === 'auto') d.classList.add('hidden');
+    if (r && !r.error && state.mode === 'auto') closeDrawer();
   };
   const applyBtn = $('#apply-go');
   if (applyBtn) applyBtn.onclick = async () => {
@@ -290,8 +305,122 @@ async function openDrawer(path) {
   };
   const buf = state.taskBuf[path];
   if (buf) renderTaskPanel(path);
+  loadDescription(path);
   const res = await fetch(`/api/diff?path=${encodeURIComponent(path)}`).then((r) => r.json());
   $('#diff').innerHTML = renderDiff(res.diff || '');
+}
+
+// ---- description ----
+//
+// Seeded from the branch's Jira ticket, overwritable, and stored per branch.
+// Rendered from the server's answer rather than composed here, so the browser
+// never needs the Jira credentials.
+//
+// Two states: reading (the default — plain text, with the ticket URL clickable)
+// and editing (a textarea, entered by Edit and left by Save). Reading is the
+// default because that is what opening a drawer is usually for.
+
+const descCollapsedKey = 'forest-desc-collapsed';
+const descCollapsed = () => localStorage.getItem(descCollapsedKey) === '1';
+
+function setDescCollapsed(collapsed) {
+  localStorage.setItem(descCollapsedKey, collapsed ? '1' : '0');
+  const panel = $('#desc-panel');
+  const toggle = $('#desc-toggle');
+  if (panel) panel.classList.toggle('collapsed', collapsed);
+  if (toggle) toggle.setAttribute('aria-expanded', String(!collapsed));
+}
+
+// Turns bare URLs into links. Splitting on a capturing regex puts the matches
+// at the odd indices, so every part — link or not — is escaped exactly once and
+// no user text can reach the DOM unescaped.
+function linkify(text) {
+  return String(text ?? '')
+    .split(/(https?:\/\/[^\s<]+)/g)
+    .map((part, i) => (i % 2
+      ? `<a class="desc-link" href="${esc(part)}" target="_blank" rel="noopener">${esc(part)}</a>`
+      : esc(part)))
+    .join('');
+}
+
+// Grows the box to fit its content, so a one-line description is one line tall
+// and a long one never needs an inner scrollbar.
+function autoGrow(area) {
+  area.style.height = 'auto';
+  area.style.height = `${Math.max(area.scrollHeight, 38)}px`;
+}
+
+function renderDescription(path, d, { editing = false } = {}) {
+  const panel = $('#desc-panel');
+  // The drawer may have been closed or switched to another worktree while the
+  // request was in flight.
+  if (!panel || drawerPath !== path) return;
+  const note = d.override ? 'edited' : d.url ? 'from the ticket' : '';
+  const body = editing
+    ? `<textarea id="desc-text" class="desc-text" spellcheck="false"
+         placeholder="What is this worktree for?">${esc(d.text || '')}</textarea>`
+    : (d.text
+      ? `<div class="desc-read">${linkify(d.text)}</div>`
+      : `<p class="desc-empty">No description yet.</p>`);
+  const controls = editing
+    ? `<button id="desc-save" class="btn-accent">Save</button>
+       <button id="desc-cancel" class="desc-flat">Cancel</button>
+       ${d.override ? '<button id="desc-reset" class="desc-flat">Reset to auto</button>' : ''}`
+    : `<button id="desc-edit" class="desc-flat">Edit</button>`;
+
+  panel.innerHTML = `${body}
+    <div class="desc-row">${controls}<span class="desc-note">${note}</span></div>
+    ${d.jiraError ? `<p class="desc-warn">${esc(d.jiraError)}</p>` : ''}`;
+  panel.classList.toggle('collapsed', descCollapsed());
+
+  const edit = $('#desc-edit');
+  if (edit) edit.onclick = () => renderDescription(path, d, { editing: true });
+  if (!editing) return;
+
+  const area = $('#desc-text');
+  autoGrow(area);
+  area.addEventListener('input', () => autoGrow(area));
+  area.focus();
+
+  const save = async () => {
+    const text = area.value;
+    const r = await api('/api/description/save', { path, text });
+    if (!r || !r.ok) { toast(`Save failed: ${(r && r.error) || 'server unreachable'}`); return; }
+    toast('Description saved');
+    // Back to reading, and now an override — so "Reset to auto" is offered the
+    // next time this is edited.
+    renderDescription(path, { ...d, text, override: true, jiraError: undefined });
+  };
+  $('#desc-save').onclick = save;
+  $('#desc-cancel').onclick = () => renderDescription(path, d);
+  area.addEventListener('keydown', (e) => {
+    if ((e.metaKey || e.ctrlKey) && e.key === 'Enter') { e.preventDefault(); save(); }
+    // Escape leaves the editor rather than closing the whole drawer, which
+    // would throw away what was typed.
+    if (e.key === 'Escape') { e.stopPropagation(); renderDescription(path, d); }
+  });
+  const reset = $('#desc-reset');
+  if (reset) reset.onclick = async () => {
+    const r = await api('/api/description/reset', { path });
+    if (!r || !r.ok) { toast(`Reset failed: ${(r && r.error) || 'server unreachable'}`); return; }
+    toast('Reset to the ticket');
+    renderDescription(path, r);
+  };
+}
+
+async function loadDescription(path) {
+  // Apply the remembered collapse state before the request resolves, so a
+  // collapsed section never flashes open while it loads.
+  setDescCollapsed(descCollapsed());
+  const toggle = $('#desc-toggle');
+  if (toggle) toggle.onclick = () => setDescCollapsed(!descCollapsed());
+  const d = await api('/api/description', { path });
+  if (!d || d.error) {
+    const panel = $('#desc-panel');
+    if (panel && drawerPath === path) panel.innerHTML = `<p class="desc-warn">${esc((d && d.error) || 'server unreachable')}</p>`;
+    return;
+  }
+  renderDescription(path, d);
 }
 
 function renderTaskPanel(path) {
@@ -700,7 +829,7 @@ function wireEvents() {
 
   document.addEventListener('keydown', (e) => {
     if ((e.metaKey || e.ctrlKey) && e.key === 'k') { e.preventDefault(); togglePalette(); }
-    if (e.key === 'Escape') { $('#palette').classList.add('hidden'); $('#drawer').classList.add('hidden'); $('#newwt').classList.add('hidden'); $('#picker').classList.add('hidden'); $('#finishwt').classList.add('hidden'); }
+    if (e.key === 'Escape') { $('#palette').classList.add('hidden'); closeDrawer(); $('#newwt').classList.add('hidden'); $('#picker').classList.add('hidden'); $('#finishwt').classList.add('hidden'); }
   });
 }
 
