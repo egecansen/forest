@@ -626,6 +626,70 @@ async function startSession() {
     toast(forced.action === 'focused' ? 'Claude already running — Terminal brought to front' : 'Launching Claude…');
     return;
   }
+  if (r && r.blocked === 'orphaned-units') {
+    const list = r.orphaned.map((o) => `  • ${o.kind} ${o.id} (since ${o.since.slice(0, 10)})`).join('\n');
+    const intro = `${r.orphaned.length} unit(s) are installed here but no longer selected:\n\n${list}\n\n`
+      + 'They still run, at the version they had when they were last provisioned.\n\n';
+
+    // Three-way choice, funnelled through confirm() — this file has no
+    // multi-button dialog helper. Cancelling the LAST confirm is the only
+    // way to launch nothing; cancelling an earlier one just moves on to the
+    // next option, which is what each dialog's own wording says it does.
+    if (confirm(
+      `${intro}Update — check them back on and relaunch, which re-provisions them and clears this guard?\n\n`
+      + 'OK — reselect and relaunch.\n'
+      + 'Cancel — see removal / launch-anyway instead.',
+    )) {
+      let unmatched = 0;
+      for (const o of r.orphaned) {
+        const cb = $(`.pk-cb[data-kind="${o.kind}"][data-id="${o.id}"]`);
+        if (cb) cb.checked = true; else unmatched++;
+      }
+      syncMasters();
+      updatePickerCount();
+      if (unmatched) toast(`${unmatched} unit(s) are no longer offered by any pack — not reselected`);
+      return startSession();
+    }
+
+    if (confirm(
+      `${intro}Remove — delete their files from .claude/ now?\n\n`
+      + 'OK — remove now.\n'
+      + 'Cancel — leave them and choose launch-anyway next.',
+    )) {
+      const rm = await api('/api/worktree/remove-units', { path, units: r.orphaned.map(({ kind, id }) => ({ kind, id })) });
+      if (!rm || !rm.ok) { toast(`Remove failed: ${(rm && rm.error) || 'server unreachable'}`); return; }
+      if (rm.refused?.length) alert(rm.refused.map((f) => f.reason).join('\n'));
+      if (rm.removed?.length) {
+        // Deliberately not softened: a kit's own installer owns its harness
+        // wiring, forest does not edit settings.json, so the registration
+        // outlives the files it just deleted. That does not clear this
+        // guard — relaunching meets it again — so removing is a two-step
+        // path by construction: Update or Launch anyway is what actually
+        // gets a session running.
+        alert(
+          `Removed ${rm.removed.join(', ')}.\n\n`
+          + 'Their harness registrations are untouched and still point at files that are now gone. '
+          + 'That does not clear this guard — relaunching meets it again. Removing is a two-step path: '
+          + 'pick Update (to bring them back) or Launch anyway (to bypass this once) to actually get in.',
+        );
+      }
+      return startSession();
+    }
+
+    if (!confirm(
+      `${intro}Launch anyway, leaving them running unmanaged?\n\n`
+      + 'OK — launch.\n'
+      + 'Cancel — do not launch.',
+    )) return;
+    // selections (not []): unlike the missing-hooks retry above, nothing has
+    // been provisioned yet — the orphan check runs before provisioning — so
+    // the real selections still need to go along on this forced call.
+    const forced = await api('/api/launch', { path, selections, mode: state.mode, force: true });
+    if (!forced || !forced.ok) { toast(`Launch failed: ${(forced && forced.error) || 'server unreachable'}`); return; }
+    closePicker();
+    toast(forced.action === 'focused' ? 'Claude already running — Terminal brought to front' : 'Launching Claude…');
+    return;
+  }
   if (!r || !r.ok) { toast(`Launch failed: ${(r && r.error) || 'server unreachable'}`); return; }
   closePicker();
   const prov = r.provisioned;
