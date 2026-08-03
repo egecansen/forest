@@ -200,17 +200,21 @@ exists"). It answers whether `/api/worktree/repair` can fix *this* block:
   conservatism about an unknown — it was asserting an already-decided
   possibility.
 
-  `true` remains an over-approximation in exactly one place, and it is
-  genuinely undecidable: a kit that ships `install.sh` owns its own wiring and
-  forest cannot predict which files that installer touches. Two other cases
-  read like over-approximations at first — a kit whose `hooks/` directory
-  exists but is empty, and a kit whose `settings.hooks.json` is present but not
-  valid JSON — but both are refutable by a content check, and `writesHookWiring`
-  performs both (`readdir` for the first, `JSON.parse` for the second; added
-  2026-08-03 closing a follow-up from this branch's own review). Everything
-  else is refutable, and refuted where it is false. A record naming only plain
-  skills is still `false` — a skill is copied into `.claude/skills/<id>/` and
-  touches no settings file and no hook script.
+  `true` can still overshoot: once for a case that is genuinely undecidable,
+  and again wherever refuting it would mean reading an artifact's content
+  rather than its shape. A kit that ships `install.sh` is the undecidable
+  one — it owns its own wiring and forest cannot predict which files that
+  installer touches. The `hooks/`-directory and `settings.hooks.json` checks
+  go one step past `exists()` (`readdir` for the first, `JSON.parse` for the
+  second; added 2026-08-03 closing a follow-up from this branch's own review),
+  but neither reads what is underneath: a `hooks/` directory holding only an
+  empty subdirectory still has entries, and a settings fragment that parses
+  but declares no hooks (`{}`, `{"hooks":{}}`, even a bare `7`) still parses.
+  `writesHookWiring` answers "could this selection write wiring", not "will
+  it" — narrowing that gap further is a deliberate, separate change, not this
+  one. A record naming only plain skills is still `false` — a skill is copied
+  into `.claude/skills/<id>/` and touches no settings file and no hook
+  script.
 
   Without a readable `packsDir` the answer is `false`, and correctly so: a
   replay through that same `packsDir` would find nothing to provision either.
