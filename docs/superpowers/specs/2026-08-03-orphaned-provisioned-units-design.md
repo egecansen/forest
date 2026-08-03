@@ -295,9 +295,17 @@ through — a removal does not re-provision what survives it, and stamping a fre
 one made a surviving orphan's `since` read as the removal date, i.e. newer and
 so safer than it is, in the dialog that gates an irreversible action.
 
-**Consequence, stated because it is a real limit:** removing a kit's files
-without removing its registration produces exactly the `missing-hooks` state the
-existing guard catches on the next launch.
+**Consequence, stated because it is a real limit — and it holds for only one of
+the two kit shapes:** for a kit whose installer registers a command pointing
+*inside* `.claude/kits/<id>/`, removing its files without removing its
+registration produces exactly the `missing-hooks` state the existing guard
+catches on the next launch. **It does not hold for a convention kit** — one
+with no `install.sh` — because `provisionKit`'s convention branch copies that
+kit's hook script into the shared `.claude/hooks/` (`lib/packs.mjs:192`), never
+into `.claude/kits/<id>/`; Remove deletes only the latter, so the script and the
+registration pointing at it both survive. Executed: after Remove, session scope
+reports `active=1 missing=0` and the relaunch launches cleanly — not the
+`missing-hooks` state this paragraph describes.
 
 This section originally called that "the intended handoff — the next launch
 blocks on it and offers the repair that rewrites the registration." **That was
