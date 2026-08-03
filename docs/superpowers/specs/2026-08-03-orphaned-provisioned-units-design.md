@@ -83,7 +83,7 @@ and it needs a confirmation flow of its own.
 
 ### 1. The record says what was written, not only what was asked for
 
-`writeProvisionRecord(worktreePath, selections)` (`lib/packs.mjs:302`) gains a
+`writeProvisionRecord(worktreePath, selections)` (`lib/packs.mjs:308`) gains a
 third parameter:
 
 ```js
@@ -112,7 +112,7 @@ bookkeeping.
 kit's own installer and belong to the kit; they are managed by updating or
 removing the kit, not on their own.
 
-`readProvisionRecord` (`:311`) is unchanged — it returns whatever the file
+`readProvisionRecord` (`:317`) is unchanged — it returns whatever the file
 holds, and a record without `inventory` reads as `undefined`.
 
 ### 2. Orphan detection, before provisioning overwrites the record
@@ -200,11 +200,14 @@ exists"). It answers whether `/api/worktree/repair` can fix *this* block:
   conservatism about an unknown — it was asserting an already-decided
   possibility.
 
-  `true` remains an over-approximation in exactly one place: a kit that ships
-  `install.sh` owns its own wiring and forest cannot predict which files that
-  installer touches. Everything else is refutable, and refuted where it is
-  false. A record naming only plain skills is still `false` — a skill is copied
-  into `.claude/skills/<id>/` and touches no settings file and no hook script.
+  `true` remains an over-approximation in three places. Only one is genuinely
+  undecidable: a kit that ships `install.sh` owns its own wiring and forest
+  cannot predict which files that installer touches. The other two are refutable
+  by content checks that are not performed: a kit whose `hooks/` directory
+  exists but is empty, and a kit whose `settings.hooks.json` is present but not
+  valid JSON. Everything else is refutable, and refuted where it is false. A
+  record naming only plain skills is still `false` — a skill is copied into
+  `.claude/skills/<id>/` and touches no settings file and no hook script.
 
   Without a readable `packsDir` the answer is `false`, and correctly so: a
   replay through that same `packsDir` would find nothing to provision either.
