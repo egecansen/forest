@@ -627,27 +627,39 @@ async function startSession() {
     );
     if (!proceed) return;
 
-    // Step 2 — how to continue. Repair replays the provision record and
-    // nothing else, so `repairable: false` means a repair run would provably
-    // change nothing here: either there is no record, or what it still names
-    // (plain skills) writes no registration. The unit whose installer wrote
-    // these — a kit that has since been removed or deselected — is the only
-    // thing that can rewrite them, so that is what the copy sends the user at.
+    // Step 2 — how to continue. The remedy is NOT gated on `repairable`, and
+    // that is the point: whatever the flag says, this is the thing that works,
+    // so the user hears it either way.
+    //
+    // `repairable` is honest in one direction only. `false` is provable —
+    // replaying the record cannot write any hook wiring, so a repair run
+    // changes nothing. `true` means "might": a kit that ships install.sh owns
+    // its own wiring and forest cannot know which files that installer
+    // touches. Gating this paragraph behind !repairable is how a user got
+    // "Repair before launching?" — definite, and sometimes false — and never
+    // learned the remedy that actually fixes it.
+    const remedy =
+      'The fix that works: re-select the unit that installed them in the launcher and launch. '
+      + 'That re-runs its own installer, which is what rewrites the registration. '
+      + 'If no pack offers it any more, edit .claude/settings.json by hand.\n\n';
+
     if (!r.repairable) {
       if (!confirm(
         'Forest cannot repair this worktree. Repair only re-provisions what the '
-        + 'provision record still names, and nothing it names writes these '
-        + 'registrations — the run would change nothing.\n\n'
-        + 'The fix: re-select the unit that installed them in the launcher and launch. '
-        + 'That re-runs its own installer, which is what rewrites the registration. '
-        + 'If no pack offers it any more, edit .claude/settings.json by hand.\n\n'
+        + 'provision record still names, and nothing it names writes any hook wiring '
+        + '— the run would change nothing.\n\n'
+        + remedy
         + 'OK — launch anyway, with the gates off.\n'
         + 'Cancel — do not launch.',
       )) return;
     }
     const repair = r.repairable && confirm(
       'Repair before launching?\n\n'
-      + 'OK — re-run the kit\'s installer, then launch.\n'
+      + 'Repair re-provisions what the record still names. That MAY rewrite these '
+      + 'registrations — a kit\'s install.sh owns its own wiring, and forest cannot '
+      + 'know which files it writes — but it is not guaranteed.\n\n'
+      + remedy
+      + 'OK — re-provision, then launch.\n'
       + 'Cancel — launch without repairing.',
     );
     if (repair) {
@@ -743,19 +755,52 @@ async function startSession() {
     )) {
       const rm = await api('/api/worktree/remove-units', { path, units: r.orphaned.map(({ kind, id }) => ({ kind, id })) });
       if (!rm || !rm.ok) { toast(`Remove failed: ${(rm && rm.error) || 'server unreachable'}`); return; }
-      if (rm.refused?.length) alert(rm.refused.map((f) => f.reason).join('\n'));
-      if (rm.removed?.length) {
-        // The removal drops these ids from the provision record, so relaunching
-        // does NOT meet this guard again — that is what makes recursing into
-        // startSession() below honest. What it cannot clear is the harness
-        // registration: a kit's own installer owns its wiring and forest does
-        // not edit settings.json. If one now points at a deleted file, the
-        // next launch reports missing-hooks, and the only remedy that works is
-        // re-selecting the unit — repair replays what the record names, and
-        // the record no longer names it. Naming Repair here would be naming a
-        // button that provably cannot help.
+
+      // `stillListed` is what the route says about the RECORD, not about the
+      // filesystem, and it is the only thing that decides which of these two
+      // messages is true. A unit that was never on disk is dropped from the
+      // record even though its removal was "refused"; a hardened one keeps its
+      // place there because its files really are still running.
+      const removedLine = rm.removed?.length ? `Removed ${rm.removed.join(', ')}.\n\n` : '';
+      const stuck = (rm.refused || []).filter((f) => f.stillListed);
+      const dropped = (rm.refused || []).filter((f) => !f.stillListed);
+      const droppedLine = dropped.length ? `${dropped.map((f) => f.reason).join('\n')}\n\n` : '';
+
+      if (stuck.length) {
+        // The claim "this guard is clear" used to be made whenever ANY unit was
+        // removed, and then startSession() recursed straight back into this
+        // dialog — which met the guard again on whatever was refused. Say what
+        // is still listed and why, and do not recurse: the previous copy's own
+        // reasoning was that recursing is honest BECAUSE the guard is clear, so
+        // when it is not clear, re-opening this dialog on the user's behalf is
+        // the loop the reviewer walked into. The picker stays open; pressing
+        // Start again is a deliberate choice, and "Launch anyway" is there.
         alert(
-          `Removed ${rm.removed.join(', ')}.\n\n`
+          `${removedLine}${droppedLine}`
+          // Only in this branch: the clean-sweep paragraph below already says
+          // the record no longer lists anything, so repeating it there read as
+          // the same sentence twice.
+          + (dropped.length ? `Forest's record no longer lists ${dropped.length > 1 ? 'those' : 'that one'}.\n\n` : '')
+          + `${stuck.length} unit(s) could NOT be removed and are still listed:\n\n`
+          + `${stuck.map((f) => `  • ${f.reason}`).join('\n')}\n\n`
+          + 'Their files are still on disk and still registered, so forest\'s record still names them '
+          + 'and the next launch meets this guard again. Unlock them and remove again, or choose '
+          + '"Launch anyway" to leave them running unmanaged.',
+        );
+        return;
+      }
+
+      if (removedLine || droppedLine) {
+        // A clean sweep, so this is now true: the record no longer lists any of
+        // them and relaunching does not meet this guard again — which is what
+        // makes recursing into startSession() below honest. What it cannot
+        // clear is the harness registration: a kit's own installer owns its
+        // wiring and forest does not edit settings.json. If one now points at a
+        // deleted file, the next launch reports missing-hooks, and the remedy
+        // that works is re-selecting the unit — repair replays what the record
+        // names, and the record no longer names it.
+        alert(
+          `${removedLine}${droppedLine}`
           + 'Forest\'s record no longer lists them, so this guard is clear — relaunching does not meet it again.\n\n'
           + 'Their harness registrations are untouched and may still point at files that are now gone. '
           + 'If the next launch reports missing hook scripts, the fix is to re-select that unit in the '
