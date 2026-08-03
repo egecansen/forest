@@ -462,6 +462,7 @@ async function doAction(act, ds, el) {
     if (r && r.error === 'no provision record') { openPicker(path); return; }
     if (!r || r.error || !r.scope) { toast(`Repair failed: ${(r && r.error) || 'server unreachable'} — open the picker and re-provision`); return; }
     toast(`Repaired · ${r.scope.active} hooks active, ${r.scope.missing} missing`);
+    reportConflicts(r.provisioned);
     return;
   }
   if (act === 'task') {
@@ -699,6 +700,36 @@ function collectSel() {
   });
   return sel;
 }
+// A collision is the only signal a provisioned file was left at its old
+// content: copyTree never overwrites a destination that differs, it records
+// the path and moves on. Until now that list reached the journal and nothing
+// else, so a launch that quietly kept a stale file looked identical to one
+// that refreshed everything.
+function reportConflicts(prov) {
+  const c = (prov && prov.conflicts) || [];
+  if (!c.length) return;
+  const shown = c.slice(0, 8).map((x) => `  • ${x.path}\n      kept ${x.existing}'s copy, skipped ${x.incoming}'s`);
+  alert(
+    `${c.length} file(s) already existed with different content and were left exactly as they were:\n\n`
+    + `${shown.join('\n')}${c.length > shown.length ? `\n  … and ${c.length - shown.length} more` : ''}\n\n`
+    + 'Provisioning never overwrites a file whose content differs — these are still at their old content, '
+    + 'not the pack\'s. Delete the ones you did not hand-edit and launch again to take the pack\'s version.',
+  );
+}
+
+// Everything a launch response carries that is worth saying: what was
+// provisioned, what gates are still missing (a forced launch reports them and
+// used to drop them on the floor), and what provisioning refused to overwrite.
+function reportLaunched(r) {
+  const prov = r.provisioned;
+  const provMsg = prov && (prov.skills.length || prov.kits.length || prov.hooks)
+    ? `${prov.skills.length} skill(s)${prov.kits.length ? `, ${prov.kits.length} kit(s)` : ''}${prov.hooks ? ', gates' : ''} · ` : '';
+  const miss = r.scope && r.scope.missing ? r.scope.missing.length : 0;
+  if (miss) toast(`${provMsg}Launching Claude — ${miss} registered hook script(s) missing`);
+  else toast(r.action === 'focused' ? 'Claude already running — Terminal brought to front' : `${provMsg}Launching Claude…`);
+  reportConflicts(prov);
+}
+
 async function startSession() {
   const path = pickerPath;
   if (!path) return;
@@ -725,44 +756,196 @@ async function startSession() {
     );
     if (!proceed) return;
 
-    // Step 2 — how to continue. Forest can only re-provision from a recorded
-    // set of selections; without one there is nothing to repair from, so the
-    // only remaining choice is to launch ungated or back out.
+    // Step 2 — how to continue. The remedy is NOT gated on `repairable`, and
+    // that is the point: whatever the flag says, this is the thing that works,
+    // so the user hears it either way.
+    //
+    // `repairable` is honest in one direction only. `false` is provable —
+    // replaying the record cannot write any hook wiring, so a repair run
+    // changes nothing. `true` means "might": a kit that ships install.sh owns
+    // its own wiring and forest cannot know which files that installer
+    // touches. Gating this paragraph behind !repairable is how a user got
+    // "Repair before launching?" — definite, and sometimes false — and never
+    // learned the remedy that actually fixes it.
+    const remedy =
+      'The fix that works: re-select the unit that installed them in the launcher and launch. '
+      + 'That re-runs its own installer, which is what rewrites the registration. '
+      + 'If no pack offers it any more, edit .claude/settings.json by hand.\n\n';
+
     if (!r.repairable) {
       if (!confirm(
-        'Forest cannot repair this worktree: it has no provision record, so there '
-        + 'is nothing to re-provision from. Pick packs in the launcher to provision '
-        + 'it, or fix the wiring by hand.\n\n'
+        'Forest cannot repair this worktree. Repair only re-provisions what the '
+        + 'provision record still names, and nothing it names writes any hook wiring '
+        + '— the run would change nothing.\n\n'
+        + remedy
         + 'OK — launch anyway, with the gates off.\n'
         + 'Cancel — do not launch.',
       )) return;
     }
     const repair = r.repairable && confirm(
       'Repair before launching?\n\n'
-      + 'OK — re-run the kit\'s installer, then launch.\n'
+      + 'Repair re-provisions what the record still names. That MAY rewrite these '
+      + 'registrations — a kit\'s install.sh owns its own wiring, and forest cannot '
+      + 'know which files it writes — but it is not guaranteed.\n\n'
+      + remedy
+      + 'OK — re-provision, then launch.\n'
       + 'Cancel — launch without repairing.',
     );
     if (repair) {
       const rep = await api('/api/worktree/repair', { path, mode: state.mode });
       if (!rep || rep.error) { toast(`Repair failed: ${(rep && rep.error) || 'server unreachable'}`); return; }
       toast(`Repaired · ${rep.scope.active} hooks active, ${rep.scope.missing} missing`);
+      reportConflicts(rep.provisioned);
     }
     // selections: [] on purpose — provisioning already ran on the first call,
     // and re-sending them would provision twice.
     const forced = await api('/api/launch', { path, selections: [], mode: state.mode, force: true });
     if (!forced || !forced.ok) { toast(`Launch failed: ${(forced && forced.error) || 'server unreachable'}`); return; }
     closePicker();
-    toast(forced.action === 'focused' ? 'Claude already running — Terminal brought to front' : 'Launching Claude…');
+    reportLaunched(forced);
+    return;
+  }
+  if (r && r.blocked === 'orphaned-units') {
+    const list = r.orphaned.map((o) => `  • ${o.kind} ${o.id} (since ${o.since.slice(0, 10)})`).join('\n');
+    // "If their files are still on disk" rather than a flat "they still run":
+    // the record is what fires this guard, and a unit can have been deleted
+    // out from under it by hand. (It used to have a second reason — Remove
+    // below recursed into startSession() and hit this same dialog with the
+    // files already gone. It no longer does: Remove updates the record, so
+    // that recursion gets past this guard.)
+    const intro = `${r.orphaned.length} unit(s) are recorded as provisioned here but no longer selected:\n\n${list}\n\n`
+      + 'If their files are still on disk, they are running at the version they had when they were last provisioned.\n\n';
+
+    // Ordered so Cancel never defaults toward the irreversible option. Native
+    // confirm() can't relabel its buttons — the user always sees generic
+    // OK/Cancel, and Escape maps to Cancel — so the ordering itself has to
+    // carry the safety, not the wording alone: Update (reversible, the
+    // common case) first, then Launch anyway (touches nothing on disk),
+    // then Remove (the one thing that can't be undone) last. Cancelling any
+    // of them moves to the next; cancelling — or Escape-spamming through —
+    // all three is a genuine no-op, matching the missing-hooks block above,
+    // where the first Cancel already means "do not launch".
+    if (confirm(
+      `${intro}Update them — check them back on and relaunch?\n\n`
+      // Not "brings them current", which is what this said and is not what
+      // provisioning does: copyTree never overwrites a file whose content
+      // differs, so a plain skill and the copy under .claude/kits/<id>/ stay
+      // exactly as they are. A kit that ships install.sh is the one thing that
+      // is genuinely re-run from source.
+      + 'That clears this guard and puts them back under forest\'s management. A kit with its own '
+      + 'install.sh is re-run, which is what can bring it current; plain skills and the copy under '
+      + '.claude/kits/ are NOT refreshed — provisioning never overwrites a file whose content differs.\n\n'
+      + 'OK — reselect and relaunch.\n'
+      + 'Cancel — see other options.',
+    )) {
+      let unmatched = 0;
+      for (const o of r.orphaned) {
+        const cb = $(`.pk-cb[data-kind="${o.kind}"][data-id="${o.id}"]`);
+        if (cb) cb.checked = true; else unmatched++;
+      }
+      syncMasters();
+      updatePickerCount();
+      if (unmatched) toast(`${unmatched} unit(s) are no longer offered by any pack — not reselected`);
+      return startSession();
+    }
+
+    if (confirm(
+      `${intro}Launch anyway, leaving them running unmanaged — nothing on disk changes?\n\n`
+      + 'OK — launch.\n'
+      + 'Cancel — see removal instead.',
+    )) {
+      // selections (not []): unlike the missing-hooks retry above, nothing
+      // has been provisioned yet — the orphan check runs before
+      // provisioning — so the real selections still need to go along on
+      // this forced call.
+      const forced = await api('/api/launch', { path, selections, mode: state.mode, force: true });
+      if (!forced || !forced.ok) { toast(`Launch failed: ${(forced && forced.error) || 'server unreachable'}`); return; }
+      closePicker();
+      // The response carries scope.missing and provisioned.conflicts. Toasting
+      // a flat "Launching Claude…" over both is how a forced launch went out
+      // with a dead gate and said nothing about it.
+      reportLaunched(forced);
+      return;
+    }
+
+    if (confirm(
+      // "their files from .claude/" without qualification was too wide: only
+      // the unit's own directory goes. A kit's installer also writes skill
+      // directories under .claude/skills/, and forest keeps no map of which
+      // kit wrote which — so they stay, inert, and the copy has to say so
+      // before the user accepts an irreversible action.
+      `${intro}Remove — permanently delete .claude/kits/<id>/ or .claude/skills/<id>/ for each of them now? `
+      + 'This cannot be undone.\n\n'
+      + 'What stays: their harness registrations (forest does not edit settings.json), and any skill '
+      + 'directories a kit\'s own installer wrote — those are inert without the kit, and removing them '
+      + 'would need an ownership map forest does not keep.\n\n'
+      + 'OK — remove now.\n'
+      + 'Cancel — do nothing.',
+    )) {
+      const rm = await api('/api/worktree/remove-units', { path, units: r.orphaned.map(({ kind, id }) => ({ kind, id })) });
+      if (!rm || !rm.ok) { toast(`Remove failed: ${(rm && rm.error) || 'server unreachable'}`); return; }
+
+      // `stillListed` is what the route says about the RECORD, not about the
+      // filesystem, and it is the only thing that decides which of these two
+      // messages is true. A unit that was never on disk is dropped from the
+      // record even though its removal was "refused"; a hardened one keeps its
+      // place there because its files really are still running.
+      const removedLine = rm.removed?.length ? `Removed ${rm.removed.join(', ')}.\n\n` : '';
+      const stuck = (rm.refused || []).filter((f) => f.stillListed);
+      const dropped = (rm.refused || []).filter((f) => !f.stillListed);
+      const droppedLine = dropped.length ? `${dropped.map((f) => f.reason).join('\n')}\n\n` : '';
+
+      if (stuck.length) {
+        // The claim "this guard is clear" used to be made whenever ANY unit was
+        // removed, and then startSession() recursed straight back into this
+        // dialog — which met the guard again on whatever was refused. Say what
+        // is still listed and why, and do not recurse: the previous copy's own
+        // reasoning was that recursing is honest BECAUSE the guard is clear, so
+        // when it is not clear, re-opening this dialog on the user's behalf is
+        // the loop the reviewer walked into. The picker stays open; pressing
+        // Start again is a deliberate choice, and "Launch anyway" is there.
+        alert(
+          `${removedLine}${droppedLine}`
+          // Only in this branch: the clean-sweep paragraph below already says
+          // the record no longer lists anything, so repeating it there read as
+          // the same sentence twice.
+          + (dropped.length ? `Forest's record no longer lists ${dropped.length > 1 ? 'those' : 'that one'}.\n\n` : '')
+          + `${stuck.length} unit(s) could NOT be removed and are still listed:\n\n`
+          + `${stuck.map((f) => `  • ${f.reason}`).join('\n')}\n\n`
+          + 'Their files are still on disk and still registered, so forest\'s record still names them '
+          + 'and the next launch meets this guard again. Unlock them and remove again, or choose '
+          + '"Launch anyway" to leave them running unmanaged.',
+        );
+        return;
+      }
+
+      if (removedLine || droppedLine) {
+        // A clean sweep, so this is now true: the record no longer lists any of
+        // them and relaunching does not meet this guard again — which is what
+        // makes recursing into startSession() below honest. What it cannot
+        // clear is the harness registration: a kit's own installer owns its
+        // wiring and forest does not edit settings.json. If one now points at a
+        // deleted file, the next launch reports missing-hooks, and the remedy
+        // that works is re-selecting the unit — repair replays what the record
+        // names, and the record no longer names it.
+        alert(
+          `${removedLine}${droppedLine}`
+          + 'Forest\'s record no longer lists them, so this guard is clear — relaunching does not meet it again.\n\n'
+          + 'Their harness registrations are untouched and may still point at files that are now gone. '
+          + 'If the next launch reports missing hook scripts, the fix is to re-select that unit in the '
+          + 'launcher and launch: that re-runs its own installer, which rewrites the registration. '
+          + 'Repair cannot do it — it only re-provisions what the record still names.',
+        );
+      }
+      return startSession();
+    }
+    // Cancelled all three: do nothing. No removal, no forced launch, no
+    // provisioning — the only path Escape-spamming can reach.
     return;
   }
   if (!r || !r.ok) { toast(`Launch failed: ${(r && r.error) || 'server unreachable'}`); return; }
   closePicker();
-  const prov = r.provisioned;
-  const provMsg = prov && (prov.skills.length || prov.kits.length || prov.hooks)
-    ? `${prov.skills.length} skill(s)${prov.kits.length ? `, ${prov.kits.length} kit(s)` : ''}${prov.hooks ? ', gates' : ''} · ` : '';
-  const miss = r.scope && r.scope.missing ? r.scope.missing.length : 0;
-  if (miss) toast(`${provMsg}Launching Claude — ${miss} registered hook script(s) missing`);
-  else toast(r.action === 'focused' ? 'Claude already running — Terminal brought to front' : `${provMsg}Launching Claude…`);
+  reportLaunched(r);
 }
 
 async function addRepoFromForm() {
