@@ -910,10 +910,15 @@ async function startSession() {
           // the record no longer lists anything, so repeating it there read as
           // the same sentence twice.
           + (dropped.length ? `Forest's record no longer lists ${dropped.length > 1 ? 'those' : 'that one'}.\n\n` : '')
-          + `${stuck.length} unit(s) could NOT be removed and are still listed:\n\n`
+          + `${stuck.length} unit(s) still appear in forest's record:\n\n`
           + `${stuck.map((f) => `  • ${f.reason}`).join('\n')}\n\n`
-          + 'Their files are still on disk and still registered, so forest\'s record still names them '
-          + 'and the next launch meets this guard again. Unlock them and remove again, or choose '
+          // Not always "their files are still on disk": that was true only for
+          // the hardened-kit refusal this dialog was first written for. Since
+          // the record rewrite is best-effort, `stillListed` can now also be
+          // true for a unit whose files WERE deleted but whose id could not be
+          // dropped from the record — the reason above says which happened.
+          + 'Either way, forest\'s record still names them, so the next launch meets this guard again. '
+          + 'Unlock a hardened kit and remove again, retry if the record update itself failed, or choose '
           + '"Launch anyway" to leave them running unmanaged.',
         );
         return;
