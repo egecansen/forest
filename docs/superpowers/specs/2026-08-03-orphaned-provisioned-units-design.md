@@ -22,16 +22,16 @@ session started — read `"kits": []`.
 
 ### The mechanism
 
-`provisionPack` (`lib/packs.mjs:206`) is **additive**. It copies what the
+`provisionPack` (`lib/packs.mjs:210`) is **additive**. It copies what the
 selection names and leaves everything else in place.
 
-`/api/launch` (`lib/actions.mjs:303-335`) provisions from the selections in the
+`/api/launch` (`lib/actions.mjs:518-590`) provisions from the selections in the
 **request body** — whatever the UI has checked at that moment — then overwrites
-the stored record with them (`:310`).
+the stored record with them (`:556`).
 
 So a unit that stays selected is re-provisioned on every launch — which for a
 kit that ships `install.sh` means its own installer is re-run from source
-(`lib/packs.mjs:176-190`), and that is what can bring a kit current. It is not
+(`lib/packs.mjs:176-191`), and that is what can bring a kit current. It is not
 a general refresh: `copyTree` (`lib/packs.mjs:96-99`) skips any destination file
 whose content differs and records a conflict, so a plain skill and the copy
 under `.claude/kits/<id>/` keep whatever is already on disk. (Deliberate — it
@@ -40,7 +40,7 @@ this paragraph read "cannot go stale".)
 
 A unit that stops being selected is left on disk at its last version, still
 registered, still executing — and because the record is overwritten, it
-disappears from the record entirely. `/api/worktree/repair` (`:199-205`)
+disappears from the record entirely. `/api/worktree/repair` (`:325-336`)
 re-provisions from `rec.selections`, so it never touches it either. The unit is
 orphaned: installed, running, and unmanaged.
 
@@ -54,7 +54,7 @@ orphaned: installed, running, and unmanaged.
 ### Why the existing guard does not catch it
 
 The launch guard from the 2026-08-01 spec (`launchDecision`,
-`lib/actions.mjs:31-44`) asks `session-scope.mjs:85` for `missing`, which is a
+`lib/actions.mjs:86-99`) asks `session-scope.mjs:85` for `missing`, which is a
 `stat()` on each registered hook command: present or absent. An orphaned unit's
 files are **present**. They are merely old, and out of forest's management.
 
@@ -83,12 +83,15 @@ and it needs a confirmation flow of its own.
 
 ### 1. The record says what was written, not only what was asked for
 
-`writeProvisionRecord(worktreePath, selections)` (`lib/packs.mjs:243`) gains a
+`writeProvisionRecord(worktreePath, selections)` (`lib/packs.mjs:302`) gains a
 third parameter:
 
 ```js
-export async function writeProvisionRecord(worktreePath, selections, inventory = null)
+export async function writeProvisionRecord(worktreePath, selections, inventory = null, at = null)
 ```
+
+(`at` is the fourth parameter, added for the removal path — see §5. It defaults
+to now, which is right for a provision: that is when these units were written.)
 
 written as:
 
@@ -100,7 +103,7 @@ written as:
 }
 ```
 
-`runSelections` (`lib/actions.mjs:51-69`) already returns exactly this — its
+`runSelections` (`lib/actions.mjs:173-191`) already returns exactly this — its
 `out.kits` and `out.skills` are what provisioning actually produced. The
 inventory is `{ kits: provisioned.kits, skills: provisioned.skills }`, no new
 bookkeeping.
@@ -109,7 +112,7 @@ bookkeeping.
 kit's own installer and belong to the kit; they are managed by updating or
 removing the kit, not on their own.
 
-`readProvisionRecord` (`:250`) is unchanged — it returns whatever the file
+`readProvisionRecord` (`:311`) is unchanged — it returns whatever the file
 holds, and a record without `inventory` reads as `undefined`.
 
 ### 2. Orphan detection, before provisioning overwrites the record
@@ -153,8 +156,12 @@ section exists to prevent, and it must have its own test.
 { "ok": false,
   "blocked": "orphaned-units",
   "orphaned": [{ "kind": "kit", "id": "flaky-triage-kit", "since": "2026-07-30T…" }],
-  "repairable": true }
+  "repairable": false }
 ```
+
+(This example read `"repairable": true` until 2026-08-03 — four lines above the
+prose saying it is a constant `false`. Corrected after the branch review: a
+reader copies the JSON, not the paragraph.)
 
 `orphaned-units` takes priority. This section originally gave it to
 `missing-hooks` — a registered-but-absent gate is a live hole, an orphan is a
@@ -167,21 +174,51 @@ So if both hold, the orphan is reported, the user resolves it, and
 `repairable` does **not** keep its old meaning ("a usable provision record
 exists"). It answers whether `/api/worktree/repair` can fix *this* block:
 
-- On `missing-hooks`: repair replays `rec.selections`, so it can rewrite a
-  registration only when the record still names a kit (whose `install.sh` owns
-  its wiring) or the pack's gate set (`hooks: true`). A record naming only plain
-  skills provably cannot — a skill is copied into `.claude/skills/<id>/` and
-  touches no settings file and no hook script.
+- On `missing-hooks`: repair replays `rec.selections` through `provisionPack`
+  and does nothing else, so it can only move `missing` if replaying those
+  selections writes some **hook wiring** — a script under `.claude/hooks/`
+  (what a registration points at) or a settings fragment merged into
+  `.claude/settings.local.json` (the registration itself). Those two are what
+  forest writes *by convention*; a kit's own `install.sh` may write either, and
+  forest cannot see which, which is what makes that one case a "maybe" below.
+
+  `writesHookWiring` (`lib/packs.mjs:271`) answers that by asking the pack
+  source with the same calls provisioning makes, in the same order:
+  `exists(packDir/kits/<id>)` (`:224` — a kit the pack no longer ships is
+  skipped outright, so replaying it writes nothing at all), then
+  `exists(kitDir/install.sh)` (`:177`), then the hooks-dir and
+  settings-fragment conventions, then the catalog's own gate set for
+  `hooks: true`.
+
+  This was originally written as a record-**shape** rule — "the record still
+  names a kit, or `hooks: true`" — and **that was wrong, corrected 2026-08-03
+  after the branch review.** Shape never asks whether the named selection can
+  write anything, and two reachable states falsified it: a record naming a kit
+  that ships only `kit.json`, and a record naming a kit the pack no longer
+  ships. Both got `repairable: true` with `missing` frozen forever. In the
+  second, a single `exists()` refutes the claim, so asserting it was not
+  conservatism about an unknown — it was asserting an already-decided
+  possibility.
+
+  `true` remains an over-approximation in exactly one place: a kit that ships
+  `install.sh` owns its own wiring and forest cannot predict which files that
+  installer touches. Everything else is refutable, and refuted where it is
+  false. A record naming only plain skills is still `false` — a skill is copied
+  into `.claude/skills/<id>/` and touches no settings file and no hook script.
+
+  Without a readable `packsDir` the answer is `false`, and correctly so: a
+  replay through that same `packsDir` would find nothing to provision either.
 - On `orphaned-units`: a constant `false`. Repair cannot change the incoming
   selection, which is the half of the comparison that makes a unit an orphan,
   so a repair run leaves the block exactly where it stands however full the
-  record is.
+  record is. `repairableRecord` is not consulted; the question it answers is a
+  different one.
 
 ### 5. Client
 
-`public/app.js:583` already branches on `r.blocked`. It gains the
-`orphaned-units` case, listing each orphan as `kind: id (since date)` and
-offering three actions:
+`public/app.js:614` already branches on `r.blocked`. It gains the
+`orphaned-units` case (`:679`), listing each orphan as `kind: id (since date)`
+and offering three actions:
 
 - **Update** — add the orphans back to the selection and re-launch. That clears
   the guard and puts them back under forest's management; for a kit that ships
@@ -189,8 +226,9 @@ offering three actions:
   current. It is not a refresh of everything: a plain skill and the copy under
   `.claude/kits/<id>/` are left at whatever is on disk (see the mechanism
   above), and the UI says so rather than implying a version bump.
-- **Remove** — POST the orphan list to be deleted, then re-launch.
-- **Launch anyway** — the existing `force: true` path (`:623`), unchanged. The
+- **Remove** — POST the orphan list to be deleted, then re-launch — but only
+  on a clean sweep (see below).
+- **Launch anyway** — the existing `force: true` path (`:732`), unchanged. The
   response's `scope.missing` is displayed: a forced launch that proceeds with a
   registered-but-absent gate has to say so.
 
@@ -198,7 +236,7 @@ Remove needs a route; it is the only new server surface beyond the guard.
 It deletes `.claude/kits/<id>/` for a kit and `.claude/skills/<id>/` for a
 skill. It does not touch registrations: a kit's own installer owns its wiring,
 and forest guessing at jq surgery on `settings.json` is the class of mistake
-`provisionKit`'s comment at `lib/packs.mjs:154-165` already records.
+`provisionKit`'s comment at `lib/packs.mjs:155-169` already records.
 
 There is no uninstall path to call — neither the flaky-triage kit nor any other
 ships one, and forest's manifest has no concept of it. Remove is a directory
@@ -207,8 +245,10 @@ rather than papered over:
 
 - A **hardened** kit's files are root-owned, so the deletion fails with
   `EPERM`. The route reports that in the kit's own vocabulary — the install
-  refusal at `lib/packs.mjs:179-182` already has the wording to match — and
+  refusal at `lib/packs.mjs:183-186` already has the wording to match — and
   changes nothing. Unlocking is the user's decision and needs their password.
+  Its id **stays in the record**: the files really are still there, still
+  registered, still executing, so the guard reporting it again is correct.
 - A kit that installed skill directories of its own leaves them behind, since
   `kitSkills` is outside the inventory (§1). They are inert without the kit's
   engine, and removing them would need the ownership map forest does not keep.
@@ -220,10 +260,34 @@ rather than papered over:
 re-blocks the next launch on a unit that is no longer on disk — with Remove as
 the only offered remedy and nothing left to remove. `selections` is what repair
 replays, so leaving an id there means the next repair reinstalls exactly what
-the user asked to delete. The record is rewritten through the same
-`writeProvisionRecord` every other caller uses; it stamps a fresh `at`, so the
-surviving units' `since` reads as the removal time rather than their original
-provision.
+the user asked to delete.
+
+**Which ids get dropped is decided by the refusal, not by the deletion.** A
+unit reaching the rewrite only on a successful `rm` left the one-way door open
+for every refusal — the id stayed in `inventory`, the guard re-blocked on it,
+and Remove could never clear it. The two kinds are opposites and the route
+treats them as such (corrected 2026-08-03 after the branch review):
+
+- **`ENOENT`** — the unit is not on disk. Nothing was removed because there was
+  nothing there; the record is simply wrong to list it. Dropped as if removed.
+- **`EPERM`/`EACCES`** — the files really are still there. **Kept**, per the
+  hardened-kit bullet above.
+- anything else — kept. Forest does not know what is on disk, and the guard is
+  the conservative place to be wrong.
+
+Each refusal carries `stillListed` — "forest did not drop this id from the
+record" — so the client can say which of these happened. It says "this guard is
+clear" only on a **clean sweep**, and when something is still listed it names it,
+says why, and does **not** re-launch: recursing was only ever honest because the
+guard was clear, so when it is not, re-opening the same dialog on the user's
+behalf is the loop rather than the remedy. The picker stays open, so "Launch
+anyway" is still one deliberate click away.
+
+The record is rewritten through the same `writeProvisionRecord` every other
+caller uses; it takes an optional `at`, and the route passes the record's own
+through — a removal does not re-provision what survives it, and stamping a fresh
+one made a surviving orphan's `since` read as the removal date, i.e. newer and
+so safer than it is, in the dialog that gates an irreversible action.
 
 **Consequence, stated because it is a real limit:** removing a kit's files
 without removing its registration produces exactly the `missing-hooks` state the
@@ -236,14 +300,32 @@ re-provisions from `rec.selections`, which no longer names the removed unit, so
 the installer that owns the registration never runs again and `missing` never
 moves; the offer was a loop, not a handoff. The honest remedy is to re-select
 the unit and launch — that re-runs its own installer, which rewrites the
-registration — or to edit `.claude/settings.json` by hand. `repairable` is
-`false` in that state (§4) so no Repair is offered, and the UI names the remedy
-that works.
+registration — or to edit `.claude/settings.json` by hand.
+
+**The correction itself then shipped a second false sentence**, caught in the
+final review round and fixed here: it claimed "`repairable` is `false` in that
+state (§4) so no Repair is offered." It is not, and it contradicted §4's own
+rule four paragraphs above it. `repairable` says nothing about *which* unit
+wrote the dangling registration — only whether replaying whatever the record
+*still* names could write any hook wiring at all. After a Remove, the record
+usually still names something, and if any of it is a kit the pack still ships
+that has an `install.sh`, `repairable` is `true` and Repair *is* offered. That
+is not a false promise — such a repair genuinely might rewrite the
+registration, because forest cannot know what that installer writes — but it
+is not a guarantee either, and the spec must not describe it as one.
+
+So the true statement is: **whatever `repairable` says, the UI always names the
+remedy that works.** Repair is offered when it *could* help and says "may", not
+"will"; it is refused, with the reason, when it provably cannot. The remedy
+paragraph is not gated on the flag, because a user told only "Repair before
+launching?" when repair cannot help has been actively misdirected — which is
+exactly what the gating produced for a record naming a kit the pack no longer
+ships.
 
 ### 6. Journal
 
 Both outcomes get a line, matching the existing `launch blocked: …` entry at
-`lib/actions.mjs:323`:
+`lib/actions.mjs:574`:
 
 ```
 launch blocked: 1 provisioned unit(s) no longer selected (flaky-triage-kit)
@@ -266,7 +348,7 @@ launch blocked: 1 provisioned unit(s) no longer selected (flaky-triage-kit)
 
 ## Testing
 
-`lib/actions.test.mjs`, alongside the `missing-hooks` cases at `:131` and `:174`.
+`lib/actions.test.mjs`, alongside the `missing-hooks` cases at `:166` onward.
 
 1. `orphanedUnits` returns the deselected kit when the previous record's
    inventory names it and the new selection does not.
@@ -292,18 +374,38 @@ launch blocked: 1 provisioned unit(s) no longer selected (flaky-triage-kit)
     and no step may return `repairable: true` for a state repair cannot fix.
     Added after the branch review, whose absence is what let a one-way Remove
     reach a final review.
-11. Remove drops the id from **both** `inventory` and `selections`, and leaves a
-    record that never had an inventory without one.
+11. Remove drops the id from **both** `inventory` and `selections`, leaves a
+    record that never had an inventory without one, and preserves the record's
+    `at` so a surviving unit's `since` does not read as the removal date.
 12. A refusal is worded for a human: a unit that is not on disk reports
     "already gone", never a raw `ENOENT … lstat '/var/…'`.
+13. **`repairable` against a real pack** (§4). Every case needs a pack on disk,
+    because the record looks identical in the `true` and `false` cases and a
+    shape-based test could not tell them apart at all:
+    - a kit the pack still ships, with `install.sh` → `true`;
+    - a kit with no installer but a hooks dir, or a settings fragment → `true`;
+    - a catalog declaring a gate set, with `hooks: true` → `true`;
+    - a **surviving kit that ships only `kit.json`** → `false` (the case that
+      falsified the old shape rule);
+    - a kit the pack **no longer ships** → `false` (one `exists()` settles it);
+    - only plain skills, and a catalog with no gate set → `false`.
+14. **The record consequence of each refusal kind** (§5), each driven to the
+    relaunch that proves it: an `ENOENT` refusal drops the id and the next
+    launch no longer reports `orphaned-units`; an `EPERM` refusal keeps it and
+    the next launch correctly reports it again. Both assert `stillListed`,
+    which is what the client branches on.
 
 Each new assertion is proven by mutation: it must redden when the behaviour it
 names is reverted, and the ordering test must redden when the read moves.
+Fixtures live under `mktemp -d` and are removed in a `finally` — including the
+`chmod`-hardened one, whose restore belongs in the `finally` too or a failing
+assertion above it leaves a directory the sweep cannot remove.
 
 ## Files
 
-- `lib/packs.mjs` — `writeProvisionRecord` gains the inventory parameter
+- `lib/packs.mjs` — `writeProvisionRecord` gains the inventory parameter and an
+  optional `at`; `writesHookWiring` answers §4's question from the pack source
 - `lib/actions.mjs` — `orphanedUnits`, the read-before-provision ordering, the
-  blocked payload, the journal line, the remove route
+  blocked payload, the journal line, the remove route and its two refusal kinds
 - `public/app.js` — the `orphaned-units` branch and its three actions
 - `lib/actions.test.mjs`, `lib/packs.test.mjs` — the cases above
