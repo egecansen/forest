@@ -15,7 +15,13 @@
 - **Every filesystem fixture lives under `mktemp -d`** (`mkdtemp(join(tmpdir(), …))`), never in a real worktree and never in `.forest/`.
 - **No test may open a Terminal.** `launchInteractive` opens a real window; any test that reaches it is a defect in the test.
 - **No real `chown`** — a bare `chown root` needs a password nobody can answer in a test run. The root-owned case is driven with `chmod`.
-- **`missing-hooks` outranks `orphaned-units`** when both conditions hold.
+- **`orphaned-units` outranks `missing-hooks`** when both conditions hold.
+  (Reversed while implementing Task 3, 2026-08-03 — this plan was written with
+  the opposite rule. A missing gate cannot be evaluated before provisioning
+  runs, because provisioning may be what installs it, and provisioning must not
+  run while an orphan is unresolved. So the orphan check is the only one that
+  can come first. A user who hits both sees the orphan, resolves it, and meets
+  `missing-hooks` on the next launch.)
 - **A failure to resolve state allows the launch.** The guard warns about gates; it must never become the reason forest cannot start a session (`lib/actions.mjs:28-30`).
 - **Forest never mutates a worktree without a yes** — settled 2026-08-01, not up for reversal in this plan.
 - **No AI trailers in commit messages** — no `Co-Authored-By`, no "Generated with", no session link.
@@ -407,22 +413,27 @@ Revert, confirm `git diff` shows only the intended change, re-run green.
 
 - [ ] **Step 6: Second mutation — the priority rule**
 
-Swap the two blocks so the `orphaned` check runs before the `decision.launch` check, then add a fixture where both hold. If no existing test distinguishes them, that is a gap: write
+**As shipped, the priority is the reverse of what this plan assumed** — see the
+Global Constraints. The orphan check runs *before* provisioning and before the
+`decision.launch` check, because provisioning may be what installs the gate that
+`missing-hooks` looks for, and provisioning must not run while an orphan is
+unresolved. Swap the two blocks so `decision.launch` is evaluated first, then
+re-run:
 
 ```js
-test('/api/launch reports the missing gate, not the orphan, when both hold', async () => {
+test('/api/launch reports the orphan, not the missing gate, when both hold', async () => {
   const { wt, packs } = await orphanFixture();
   await mkdir(join(wt, '.claude'), { recursive: true });
   await writeFile(join(wt, '.claude', 'settings.json'),
     JSON.stringify({ hooks: { PreToolUse: [{ matcher: 'Bash', hooks: [{ type: 'command', command: `"${join(wt, '.claude', 'hooks', 'gone.sh')}"` }] }] } }));
   const res = fakeRes();
   const ctx = { config: { packsDir: packs, defaultMode: 'auto' }, journal: { add() {} }, broadcast() {} };
-  await createActionHandler({ launch: async () => ({ ok: true }) })(
+  await createActionHandler({ launch: async () => ({ ok: true }), resolveScope: noRealHome })(
     { url: '/api/launch' }, res, ctx,
     async () => ({ path: wt, selections: [{ pack: 'hektor', skills: ['hektor-verify'] }] }),
   );
-  assert.equal(JSON.parse(res.body).blocked, 'missing-hooks',
-    'a registered-but-absent gate is a live hole and outranks a stale unit');
+  assert.equal(JSON.parse(res.body).blocked, 'orphaned-units',
+    'a missing gate cannot be evaluated until provisioning runs, and provisioning must not run while an orphan is unresolved');
 });
 ```
 
@@ -457,7 +468,12 @@ without opening a Terminal."
 There is no uninstall path to call — no kit ships one and forest's manifest has no concept of it. Removal is a directory deletion and nothing more. Two consequences, both reported rather than hidden:
 
 - A **hardened** kit's files are root-owned, so deletion fails with `EPERM`. Report it in the kit's own vocabulary; change nothing. Unlocking needs the user's password and is their decision.
-- Removing a kit's files without its registration produces exactly the `missing-hooks` state the existing guard catches. That is the intended handoff, and Task 5's copy says so.
+- Removing a kit's files without its registration produces exactly the `missing-hooks` state the existing guard catches.
+
+  **Amended 2026-08-03, after the branch review:** that state was described here as "the intended handoff — the next launch blocks on it and offers the repair that rewrites the registration". It is not a handoff, because repair re-provisions from `rec.selections`, which no longer names the removed unit, so the installer that owns the registration never runs again and `missing` never moves. Two changes follow, and both are in the shipped code:
+
+  - **The remove route rewrites the record**, dropping the removed ids from `inventory` (so the orphan guard stops re-blocking on a unit that is gone) and from `selections` (so repair does not reinstall what the user just deleted). Without it, Remove is a one-way door: the next launch repeats the same block with nothing left to remove.
+  - **`repairable` stops meaning "a non-empty selections list exists"** and starts meaning "repair can actually fix this": a record naming only plain skills provably cannot rewrite a hook registration, and on the `orphaned-units` payload the honest value is a constant `false` — repair cannot touch the incoming selection, which is what makes a unit an orphan. The remedy the UI names is re-selecting the unit and launching, which re-runs its own installer.
 
 - [ ] **Step 1: Write the failing tests**
 

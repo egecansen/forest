@@ -29,12 +29,20 @@ selection names and leaves everything else in place.
 **request body** — whatever the UI has checked at that moment — then overwrites
 the stored record with them (`:310`).
 
-So a unit that stays selected is re-provisioned from live source on every
-launch and cannot go stale. A unit that stops being selected is left on disk at
-its last version, still registered, still executing — and because the record is
-overwritten, it disappears from the record entirely. `/api/worktree/repair`
-(`:199-205`) re-provisions from `rec.selections`, so it never touches it either.
-The unit is orphaned: installed, running, and unmanaged.
+So a unit that stays selected is re-provisioned on every launch — which for a
+kit that ships `install.sh` means its own installer is re-run from source
+(`lib/packs.mjs:176-190`), and that is what can bring a kit current. It is not
+a general refresh: `copyTree` (`lib/packs.mjs:96-99`) skips any destination file
+whose content differs and records a conflict, so a plain skill and the copy
+under `.claude/kits/<id>/` keep whatever is already on disk. (Deliberate — it
+protects hand-edited files. Corrected 2026-08-03 after the branch review, where
+this paragraph read "cannot go stale".)
+
+A unit that stops being selected is left on disk at its last version, still
+registered, still executing — and because the record is overwritten, it
+disappears from the record entirely. `/api/worktree/repair` (`:199-205`)
+re-provisions from `rec.selections`, so it never touches it either. The unit is
+orphaned: installed, running, and unmanaged.
 
 ```
 2026-07-30  launch  kits:["flaky-triage-kit"]  → installed, registered
@@ -148,11 +156,26 @@ section exists to prevent, and it must have its own test.
   "repairable": true }
 ```
 
-`missing-hooks` keeps priority: a registered-but-absent gate is a live hole,
-while an orphan is a stale unit that still runs. If both hold, report
-`missing-hooks`.
+`orphaned-units` takes priority. This section originally gave it to
+`missing-hooks` — a registered-but-absent gate is a live hole, an orphan is a
+stale unit that still runs — and that ordering turned out to be unimplementable:
+the orphan check must run *before* provisioning (§3), and a missing gate cannot
+be evaluated until after it, because provisioning may be what installs the gate.
+So if both hold, the orphan is reported, the user resolves it, and
+`missing-hooks` is met on the next launch.
 
-`repairable` keeps its current meaning — a usable provision record exists.
+`repairable` does **not** keep its old meaning ("a usable provision record
+exists"). It answers whether `/api/worktree/repair` can fix *this* block:
+
+- On `missing-hooks`: repair replays `rec.selections`, so it can rewrite a
+  registration only when the record still names a kit (whose `install.sh` owns
+  its wiring) or the pack's gate set (`hooks: true`). A record naming only plain
+  skills provably cannot — a skill is copied into `.claude/skills/<id>/` and
+  touches no settings file and no hook script.
+- On `orphaned-units`: a constant `false`. Repair cannot change the incoming
+  selection, which is the half of the comparison that makes a unit an orphan,
+  so a repair run leaves the block exactly where it stands however full the
+  record is.
 
 ### 5. Client
 
@@ -160,10 +183,16 @@ while an orphan is a stale unit that still runs. If both hold, report
 `orphaned-units` case, listing each orphan as `kind: id (since date)` and
 offering three actions:
 
-- **Update** — add the orphans back to the selection and re-launch. The kit is
-  then re-provisioned from live source, which is what brings it current.
+- **Update** — add the orphans back to the selection and re-launch. That clears
+  the guard and puts them back under forest's management; for a kit that ships
+  `install.sh` it also re-runs that installer, which is what can bring the kit
+  current. It is not a refresh of everything: a plain skill and the copy under
+  `.claude/kits/<id>/` are left at whatever is on disk (see the mechanism
+  above), and the UI says so rather than implying a version bump.
 - **Remove** — POST the orphan list to be deleted, then re-launch.
-- **Launch anyway** — the existing `force: true` path (`:623`), unchanged.
+- **Launch anyway** — the existing `force: true` path (`:623`), unchanged. The
+  response's `scope.missing` is displayed: a forced launch that proceeds with a
+  registered-but-absent gate has to say so.
 
 Remove needs a route; it is the only new server surface beyond the guard.
 It deletes `.claude/kits/<id>/` for a kit and `.claude/skills/<id>/` for a
@@ -183,13 +212,33 @@ rather than papered over:
 - A kit that installed skill directories of its own leaves them behind, since
   `kitSkills` is outside the inventory (§1). They are inert without the kit's
   engine, and removing them would need the ownership map forest does not keep.
+  The confirmation says this before the user accepts an irreversible action.
+
+**The route also rewrites the provision record**, dropping the removed ids from
+`inventory` and from `selections`. Both halves, and for different reasons:
+`inventory` is what the orphan guard compares against, so leaving an id there
+re-blocks the next launch on a unit that is no longer on disk — with Remove as
+the only offered remedy and nothing left to remove. `selections` is what repair
+replays, so leaving an id there means the next repair reinstalls exactly what
+the user asked to delete. The record is rewritten through the same
+`writeProvisionRecord` every other caller uses; it stamps a fresh `at`, so the
+surviving units' `since` reads as the removal time rather than their original
+provision.
 
 **Consequence, stated because it is a real limit:** removing a kit's files
 without removing its registration produces exactly the `missing-hooks` state the
-existing guard catches. That is the intended handoff — the next launch blocks on
-it and offers the repair that rewrites the registration. Remove is therefore a
-two-step path by construction, and the UI says so rather than implying one
-click ends clean.
+existing guard catches on the next launch.
+
+This section originally called that "the intended handoff — the next launch
+blocks on it and offers the repair that rewrites the registration." **That was
+wrong, and was corrected 2026-08-03 after the branch review.** Repair
+re-provisions from `rec.selections`, which no longer names the removed unit, so
+the installer that owns the registration never runs again and `missing` never
+moves; the offer was a loop, not a handoff. The honest remedy is to re-select
+the unit and launch — that re-runs its own installer, which rewrites the
+registration — or to edit `.claude/settings.json` by hand. `repairable` is
+`false` in that state (§4) so no Repair is offered, and the UI names the remedy
+that works.
 
 ### 6. Journal
 
@@ -227,7 +276,8 @@ launch blocked: 1 provisioned unit(s) no longer selected (flaky-triage-kit)
 4. `/api/launch` returns `blocked: 'orphaned-units'` with the orphan listed, and
    does **not** open a terminal.
 5. `force: true` launches despite orphans.
-6. `missing-hooks` wins when both conditions hold.
+6. `orphaned-units` wins when both conditions hold (see §4 — this read
+   `missing-hooks` until the ordering turned out to be unimplementable).
 7. **Ordering:** the route detects an orphan whose only evidence was in the
    record it is about to overwrite. This test fails if the read moves after
    `writeProvisionRecord` — the specific regression §3 describes.
@@ -237,6 +287,15 @@ launch blocked: 1 provisioned unit(s) no longer selected (flaky-triage-kit)
    deleting anything when the tree is root-owned. The root-owned case is driven
    with a `chmod`-based fixture under `mktemp -d`, never a real `chown` — a bare
    `chown root` needs a password nobody can answer in a test run.
+10. **Convergence, at the route level:** block → remove → relaunch → force →
+    relaunch. The relaunch after Remove must not report `orphaned-units` again,
+    and no step may return `repairable: true` for a state repair cannot fix.
+    Added after the branch review, whose absence is what let a one-way Remove
+    reach a final review.
+11. Remove drops the id from **both** `inventory` and `selections`, and leaves a
+    record that never had an inventory without one.
+12. A refusal is worded for a human: a unit that is not on disk reports
+    "already gone", never a raw `ENOENT … lstat '/var/…'`.
 
 Each new assertion is proven by mutation: it must redden when the behaviour it
 names is reverted, and the ordering test must redden when the read moves.
