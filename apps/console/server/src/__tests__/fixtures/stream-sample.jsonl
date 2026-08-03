@@ -1,7 +1,0 @@
-{"type":"system","subtype":"init","cwd":"/tmp/app","session_id":"s1","model":"claude-opus-4-8","tools":["Bash","Skill"]}
-{"type":"assistant","message":{"content":[{"type":"text","text":"Starting Phase 1 scaffold."}],"usage":{"input_tokens":100,"output_tokens":20,"cache_read_input_tokens":0}}}
-{"type":"assistant","message":{"content":[{"type":"tool_use","name":"Skill","input":{"command":"element-interactions"}}],"usage":{"input_tokens":150,"output_tokens":10,"cache_read_input_tokens":50}}}
-{"type":"assistant","message":{"content":[{"type":"tool_use","name":"Bash","input":{"command":"npx playwright install chromium"}}],"usage":{"input_tokens":160,"output_tokens":12,"cache_read_input_tokens":60}}}
-{"type":"rate_limit_event","rate_limit_info":{"status":"allowed","overageStatus":"rejected","overageDisabledReason":"out_of_credits"}}
-{"type":"rate_limit_event","rate_limit_info":{"status":"rejected"}}
-{"type":"result","subtype":"success","is_error":false,"duration_ms":1998,"num_turns":1,"result":"done","total_cost_usd":0.0493,"usage":{"input_tokens":8129,"output_tokens":4}}
