@@ -7,3 +7,4 @@ repos.json
 .playwright-mcp/
 forest-*.png
 .claude/worktrees/
+.worktrees/
