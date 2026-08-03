@@ -628,17 +628,26 @@ async function startSession() {
   }
   if (r && r.blocked === 'orphaned-units') {
     const list = r.orphaned.map((o) => `  • ${o.kind} ${o.id} (since ${o.since.slice(0, 10)})`).join('\n');
-    const intro = `${r.orphaned.length} unit(s) are installed here but no longer selected:\n\n${list}\n\n`
-      + 'They still run, at the version they had when they were last provisioned.\n\n';
+    // "If their files are still on disk" rather than a flat "they still
+    // run": this same intro is shown again when Remove below recurses into
+    // startSession(), and by then the files it's describing are gone —
+    // the wording has to stay true on both the first showing and that one.
+    const intro = `${r.orphaned.length} unit(s) are recorded as provisioned here but no longer selected:\n\n${list}\n\n`
+      + 'If their files are still on disk, they are running at the version they had when they were last provisioned.\n\n';
 
-    // Three-way choice, funnelled through confirm() — this file has no
-    // multi-button dialog helper. Cancelling the LAST confirm is the only
-    // way to launch nothing; cancelling an earlier one just moves on to the
-    // next option, which is what each dialog's own wording says it does.
+    // Ordered so Cancel never defaults toward the irreversible option. Native
+    // confirm() can't relabel its buttons — the user always sees generic
+    // OK/Cancel, and Escape maps to Cancel — so the ordering itself has to
+    // carry the safety, not the wording alone: Update (reversible, the
+    // common case) first, then Launch anyway (touches nothing on disk),
+    // then Remove (the one thing that can't be undone) last. Cancelling any
+    // of them moves to the next; cancelling — or Escape-spamming through —
+    // all three is a genuine no-op, matching the missing-hooks block above,
+    // where the first Cancel already means "do not launch".
     if (confirm(
-      `${intro}Update — check them back on and relaunch, which re-provisions them and clears this guard?\n\n`
+      `${intro}Update them — check them back on and relaunch, which re-provisions them and clears this guard?\n\n`
       + 'OK — reselect and relaunch.\n'
-      + 'Cancel — see removal / launch-anyway instead.',
+      + 'Cancel — see other options.',
     )) {
       let unmatched = 0;
       for (const o of r.orphaned) {
@@ -652,9 +661,25 @@ async function startSession() {
     }
 
     if (confirm(
-      `${intro}Remove — delete their files from .claude/ now?\n\n`
+      `${intro}Launch anyway, leaving them running unmanaged — nothing on disk changes?\n\n`
+      + 'OK — launch.\n'
+      + 'Cancel — see removal instead.',
+    )) {
+      // selections (not []): unlike the missing-hooks retry above, nothing
+      // has been provisioned yet — the orphan check runs before
+      // provisioning — so the real selections still need to go along on
+      // this forced call.
+      const forced = await api('/api/launch', { path, selections, mode: state.mode, force: true });
+      if (!forced || !forced.ok) { toast(`Launch failed: ${(forced && forced.error) || 'server unreachable'}`); return; }
+      closePicker();
+      toast(forced.action === 'focused' ? 'Claude already running — Terminal brought to front' : 'Launching Claude…');
+      return;
+    }
+
+    if (confirm(
+      `${intro}Remove — permanently delete their files from .claude/ now? This cannot be undone.\n\n`
       + 'OK — remove now.\n'
-      + 'Cancel — leave them and choose launch-anyway next.',
+      + 'Cancel — do nothing.',
     )) {
       const rm = await api('/api/worktree/remove-units', { path, units: r.orphaned.map(({ kind, id }) => ({ kind, id })) });
       if (!rm || !rm.ok) { toast(`Remove failed: ${(rm && rm.error) || 'server unreachable'}`); return; }
@@ -675,19 +700,8 @@ async function startSession() {
       }
       return startSession();
     }
-
-    if (!confirm(
-      `${intro}Launch anyway, leaving them running unmanaged?\n\n`
-      + 'OK — launch.\n'
-      + 'Cancel — do not launch.',
-    )) return;
-    // selections (not []): unlike the missing-hooks retry above, nothing has
-    // been provisioned yet — the orphan check runs before provisioning — so
-    // the real selections still need to go along on this forced call.
-    const forced = await api('/api/launch', { path, selections, mode: state.mode, force: true });
-    if (!forced || !forced.ok) { toast(`Launch failed: ${(forced && forced.error) || 'server unreachable'}`); return; }
-    closePicker();
-    toast(forced.action === 'focused' ? 'Claude already running — Terminal brought to front' : 'Launching Claude…');
+    // Cancelled all three: do nothing. No removal, no forced launch, no
+    // provisioning — the only path Escape-spamming can reach.
     return;
   }
   if (!r || !r.ok) { toast(`Launch failed: ${(r && r.error) || 'server unreachable'}`); return; }
