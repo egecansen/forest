@@ -346,5 +346,45 @@ TIER_U="$(read_tier "$SKILL_U")"
 [ "$TIER_U" = "unprotected" ] \
   && ok || bad "a fresh install must report 'unprotected', not '$TIER_U' — carrying the source's 'unlocked' record falsely claims this tree was locked and then reopened"
 
+# --- REGRESSION: package-kit.sh must not ship core/.lock-state in the distributed zip ---------------
+# scripts/package-kit.sh rsyncs the REAL kit source into a stage dir and zips it for external
+# distribution — a second path .lock-state can travel through, entirely independent of install.sh's
+# cp -R above (its EXCLUDES array now carries `--exclude=".lock-state"`, added alongside the installer
+# fix). Nothing under core/tests/ had ever driven package-kit.sh at all before this — its own
+# --self-test only covers the hostname guard — so a future reorder or prune of EXCLUDES could drop
+# that one line and the suite would stay green with zero signal: exactly the shape of the defect this
+# whole file exists to close, one script over.
+#
+# Never touches the real $KITSRC or the real, already-shipped kits/flaky-triage-kit.zip:
+# package-kit.sh derives its own KIT (source) and OUT_ZIP (destination) from ITS OWN path
+# ($HERE/.. and $HERE/../.., see the script), so running a COPY of it from a fixture "kits/"
+# directory makes both resolve inside that fixture instead. Plant .lock-state at TWO depths —
+# core/.lock-state (the only place lock-kit.sh ever actually writes it) and a kit-root decoy — to
+# prove the exclude works on rsync's unanchored basename match regardless of where a stray copy
+# turns up, not merely at the one depth this session happened to reproduce.
+PKGFIX="$TMP/pkg-fixture"
+mkdir -p "$PKGFIX/kits/flaky-triage-kit"
+cp -R "$KITSRC/." "$PKGFIX/kits/flaky-triage-kit/"
+printf '{"tier":"hardened","at":"2026-08-04T07:25:06Z"}\n' > "$PKGFIX/kits/flaky-triage-kit/core/.lock-state"
+printf '{"tier":"hardened","at":"2026-08-04T07:25:06Z"}\n' > "$PKGFIX/kits/flaky-triage-kit/.lock-state"
+
+# CONTROL, snapshotted BEFORE the fixture run: none of this may touch the real committed zip.
+REALZIP="$KITSRC/../flaky-triage-kit.zip"
+REALZIP_BEFORE="$(cksum "$REALZIP" 2>/dev/null)"
+
+PKGOUT="$("$PKGFIX/kits/flaky-triage-kit/scripts/package-kit.sh" 2>&1)"; PKGRC=$?
+[ "$PKGRC" -eq 0 ] && ok || bad "package-kit.sh must succeed against a fixture that only ADDS a planted .lock-state (real content unchanged) — got rc=$PKGRC: $PKGOUT"
+PKGZIP="$PKGFIX/kits/flaky-triage-kit.zip"
+[ -f "$PKGZIP" ] && ok || bad "package-kit.sh must produce a zip at $PKGZIP — got: $PKGOUT"
+PKGLIST="$(unzip -l "$PKGZIP" 2>/dev/null)"
+case "$PKGLIST" in *"flaky-triage-kit/install.sh"*) ok ;; *) bad "CONTROL: the packaged zip must contain real kit content (install.sh) — a broken/empty zip would pass the absence check below vacuously" ;; esac
+case "$PKGLIST" in
+  *"lock-state"*) bad "the packaged zip must not contain .lock-state anywhere — found: $(printf '%s\n' "$PKGLIST" | grep -i lock-state | tr '\n' ';')" ;;
+  *) ok ;;
+esac
+
+[ "$(cksum "$REALZIP" 2>/dev/null)" = "$REALZIP_BEFORE" ] \
+  && ok || bad "CONTROL: the real, already-shipped kits/flaky-triage-kit.zip must never be touched by this fixture — it changed"
+
 echo "install-guard-test: $pass passed, $fail failed"
 [ "$fail" -eq 0 ]
