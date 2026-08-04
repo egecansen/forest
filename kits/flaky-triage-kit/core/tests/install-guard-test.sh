@@ -592,6 +592,31 @@ if [ -n "$TGZ" ]; then
   case "$UBOUT" in *scripts/scan-kit.sh*) ok ;; *) bad "build from an unpacked tarball must name the missing scripts/scan-kit.sh: $(printf '%s' "$UBOUT" | tail -1)" ;; esac
   case "$UBOUT" in *"refuses a dirty tree"*) bad "build from an unpacked tarball must not blame the hostname scan — nothing was scanned" ;; *) ok ;; esac
   rm -rf "$UNP" "$TP"
+
+  # ...and through npm ITSELF, which is not the same thing as `tar xzf`. npm's
+  # EXTRACTOR renames .gitignore to .npmignore on the way into node_modules: the
+  # tarball carries core/.gitignore, plain tar writes core/.gitignore, npm writes
+  # core/.npmignore — a name git never reads. So every tar-based assertion above can
+  # be green while the only path a consumer actually uses still drops the protection.
+  # Found by driving the real consumer path end to end; nothing short of it sees this.
+  # Isolated --prefix under mktemp, never the user's real npm prefix.
+  NPX="$(mktemp -d)"; NPP="$(mktemp -d)"
+  npm i -g --prefix "$NPX" --no-audit --no-fund "$TGZ" >/dev/null 2>&1
+  [ -L "$NPX/bin/hektor-triage-kit" ] \
+    && ok || bad "npm i -g must install the CLI as a bin SYMLINK — the fixture the symlink test models is npm's actual behaviour, not an invention"
+  ( cd "$NPP" && git init -q . && "$NPX/bin/hektor-triage-kit" install --harness claude >/dev/null 2>&1 )
+  NPS="$NPP/.claude/skills/hektor-flaky-triage"
+  [ -f "$NPS/core/apply.sh" ] \
+    && ok || bad "an npm-global install must reach install.sh through the bin symlink and lay down the engine"
+  [ -f "$NPS/core/.gitignore" ] \
+    && ok || bad "an npm-global install must land core/.gitignore under the name GIT reads — npm's extractor renamed it to .npmignore"
+  [ ! -f "$NPS/core/.npmignore" ] \
+    && ok || bad "the installed tree must not keep npm's renamed copy beside the normalised one"
+  # The contract itself, in git's own words, in the consumer's own repo: shipping the
+  # file is only worth anything if THEIR repo ignores THEIR kit's .lock-state.
+  ( cd "$NPP" && git check-ignore -q ".claude/skills/hektor-flaky-triage/core/.lock-state" ) \
+    && ok || bad "a consumer's repo must ignore the installed kit's core/.lock-state — a committed 'hardened' record reads back as mismatch on every clone and refuses all thirteen entrypoints"
+  rm -rf "$NPX" "$NPP"
 else
   bad "npm tarballs are prefixed package/, and the engine must be inside (no artifact: \$TGZ was empty)"
   bad "a tarball must never carry .lock-state (no artifact: \$TGZ was empty)"
@@ -601,6 +626,11 @@ else
   bad "build from an unpacked tarball must exit 66 (no artifact: \$TGZ was empty)"
   bad "build from an unpacked tarball must name scripts/scan-kit.sh (no artifact: \$TGZ was empty)"
   bad "build from an unpacked tarball must not blame the hostname scan (no artifact: \$TGZ was empty)"
+  bad "npm i -g must install the CLI as a bin symlink (no artifact: \$TGZ was empty)"
+  bad "an npm-global install must lay down the engine (no artifact: \$TGZ was empty)"
+  bad "an npm-global install must land core/.gitignore (no artifact: \$TGZ was empty)"
+  bad "the installed tree must not keep npm's renamed copy (no artifact: \$TGZ was empty)"
+  bad "a consumer's repo must ignore the installed kit's core/.lock-state (no artifact: \$TGZ was empty)"
 fi
 
 # --- build must report the cause it ACTUALLY hit ------------------------------

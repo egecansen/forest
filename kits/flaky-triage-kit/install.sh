@@ -100,6 +100,21 @@ cp -R "$HERE/core/." "$SKILL_DIR/core/"
 # never run here") is exactly accurate for a tree seconds old. Do not read/reuse the source's file;
 # just remove whatever the copy brought over.
 rm -f "$SKILL_DIR/core/.lock-state"
+
+# npm RENAMES .gitignore to .npmignore when it EXTRACTS a package — the tarball carries
+# core/.gitignore, npm's extractor writes core/.npmignore, and a plain `tar xzf` of the very
+# same tarball writes core/.gitignore. So an npm-installed kit is the one delivery path where
+# the file arrives under a name git never reads, which silently undoes the whole reason it
+# ships: without it the project does not ignore core/.lock-state, so a user who follows step 2
+# below (`lock-kit.sh lock`) commits a record saying `hardened` — and a teammate who clones onto
+# a tree that is not root-owned gets `mismatch` from integrity_tier, which REFUSES every
+# entrypoint. Normalise the name here rather than in one delivery path's packaging, so source
+# checkout, `tar xzf`, and `npm i -g` all converge on the same installed tree.
+if [ ! -f "$SKILL_DIR/core/.gitignore" ] && [ -f "$SKILL_DIR/core/.npmignore" ]; then
+  mv "$SKILL_DIR/core/.npmignore" "$SKILL_DIR/core/.gitignore"
+fi
+rm -f "$SKILL_DIR/core/.npmignore"
+
 cp "$HERE/adapters/claude/SKILL.md" "$SKILL_DIR/SKILL.md"
 chmod +x "$SKILL_DIR"/core/*.sh "$SKILL_DIR"/core/*.py 2>/dev/null || true
 echo "install: engine + SKILL.md -> $KIT/"
