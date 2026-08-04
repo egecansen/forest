@@ -50,6 +50,21 @@ is root-owned — where the remedy it prints (re-run the installer) is itself re
 `.hooks.Stop`, re-run the installer, *then* lock. (`64` bad arguments, `66` no such project, `69` no
 `jq`, `75` the target kit is already root-owned — unlock first.)
 
+## Building a distributable
+
+    hektor-triage-kit build
+
+Packs the kit into `hektor-flaky-triage-<version>.tgz` and verifies it: no
+`.lock-state`, no dev cruft, and a packed `install.sh` identical to the source's.
+A failed check deletes the artifact rather than leaving a bad one on disk.
+Packing is gated on `scripts/scan-kit.sh`, which refuses a tree carrying internal
+hostnames outside `core/config.json` and `kernel.md`.
+
+Install it anywhere:
+
+    npm i -g ./hektor-flaky-triage-1.0.0.tgz && hektor-triage-kit install
+    npx /path/to/kits/flaky-triage-kit install --harness claude
+
 ## Configure (the only edit needed for a same-infra team)
 Edit `<repo>/.claude/skills/hektor-flaky-triage/core/config.json`:
 - `source_roots` — your test/page packages (where `apply` is allowed to write). **Required.**

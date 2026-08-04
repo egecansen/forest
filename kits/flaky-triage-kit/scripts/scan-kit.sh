@@ -10,10 +10,10 @@
 # This is intentionally NOT a general secrets scanner — it targets the ONE leak
 # class the audit actually found. It does not replace review of new files.
 #
-# Extracted 2026-08-04 from scripts/package-kit.sh, which also staged and zipped.
-# npm's `files` whitelist does the staging and `npm pack` does the zipping; this
-# is the half that had no replacement. Wired as `prepack`, so a dirty tree cannot
-# become a tarball.
+# Extracted 2026-08-04 from the kit's former staging-and-zip script (since retired
+# along with the zip artifact it produced — see kernel.md §12/§13 P5). npm's `files`
+# whitelist does the staging and `npm pack` does the zipping; this is the half that
+# had no replacement. Wired as `prepack`, so a dirty tree cannot become a tarball.
 #
 # Usage:
 #   scripts/scan-kit.sh [<kit-dir>]   # default: the kit this script lives in
@@ -29,13 +29,11 @@ HOSTNAME_RE='sahibindenlocal\.net|\.tzla\.|ocptbox'
 # Files where these hostnames are INTENTIONAL, relative to the kit root: the
 # config seam + the doc that describes it (kernel.md §10), plus this scanner's
 # OWN source — it necessarily carries the patterns as regex/self-test literals,
-# which is not a disclosure, just the guard's own code. scripts/package-kit.sh
-# carries the identical self-reference (same HOSTNAME_RE, same self-test shape)
-# until a later task retires it. core/tests/install-guard-test.sh is NOT here:
-# it SHIPS (core/ is in the npm `files` whitelist), so it plants its test
-# hostname assembled at runtime from fragments rather than as a literal —
+# which is not a disclosure, just the guard's own code. core/tests/install-guard-test.sh
+# is NOT here: it SHIPS (core/ is in the npm `files` whitelist), so it plants its
+# test hostname assembled at runtime from fragments rather than as a literal —
 # exempting a shipped file would blind the guard to everything else in it.
-ALLOWED_HOSTNAME_FILES=("core/config.json" "kernel.md" "scripts/scan-kit.sh" "scripts/package-kit.sh")
+ALLOWED_HOSTNAME_FILES=("core/config.json" "kernel.md" "scripts/scan-kit.sh")
 
 is_allowed() { # $1 = path relative to the kit root
   local rel="$1"
