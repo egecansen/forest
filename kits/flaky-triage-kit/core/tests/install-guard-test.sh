@@ -495,6 +495,12 @@ PY
 ( cd "$VER_P1" && git init -q . && bash "$VER_SRC/kit/install.sh" --harness claude >/dev/null 2>&1 )
 V1="$VER_P1/.claude/skills/hektor-flaky-triage/core/.version"
 [ -f "$V1" ] && ok || bad "install.sh must write core/.version"
+# The plainest delivery path, completing the trio with the tarball and npm ones
+# below: core/.gitignore reaches an installed project by cp -R from a source
+# checkout. Deleting that file as "redundant" is the exact move the spec correction
+# warns about — it is the ONLY layer keeping .lock-state out of an artifact.
+[ -f "$VER_P1/.claude/skills/hektor-flaky-triage/core/.gitignore" ] \
+  && ok || bad "a source-checkout install must carry core/.gitignore downstream"
 [ "$(cut -d' ' -f1 < "$V1")" = "9.9.9-test" ] \
   && ok || bad "core/.version must carry package.json's version, not a literal"
 
