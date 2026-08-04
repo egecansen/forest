@@ -144,7 +144,47 @@ and must say so rather than fail obscurely. It refuses with exit 66, the code th
 CLI already uses for "kit not installed here", with a message naming the source
 checkout as the place to run it.
 
-### 5. Consumption
+### 5. The installed kit records which version it is
+
+`package.json` versions the *artifact*. This versions the *install*, which is the
+question that has actually been unanswerable.
+
+Twice in the work leading to this spec, "what version is this install?" had no
+answer. A broken worktree's age had to be inferred from file presence —
+`_wiring_repair.sh` absent means pre-2026-08-02 — and forest's whole
+orphaned-units guard exists because an install froze at an old version and nothing
+noticed. One command should answer it.
+
+**`install.sh` writes `$SKILL_DIR/core/.version` at install time**, exactly as it
+already writes `core/.harness` (`install.sh:115`): two tokens, the version and the
+install instant.
+
+```
+1.0.0 2026-08-04T07:16:38Z
+```
+
+It reads the version from `package.json`, which sits at the kit root and is present
+in both a source checkout and an unpacked tarball — npm includes `package.json` in
+every tarball regardless of `files`.
+
+**There is deliberately no `.version` in the source tree.** A version file *should*
+travel with a copy — it describes which build this is — which is the opposite of
+`.lock-state`, whose whole defect was travelling. Same mechanism, opposite correct
+behaviour, and that is precisely how a later reader "fixes" one by breaking the
+other. Writing it at install time removes the ambiguity structurally: there is no
+source `.version` for `cp -R` to carry, so the question never arises. `core/.gitignore`
+lists it anyway, as cheap insurance against someone creating one by hand.
+
+`hektor-triage-kit status` reports it, and `hektor-triage-kit --version` reports the
+source's. An install predating this change has no `.version`; `status` says so in
+those words rather than inventing one — "unknown (installed before the kit recorded
+versions)" is the honest reading and distinguishes an old install from a broken one.
+
+Not in scope, but worth recording because it is the obvious next use: forest's
+provision record could carry the kit version alongside its inventory, which would
+make its staleness detection version-aware instead of presence-based.
+
+### 6. Consumption
 
 ```
 npx /path/to/kits/flaky-triage-kit install --harness claude
@@ -154,7 +194,7 @@ npm i -g ./hektor-flaky-triage-1.0.0.tgz   &&   hektor-triage-kit install
 and, if the package is ever published, `npx hektor-flaky-triage install` —
 identical commands, different resolution.
 
-### 6. Retiring the zip
+### 7. Retiring the zip
 
 `kits/flaky-triage-kit.zip` is deleted and `scripts/package-kit.sh` loses its
 staging and zipping, keeping only the scan under its new name.
@@ -174,10 +214,9 @@ thing to fix.
   because a public registry is cached by mirrors and an unpublish window is narrow.
 - **It does not change the CLI's behaviour.** `install`, `lock`, `unlock`,
   `status`, `link` are untouched; `build` is added beside them.
-- **It does not version anything but the package.** There is no version string
-  compiled into `install.sh` or reported by `status`; the tarball's name and
-  `package.json` are the only markers. Threading a version through the kit's own
-  output is a separate change.
+- **It does not thread a version through the engine's output.** `status` and
+  `--version` report it (§5); no summary, verdict or ledger line carries it. That
+  is a separate change with its own reasons.
 - **It does not carry the pack.** The hektor pack's skills and hooks keep their own
   installer, as settled above.
 
@@ -200,6 +239,17 @@ reader fixing one meets the other.
 6. `npx <dir> install` reaches the CLI and passes arguments through. Verified
    already: `npx ./p install --harness claude` resolves a local bin and forwards
    `install --harness claude`.
+7. `install.sh` writes `core/.version` carrying `package.json`'s version, proven
+   by installing from a fixture whose `package.json` names a distinctive version
+   and reading it back — not by asserting the literal the installer was handed.
+8. `status` reports that version, and reports `unknown` for an install with no
+   `.version` rather than inventing one or omitting the line. Both drivable
+   without sudo, since `status` reads ownership and files only.
+9. **The source tree carries no `core/.version`.** This is the structural
+   guarantee that keeps §5's distinction from `.lock-state` true, so it is
+   asserted rather than assumed: a `find` over the kit finds none, and installing
+   twice from the same source produces two installs whose recorded instants
+   differ — proving the record is written per-install, not copied.
 
 Every assertion is proven by mutation: it must redden when the behaviour it names
 is reverted. Five assertions in this repo's recent history shipped unable to fail,
@@ -209,6 +259,8 @@ of them.
 ## Files
 
 - Create: `kits/flaky-triage-kit/package.json`
+- Modify: `kits/flaky-triage-kit/install.sh` (write `core/.version`, §5)
+- Modify: `kits/flaky-triage-kit/core/.gitignore` (add `.version`, §5)
 - Create: `kits/flaky-triage-kit/scripts/scan-kit.sh` (the scan, extracted)
 - Modify: `kits/flaky-triage-kit/hektor-triage-kit` (the `build` subcommand + help)
 - Modify: `kits/flaky-triage-kit/core/tests/install-guard-test.sh`
