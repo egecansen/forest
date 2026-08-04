@@ -508,6 +508,34 @@ V2="$VER_P2/.claude/skills/hektor-flaky-triage/core/.version"
 # The structural guarantee: no .version anywhere in the source.
 [ -z "$(find "$KITSRC" -name '.version' -print -quit)" ] \
   && ok || bad "the source tree must carry no .version — that is what keeps it unlike .lock-state"
+
+# `--version` answers about the SOURCE; `status` answers about a PROJECT. Spec §5
+# named both, but only `status` was ever implemented — `--version` fell through to
+# "unknown subcommand" and exit 64. Read against the 9.9.9-test fixture so it cannot
+# pass by matching the real version.
+VOUT="$(bash "$VER_SRC/kit/hektor-triage-kit" --version 2>&1)"; VRC=$?
+[ "$VRC" -eq 0 ] && ok || bad "--version must exit 0, got $VRC: $VOUT"
+case "$VOUT" in *9.9.9-test*) ok ;; *) bad "--version must report package.json's version, got: $VOUT" ;; esac
+# From an installed kit there is no manifest. Name the command that DOES know rather
+# than inventing a version — the same reading `status` gives an install with no
+# .version. A lone copy of the CLI is the only way HERE lacks package.json.
+VNM="$(mktemp -d)"; cp "$VER_SRC/kit/hektor-triage-kit" "$VNM/hektor-triage-kit"
+VNOUT="$(bash "$VNM/hektor-triage-kit" --version 2>&1)"; VNRC=$?
+[ "$VNRC" -eq 66 ] && ok || bad "--version with no manifest must exit 66, got $VNRC: $VNOUT"
+# Matched on the full command, not the bare word: the unknown-subcommand hint also
+# contains "status", so a bare match would pass against a --version that was never
+# implemented at all and simply fell through to that hint — which is the defect.
+case "$VNOUT" in *"hektor-triage-kit status"*) ok ;; *) bad "--version with no manifest must point at 'hektor-triage-kit status', got: $VNOUT" ;; esac
+rm -rf "$VNM"
+
+# The hint a wrong subcommand prints is the only discovery surface some users get.
+# It omitted `build` from the day build landed, and would have omitted `--version`
+# too. Checked per subcommand so a new one added to the case block without a matching
+# hint entry reddens here.
+HOUT="$(bash "$VER_SRC/kit/hektor-triage-kit" definitely-not-a-subcommand 2>&1)"
+for w in install build lock unlock status link --version help; do
+  case "$HOUT" in *"$w"*) ok ;; *) bad "the unknown-subcommand hint must name '$w': $HOUT" ;; esac
+done
 rm -rf "$VER_SRC" "$VER_P1" "$VER_P2"
 
 # --- build: pack, then verify what was packed ---------------------------------
@@ -552,6 +580,17 @@ if [ -n "$TGZ" ]; then
     && ok || bad "an install from the TARBALL must carry core/.gitignore downstream — cp -R can only carry what shipped"
   [ -f "$TP/.claude/skills/hektor-flaky-triage/core/.version" ] \
     && ok || bad "an install from the TARBALL must record .version (npm ships package.json in every tarball regardless of files)"
+
+  # An UNPACKED TARBALL passes build's package.json check — npm ships package.json in
+  # every tarball — but `scripts/` is deliberately outside the whitelist, so npm pack
+  # dies on a missing prepack target. That reachable case used to be reported as "the
+  # prepack hostname scan refuses a dirty tree", sending a consumer hunting a
+  # disclosure that never happened in a tree with nothing wrong with it.
+  UBOUT="$( cd "$UNP/package" && bash ./hektor-triage-kit build 2>&1 )"; UBRC=$?
+  [ "$UBRC" = 66 ] \
+    && ok || bad "build from an unpacked tarball must exit 66 like any non-source tree, got $UBRC"
+  case "$UBOUT" in *scripts/scan-kit.sh*) ok ;; *) bad "build from an unpacked tarball must name the missing scripts/scan-kit.sh: $(printf '%s' "$UBOUT" | tail -1)" ;; esac
+  case "$UBOUT" in *"refuses a dirty tree"*) bad "build from an unpacked tarball must not blame the hostname scan — nothing was scanned" ;; *) ok ;; esac
   rm -rf "$UNP" "$TP"
 else
   bad "npm tarballs are prefixed package/, and the engine must be inside (no artifact: \$TGZ was empty)"
@@ -559,7 +598,27 @@ else
   bad "the tarball must carry core/.gitignore (no artifact: \$TGZ was empty)"
   bad "an install from the TARBALL must carry core/.gitignore downstream (no artifact: \$TGZ was empty)"
   bad "an install from the TARBALL must record .version (no artifact: \$TGZ was empty)"
+  bad "build from an unpacked tarball must exit 66 (no artifact: \$TGZ was empty)"
+  bad "build from an unpacked tarball must name scripts/scan-kit.sh (no artifact: \$TGZ was empty)"
+  bad "build from an unpacked tarball must not blame the hostname scan (no artifact: \$TGZ was empty)"
 fi
+
+# --- build must report the cause it ACTUALLY hit ------------------------------
+# npm's stderr was discarded and one guessed cause printed as fact. When the prepack
+# scan IS the cause its own refusal — which names the file and line — must reach the
+# operator; a guess that happens to be right is still a guess, and it was wrong for
+# every other way npm pack can fail. The hostname is assembled at runtime for the
+# same reason as the scan fixtures above: this file ships.
+DRT="$(mktemp -d)"
+cp -R "$KITSRC/." "$DRT/kit/" 2>/dev/null || { mkdir -p "$DRT/kit"; cp -R "$KITSRC/." "$DRT/kit/"; }
+_h="$(printf '%s%s.%stzla.%s%s' 'ocpt' 'box' '' 'sahibinden' 'local.net')"
+printf '\nsee %s\n' "$_h" >> "$DRT/kit/cross-harness.md"
+DOUT="$( cd "$DRT/kit" && bash ./hektor-triage-kit build 2>&1 )"; DRC=$?
+[ "$DRC" = 70 ] && ok || bad "build must exit 70 when npm pack writes no artifact, got $DRC"
+case "$DOUT" in *REFUSING*) ok ;; *) bad "build must surface the prepack scan's own refusal, not a guessed cause: $(printf '%s' "$DOUT" | tail -1)" ;; esac
+case "$DOUT" in *cross-harness.md*) ok ;; *) bad "build must name the file the scan refused, which only the scan's own output knows" ;; esac
+[ -z "$(ls "$DRT/kit"/*.tgz 2>/dev/null)" ] && ok || bad "a refused pack must leave no artifact behind"
+rm -rf "$DRT"
 
 # build refuses from an INSTALLED kit, which has only SKILL.md and core/. The installed
 # tree ships no hektor-triage-kit binary of its own — install.sh never copies one — so

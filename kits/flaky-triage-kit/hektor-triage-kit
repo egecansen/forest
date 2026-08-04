@@ -18,6 +18,10 @@
 #       core/lock-kit.sh's header; read it before calling a kit protected.
 #   hektor-triage-kit link [<bindir>]
 #       Symlink this command onto PATH (default ~/.local/bin) so `hektor-triage-kit` works from anywhere.
+#   hektor-triage-kit --version
+#       The version of THIS SOURCE checkout, read from package.json. `status` answers the other
+#       question — which version a given PROJECT was installed from — by reading that project's
+#       core/.version. An installed kit has no manifest, so --version there says to ask `status`.
 #   hektor-triage-kit help
 set -uo pipefail
 # Resolve the symlink chain BEFORE taking dirname. npm's `bin` mechanism always
@@ -76,13 +80,33 @@ case "$sub" in
       echo "hektor-triage-kit: build needs the kit SOURCE checkout (no package.json in $HERE)." >&2
       echo "hektor-triage-kit: an installed kit carries only SKILL.md and core/. Run build from kits/flaky-triage-kit." >&2
       exit 66; }
+    # An UNPACKED TARBALL passes the check above — npm ships package.json in every
+    # tarball — but `scripts/` is deliberately outside the `files` whitelist, so the
+    # prepack target is missing and npm pack dies on that. Diagnosed here, because
+    # the failure downstream used to be reported as a hostname leak and sent people
+    # hunting for a disclosure that never happened.
+    [ -f "$HERE/scripts/scan-kit.sh" ] || {
+      echo "hektor-triage-kit: build needs the kit SOURCE checkout (package.json is here, scripts/scan-kit.sh is not)." >&2
+      echo "hektor-triage-kit: this looks like an UNPACKED TARBALL — scripts/ is not in the npm files whitelist, so a" >&2
+      echo "hektor-triage-kit: packaged kit carries no packaging tooling and cannot repack itself. Nothing is wrong with" >&2
+      echo "hektor-triage-kit: this tree. Run build from the source checkout at kits/flaky-triage-kit." >&2
+      exit 66; }
     command -v npm >/dev/null 2>&1 || { echo "hektor-triage-kit: build requires npm" >&2; exit 69; }
     # cwd is the kit root on purpose: `npm pack` writes to the CURRENT directory,
     # so inheriting the caller's would scatter artifacts wherever they stood.
-    TGZ="$(cd "$HERE" && npm pack --silent 2>/dev/null | tail -1)"
+    # npm's stderr is CAPTURED, not discarded: it carries the prepack scan's own
+    # refusal lines, and swallowing them is what left this failure with a guessed
+    # cause printed as a certainty.
+    PACKERR="$(mktemp)"
+    TGZ="$(cd "$HERE" && npm pack --silent 2>"$PACKERR" | tail -1)"
     [ -n "$TGZ" ] && [ -f "$HERE/$TGZ" ] || {
-      echo "hektor-triage-kit: build FAILED — npm pack wrote no artifact (the prepack hostname scan refuses a dirty tree)." >&2
+      echo "hektor-triage-kit: build FAILED — npm pack wrote no artifact. npm and the prepack scan said:" >&2
+      sed 's/^/hektor-triage-kit:   /' "$PACKERR" >&2
+      echo "hektor-triage-kit: (a 'REFUSING — internal hostname' line above means the prepack scan found a leak; anything" >&2
+      echo "hektor-triage-kit:  else is npm's own failure and has nothing to do with hostnames.)" >&2
+      rm -f "$PACKERR"
       exit 70; }
+    rm -f "$PACKERR"
     # Verify what was actually produced. The retired zip packaged cleanly and was
     # still wrong; a build that does not read its own output cannot say otherwise.
     bad=0
@@ -104,10 +128,27 @@ case "$sub" in
     echo "install it with:  npm i -g $HERE/$TGZ   (then: hektor-triage-kit install)"
     echo "or run directly:  npx $HERE install --harness claude" ;;
 
+  -V|--version)
+    # The SOURCE's version, from the one manifest that carries it. `status` answers
+    # the different question — what version a given PROJECT was installed from — by
+    # reading core/.version out of that project. Two questions, two commands, one
+    # manifest: nothing here may become a second place a version is written down.
+    [ -f "$HERE/package.json" ] || {
+      echo "hektor-triage-kit: --version reads package.json and there is none in $HERE." >&2
+      echo "hektor-triage-kit: an installed kit carries no manifest — ask the PROJECT instead: hektor-triage-kit status" >&2
+      exit 66; }
+    _v=""
+    if command -v jq >/dev/null 2>&1; then _v="$(jq -r '.version // empty' "$HERE/package.json" 2>/dev/null)"; fi
+    # jq is required by install.sh but not by this: reporting a version must not be
+    # the one command that needs a tool installed to answer.
+    [ -n "$_v" ] || _v="$(sed -n 's/^[[:space:]]*"version"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' "$HERE/package.json" | head -1)"
+    [ -n "$_v" ] || { echo "hektor-triage-kit: package.json in $HERE names no version" >&2; exit 70; }
+    echo "hektor-triage-kit $_v ($HERE)" ;;
+
   -h|--help|help)
-    sed -n '2,21p' "${BASH_SOURCE[0]:-$0}" | sed 's/^# \{0,1\}//' ;;
+    sed -n '2,25p' "${BASH_SOURCE[0]:-$0}" | sed 's/^# \{0,1\}//' ;;
 
   *)
-    echo "hektor-triage-kit: unknown subcommand '$sub' (try: install | lock | unlock | status | link | help)" >&2
+    echo "hektor-triage-kit: unknown subcommand '$sub' (try: install | build | lock | unlock | status | link | --version | help)" >&2
     exit 64 ;;
 esac
