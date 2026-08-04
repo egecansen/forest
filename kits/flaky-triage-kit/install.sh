@@ -88,6 +88,18 @@ if [ -r "$HERE/core/_integrity.sh" ]; then
 fi
 
 cp -R "$HERE/core/." "$SKILL_DIR/core/"
+# .lock-state describes the TREE IT SITS IN, not the tree it was copied from. `cp -R` above just
+# copied the source's own record along with everything else, so a fresh install made from an
+# already-locked (or already-unlocked) source landed claiming a tier it never earned. At `hardened`
+# that record over a user-owned destination reads as `mismatch` (integrity_tier in _integrity.sh) —
+# and `mismatch` REFUSES every entrypoint (see the header comment above and install.sh:83-87, whose
+# own printed remedy — "reinstalling is the repair" — is exactly what recreates this). At `unlocked`
+# it is quieter but just as false: the destination would claim it was locked and then deliberately
+# reopened, which never happened to it. A freshly installed tree has never been locked at all, so it
+# must carry NO record — `lock-kit.sh status` then reports `unprotected`, whose own wording ("lock has
+# never run here") is exactly accurate for a tree seconds old. Do not read/reuse the source's file;
+# just remove whatever the copy brought over.
+rm -f "$SKILL_DIR/core/.lock-state"
 cp "$HERE/adapters/claude/SKILL.md" "$SKILL_DIR/SKILL.md"
 chmod +x "$SKILL_DIR"/core/*.sh "$SKILL_DIR"/core/*.py 2>/dev/null || true
 echo "install: engine + SKILL.md -> $KIT/"

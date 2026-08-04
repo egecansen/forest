@@ -51,6 +51,14 @@ EXCLUDES=(
   --exclude=".superpowers/"
   --exclude="*.swp"
   --exclude="*~"
+  # core/.lock-state describes the TREE IT SITS IN (lock-kit.sh writes it there, see install.sh's
+  # matching fix). If this repo's kit happened to be locked (or unlocked-after-lock) at package
+  # time, rsync would carry that record straight into the zip — every consumer who unzips this as
+  # a fresh source tree would inherit a claim about a lock event that never happened to THEIR copy,
+  # and at "hardened" that reads back as `mismatch`, which refuses. Same class of bug, same fix:
+  # never ship it. rsync excludes by basename anywhere in the tree unless anchored with a leading
+  # '/', which is what we want — .lock-state only ever legitimately lives at core/.lock-state.
+  --exclude=".lock-state"
 )
 
 # Internal-hostname patterns (kernel.md §13 P5). ERE, matched with `grep -E`.

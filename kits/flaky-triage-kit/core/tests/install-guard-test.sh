@@ -292,5 +292,59 @@ case "$(cat "$P/docs/hektor/.hook-audit.log" 2>/dev/null)" in
   *) bad "the installed delivery gate must find its vendored audit lib and log its fail-open path, not silently no-op" ;;
 esac
 
+# --- REGRESSION: .lock-state must not travel from the SOURCE tree into a fresh install -------------
+# lock-kit.sh writes core/.lock-state INSIDE the tree it describes. install.sh's `cp -R "$HERE/core/."
+# "$SKILL_DIR/core/"` copied that file right along with everything else, so a fresh install made from
+# an already-locked (or already-unlocked) SOURCE kit landed carrying a record about a tree it never
+# was. At `hardened` that record over a user-owned (freshly installed) destination reads back as
+# `mismatch` — see _integrity.sh's integrity_tier — and `mismatch` REFUSES every entrypoint: the moment
+# anyone locks the source kit, every project installed from it afterward is born refusing all thirteen
+# entrypoints, with install.sh:83-87's own printed remedy ("reinstalling is the repair") being exactly
+# what recreates the disease. Every prior assertion in this suite drives the tier as a string
+# parameter; none exercises a real .lock-state file traveling through an actual install — this closes
+# that gap.
+#
+# No sudo, no chown: ownership never enters into this. `cp -R` happily copies a plain file regardless
+# of who owns the source tree, so a user-owned fixture reproduces the defect exactly. Stage a FULL copy
+# of KITSRC as the fake source (not just core/) so install.sh's own $HERE-relative adapter lookups
+# — adapters/claude/SKILL.md, adapters/_lib/audit.sh, etc. — still resolve when it runs from the copy.
+stage_locked_source() { # $1 = fake-source dir to create, $2 = the tier to forge into its .lock-state
+  mkdir -p "$1"
+  cp -R "$KITSRC/." "$1/"
+  printf '{"tier":"%s","at":"2026-08-04T07:25:06Z"}\n' "$2" > "$1/core/.lock-state"
+}
+read_tier() { "$1/core/lock-kit.sh" status 2>&1 | sed -n 's/^  tier: //p'; } # $1 = installed SKILL_DIR
+
+# hardened source -> fresh destination: must install cleanly, must carry NO .lock-state, and the
+# destination — which has never been locked — must read back as `unprotected`, not `mismatch`.
+SRCH="$TMP/src-hardened"
+stage_locked_source "$SRCH" hardened
+PH="$TMP/proj-lockstate-hardened"; mkdir -p "$PH"; git -C "$PH" init -q
+OUTLH="$("$SRCH/install.sh" --harness claude --project "$PH" 2>&1)"; RCLH=$?
+SKILL_H="$PH/.claude/skills/hektor-flaky-triage"
+[ "$RCLH" -eq 0 ] && ok || bad "installing from a hardened-recording source into a fresh project must succeed — got rc=$RCLH: $OUTLH"
+[ -f "$SKILL_H/core/.lock-state" ] \
+  && bad "a fresh install must not carry the SOURCE's .lock-state — found: $(cat "$SKILL_H/core/.lock-state" 2>/dev/null)" \
+  || ok
+TIER_H="$(read_tier "$SKILL_H")"
+[ "$TIER_H" = "unprotected" ] && ok || bad "a fresh install (never locked) must report tier 'unprotected' — got '$TIER_H'"
+
+# unlocked source -> fresh destination: the case that is wrong even without root. `unlock` does not
+# delete .lock-state, it rewrites it to {"tier":"unlocked"} — so copying it claims the destination was
+# once locked and then deliberately reopened, which never happened to it. `unprotected` ("lock has
+# never run here") and `unlocked` (locked, then explicitly reopened) are different claims.
+SRCU="$TMP/src-unlocked"
+stage_locked_source "$SRCU" unlocked
+PU="$TMP/proj-lockstate-unlocked"; mkdir -p "$PU"; git -C "$PU" init -q
+OUTLU="$("$SRCU/install.sh" --harness claude --project "$PU" 2>&1)"; RCLU=$?
+SKILL_U="$PU/.claude/skills/hektor-flaky-triage"
+[ "$RCLU" -eq 0 ] && ok || bad "installing from an unlocked-recording source into a fresh project must succeed — got rc=$RCLU: $OUTLU"
+[ -f "$SKILL_U/core/.lock-state" ] \
+  && bad "a fresh install must not carry the SOURCE's .lock-state — found: $(cat "$SKILL_U/core/.lock-state" 2>/dev/null)" \
+  || ok
+TIER_U="$(read_tier "$SKILL_U")"
+[ "$TIER_U" = "unprotected" ] \
+  && ok || bad "a fresh install must report 'unprotected', not '$TIER_U' — carrying the source's 'unlocked' record falsely claims this tree was locked and then reopened"
+
 echo "install-guard-test: $pass passed, $fail failed"
 [ "$fail" -eq 0 ]
