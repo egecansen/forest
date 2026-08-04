@@ -346,6 +346,42 @@ TIER_U="$(read_tier "$SKILL_U")"
 [ "$TIER_U" = "unprotected" ] \
   && ok || bad "a fresh install must report 'unprotected', not '$TIER_U' — carrying the source's 'unlocked' record falsely claims this tree was locked and then reopened"
 
+# --- the CLI must resolve itself through a symlink -----------------------------
+# npm's `bin` mechanism is ALWAYS a symlink: `<prefix>/bin/hektor-triage-kit ->
+# ../lib/node_modules/hektor-flaky-triage/hektor-triage-kit` for `npm i -g`,
+# `node_modules/.bin/hektor-triage-kit` for `npx`. bash puts the SYMLINK's path in
+# BASH_SOURCE, so a HERE that takes dirname without walking the chain lands in npm's
+# bin directory and `exec "$HERE/install.sh"` dies with rc 126 — that is EVERY npm
+# consumption path, i.e. the whole reason this package exists.
+#
+# It survived 1061 green assertions because no test had ever invoked the CLI through
+# a symlink: `grep -rn 'ln -s' core/tests/` returned nothing before this block.
+#
+# The fixture is TWO hops and the outer one is RELATIVE, exactly as npm writes it —
+# an implementation that resolves only absolute targets passes a one-hop absolute
+# fixture and still cannot install from npm.
+SYM="$(mktemp -d)"; SYM="$(cd "$SYM" && pwd -P)"
+mkdir -p "$SYM/lib" "$SYM/bin" "$SYM/proj"
+ln -s "$KITSRC/hektor-triage-kit" "$SYM/lib/hektor-triage-kit"   # absolute hop
+ln -s "../lib/hektor-triage-kit"  "$SYM/bin/hektor-triage-kit"   # relative hop, as npm writes it
+( cd "$SYM/proj" && git init -q . )
+SYMOUT="$("$SYM/bin/hektor-triage-kit" install --harness claude --project "$SYM/proj" 2>&1)"; SYMRC=$?
+[ "$SYMRC" -eq 0 ] \
+  && ok || bad "install through a symlinked CLI must succeed (rc=$SYMRC): $(printf '%s' "$SYMOUT" | tail -1)"
+[ -f "$SYM/proj/.claude/skills/hektor-flaky-triage/core/apply.sh" ] \
+  && ok || bad "install through a symlinked CLI must lay down the engine under .claude/"
+[ -f "$SYM/proj/.claude/skills/hektor-flaky-triage/SKILL.md" ] \
+  && ok || bad "install through a symlinked CLI must lay down SKILL.md"
+# `link` reads the same HERE and carries the identical latent bug: called through a
+# symlink it used to write a link pointing back at the calling symlink's directory
+# instead of at the kit. Asserted structurally — the target's directory must be the
+# one holding install.sh — so it cannot pass on a path that merely looks plausible.
+"$SYM/bin/hektor-triage-kit" link "$SYM/dest" >/dev/null 2>&1
+SYMLNK="$(readlink "$SYM/dest/hektor-triage-kit" 2>/dev/null)"
+[ -n "$SYMLNK" ] && [ -f "$(dirname "$SYMLNK")/install.sh" ] \
+  && ok || bad "link through a symlinked CLI must point into the kit, not back at the calling bin dir — got: ${SYMLNK:-<none>}"
+rm -rf "$SYM"
+
 # --- packaging: the files whitelist decides what ships ------------------------
 # npm's `files` is a WHITELIST: a new kind of dev cruft is excluded by default
 # rather than needing a new rule after it escapes. That is why this replaced the

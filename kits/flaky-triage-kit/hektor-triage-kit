@@ -20,7 +20,26 @@
 #       Symlink this command onto PATH (default ~/.local/bin) so `hektor-triage-kit` works from anywhere.
 #   hektor-triage-kit help
 set -uo pipefail
-HERE="$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")" && pwd)"
+# Resolve the symlink chain BEFORE taking dirname. npm's `bin` mechanism always
+# installs this command as a symlink — `<prefix>/bin/hektor-triage-kit ->
+# ../lib/node_modules/hektor-flaky-triage/hektor-triage-kit` for a global install,
+# `node_modules/.bin/hektor-triage-kit` for npx — and bash runs with the SYMLINK's
+# path in BASH_SOURCE. A bare dirname therefore yields npm's bin directory, where
+# `exec "$HERE/install.sh"` dies with rc 126 and `link` would relink the symlink to
+# itself. That is EVERY npm consumption path, i.e. the whole reason this package
+# exists. macOS ships bash 3.2 and BSD readlink, so there is no `readlink -f`: walk
+# the chain by hand, resolving each relative target (npm's ARE relative) against the
+# directory of the link that named it. No cycle guard: the kernel resolved this
+# whole chain to a real file already — a loop is ELOOP at exec, before line 1 runs —
+# so the walk is guaranteed to terminate and a bound here would be dead code.
+_src="${BASH_SOURCE[0]:-$0}"
+while [ -L "$_src" ]; do
+  _dir="$(cd -P "$(dirname "$_src")" && pwd)"
+  _src="$(readlink "$_src")"
+  case "$_src" in /*) ;; *) _src="$_dir/$_src" ;; esac
+done
+HERE="$(cd -P "$(dirname "$_src")" && pwd)"
+unset _src _dir
 sub="${1:-help}"; [ $# -gt 0 ] && shift
 
 case "$sub" in
