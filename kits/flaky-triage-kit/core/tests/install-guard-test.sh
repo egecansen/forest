@@ -485,9 +485,20 @@ cp -R "$KITSRC/." "$BLD/kit/" 2>/dev/null || { mkdir -p "$BLD/kit"; cp -R "$KITS
 TGZ="$(ls "$BLD/kit"/hektor-flaky-triage-*.tgz 2>/dev/null | head -1)"
 [ -n "$TGZ" ] && ok || bad "build must leave a versioned tarball in the kit dir"
 grep -q "$(basename "${TGZ:-none}")" "$BLD/out" && ok || bad "build must print the artifact path"
-tar tzf "$TGZ" 2>/dev/null | grep -q '^package/core/apply.sh$' \
-  && ok || bad "npm tarballs are prefixed package/, and the engine must be inside"
-tar tzf "$TGZ" 2>/dev/null | grep -q 'lock-state' && bad "a tarball must never carry .lock-state" || ok
+# An empty $TGZ means the artifact was never produced (the "must leave a versioned
+# tarball" assertion above already failed) — `tar tzf ""` does NOT error in that
+# case, it reads from STDIN, so an interactive run blocks indefinitely right here.
+# A non-tty sandbox merely hits EOF and mis-reports, which is why this hid until
+# driven directly. Guard it so both assertions below fail loudly with a reason
+# instead of ever touching stdin.
+if [ -n "$TGZ" ]; then
+  tar tzf "$TGZ" 2>/dev/null | grep -q '^package/core/apply.sh$' \
+    && ok || bad "npm tarballs are prefixed package/, and the engine must be inside"
+  tar tzf "$TGZ" 2>/dev/null | grep -q 'lock-state' && bad "a tarball must never carry .lock-state" || ok
+else
+  bad "npm tarballs are prefixed package/, and the engine must be inside (no artifact: \$TGZ was empty)"
+  bad "a tarball must never carry .lock-state (no artifact: \$TGZ was empty)"
+fi
 
 # build refuses from an INSTALLED kit, which has only SKILL.md and core/. The installed
 # tree ships no hektor-triage-kit binary of its own — install.sh never copies one — so
