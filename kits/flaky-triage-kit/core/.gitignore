@@ -8,3 +8,9 @@
 # `cp -R "$HERE/core/." "$SKILL_DIR/core/"` carries it into every installed project too, so the
 # same protection follows downstream instead of only covering this repo's own copy.
 .lock-state
+
+# .version — written by install.sh into an INSTALLED kit, never present in the
+# source. Listed here as insurance against one being created by hand: a source
+# .version would be copied by install.sh's `cp -R` and would then describe the
+# wrong tree, which is exactly the .lock-state defect above.
+.version

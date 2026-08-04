@@ -484,5 +484,35 @@ bash "$SCAN_SRC/kit/scripts/scan-kit.sh" --self-test >/dev/null 2>&1 \
   && ok || bad "the guard's own self-test must pass"
 rm -rf "$SCAN_SRC"
 
+# --- the install records its version ------------------------------------------
+# "what version is this install?" was unanswerable twice: a broken worktree's age
+# had to be inferred from file presence. Written at install time like
+# core/.harness, and deliberately ABSENT from the source tree — see install.sh.
+VER_SRC="$(mktemp -d)"; VER_P1="$(mktemp -d)"; VER_P2="$(mktemp -d)"
+cp -R "$KITSRC/." "$VER_SRC/kit/" 2>/dev/null || { mkdir -p "$VER_SRC/kit"; cp -R "$KITSRC/." "$VER_SRC/kit/"; }
+# a distinctive version, so the assertion cannot pass by matching the real one
+python3 - "$VER_SRC/kit/package.json" <<'PY'
+import json,sys
+p=sys.argv[1]; d=json.load(open(p)); d["version"]="9.9.9-test"; json.dump(d,open(p,"w"),indent=2)
+PY
+
+( cd "$VER_P1" && git init -q . && bash "$VER_SRC/kit/install.sh" --harness claude >/dev/null 2>&1 )
+V1="$VER_P1/.claude/skills/hektor-flaky-triage/core/.version"
+[ -f "$V1" ] && ok || bad "install.sh must write core/.version"
+[ "$(cut -d' ' -f1 < "$V1")" = "9.9.9-test" ] \
+  && ok || bad "core/.version must carry package.json's version, not a literal"
+
+# Written per-install, not copied: two installs from ONE source differ in instant.
+sleep 1
+( cd "$VER_P2" && git init -q . && bash "$VER_SRC/kit/install.sh" --harness claude >/dev/null 2>&1 )
+V2="$VER_P2/.claude/skills/hektor-flaky-triage/core/.version"
+[ "$(cut -d' ' -f2 < "$V1")" != "$(cut -d' ' -f2 < "$V2")" ] \
+  && ok || bad "two installs from one source must record DIFFERENT instants — proving .version is written, not carried"
+
+# The structural guarantee: no .version anywhere in the source.
+[ -z "$(find "$KITSRC" -name '.version' -print -quit)" ] \
+  && ok || bad "the source tree must carry no .version — that is what keeps it unlike .lock-state"
+rm -rf "$VER_SRC" "$VER_P1" "$VER_P2"
+
 echo "install-guard-test: $pass passed, $fail failed"
 [ "$fail" -eq 0 ]

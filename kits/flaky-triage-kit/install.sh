@@ -115,6 +115,20 @@ echo "install: engine + SKILL.md -> $KIT/"
 if [ "$do_claude" = 1 ]; then printf '%s stop\n' "$HARNESS" > "$SKILL_DIR/core/.harness"
 else printf '%s\n' "$HARNESS" > "$SKILL_DIR/core/.harness"; fi
 
+# The version of the ENGINE this project received, and when it received it.
+# Written here rather than shipped in the source tree: a version SHOULD travel
+# with a copy (it says which build this is), which is the opposite of
+# core/.lock-state, whose defect was travelling — see the rm -f above. Writing it
+# per-install means there is no source .version for `cp -R` to carry, so the two
+# cannot be confused into "fixing" one by breaking the other.
+# No readable manifest -> no record, deliberately: an invented version is worse
+# than an absent one, and `status` already reads absence as "unknown".
+if [ -r "$HERE/package.json" ] && command -v jq >/dev/null 2>&1; then
+  _kv="$(jq -r '.version // empty' "$HERE/package.json" 2>/dev/null)"
+  [ -n "$_kv" ] && printf '%s %s\n' "$_kv" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" > "$SKILL_DIR/core/.version"
+  unset _kv
+fi
+
 # UPGRADE PATH. Before the relocation, the gate installed INSIDE the kit tree at
 # $SKILL_DIR/hooks/flaky-kit-self-protection-gate.sh. Nothing removed it, so upgrading an existing
 # install left the project with TWO gates: the new one plus a stale in-tree copy that predates the

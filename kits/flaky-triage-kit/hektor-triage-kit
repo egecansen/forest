@@ -28,6 +28,14 @@ case "$sub" in
     [ "${1:-}" = "--project" ] && { PROJ="${2:-$PROJ}"; }
     LK="$PROJ/.claude/skills/hektor-flaky-triage/core/lock-kit.sh"
     [ -f "$LK" ] || { echo "hektor-triage-kit: kit not installed in $PROJ — run: hektor-triage-kit install" >&2; exit 66; }
+    if [ "$sub" = "status" ]; then
+      V="$PROJ/.claude/skills/hektor-flaky-triage/core/.version"
+      if [ -r "$V" ]; then
+        echo "  kit version: $(cut -d' ' -f1 < "$V") (installed $(cut -d' ' -f2 < "$V"))"
+      else
+        echo "  kit version: unknown (installed before the kit recorded versions)"
+      fi
+    fi
     exec "$LK" "$sub" ;;
 
   link)
