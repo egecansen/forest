@@ -581,6 +581,12 @@ rm -rf "$BLD" "$BINST"
   && ok || bad "scripts/package-kit.sh is retired; scan-kit.sh + npm pack replace it"
 [ ! -f "$KITSRC/../flaky-triage-kit.zip" ] \
   && ok || bad "the zip is retired; two artifacts means one goes stale"
+# ...and its replacement must not become the same problem. `build` writes the tarball
+# into THIS tracked directory (npm pack writes where it runs, and README says to run it
+# here), so `git add -A` after a build commits a 250 KB binary that goes stale — the
+# exact dynamic retiring the zip was meant to end. git's own answer, not our reading:
+( cd "$KITSRC" && git check-ignore -q "hektor-flaky-triage-1.0.0.tgz" ) \
+  && ok || bad "built tarballs must be git-ignored — build writes them into the tracked kit directory"
 # --exclude=install-guard-test.sh: this file's OWN assertion above necessarily names
 # "package-kit.sh" to check for its absence — a self-match there is not a survivor.
 grep -rqn "package-kit\.sh" "$KITSRC" --exclude-dir=.achilles --exclude=install-guard-test.sh 2>/dev/null \

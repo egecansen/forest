@@ -7,3 +7,10 @@ docs/hektor/.cursor-hook-payload.log
 docs/hektor/observations.jsonl
 docs/hektor/memory-proposals.md
 docs/hektor/skill-stocktake.json
+
+# Build artifacts from `hektor-triage-kit build`. npm pack writes into the directory
+# it runs in, which for the kit is this tracked one — and README tells maintainers to
+# run it there. The zip was retired (kernel §7/§12) exactly to stop a stale binary
+# being committed and drifting from the source; committing a .tgz instead would just
+# trade one stale artifact for another. Build it, install it, throw it away.
+kits/flaky-triage-kit/*.tgz
