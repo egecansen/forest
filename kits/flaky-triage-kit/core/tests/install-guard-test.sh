@@ -622,6 +622,21 @@ if [ -n "$TGZ" ]; then
   # file is only worth anything if THEIR repo ignores THEIR kit's .lock-state.
   ( cd "$NPP" && git check-ignore -q ".claude/skills/hektor-flaky-triage/core/.lock-state" ) \
     && ok || bad "a consumer's repo must ignore the installed kit's core/.lock-state — a committed 'hardened' record reads back as mismatch on every clone and refuses all thirteen entrypoints"
+
+  # THE UPGRADE PATH, which a first-install-only test cannot see — and a first-install-only
+  # test is exactly how the defect this covers got written. A later kit version adds a rule;
+  # npm delivers it as core/.npmignore; re-installing over an existing project must carry it
+  # through. Guarding the normalisation on "the destination has no .gitignore yet" made it
+  # first-install-only: the guard skipped, and the `rm -f` after it then deleted the incoming
+  # copy — so the new rule reached source-path users and silently never reached npm-path
+  # users, which is this branch's own staleness shape one path over. Simulated on the
+  # INSTALLED PACKAGE, because that is where a real upgrade puts the new file.
+  printf '\n# added by a later kit version\n.hook-audit.log\n' >> "$NPX/lib/node_modules/hektor-flaky-triage/core/.npmignore"
+  ( cd "$NPP" && "$NPX/bin/hektor-triage-kit" install --harness claude >/dev/null 2>&1 )
+  grep -q '^\.hook-audit\.log$' "$NPS/core/.gitignore" 2>/dev/null \
+    && ok || bad "re-installing on the npm path must deliver a rule added by a later kit version — normalising only on first install strands every npm consumer at the rules they installed with"
+  [ ! -f "$NPS/core/.npmignore" ] \
+    && ok || bad "a re-install must not leave npm's renamed copy behind either"
   rm -rf "$NPX" "$NPP"
 else
   bad "npm tarballs are prefixed package/, and the engine must be inside (no artifact: \$TGZ was empty)"
@@ -637,6 +652,8 @@ else
   bad "an npm-global install must land core/.gitignore (no artifact: \$TGZ was empty)"
   bad "the installed tree must not keep npm's renamed copy (no artifact: \$TGZ was empty)"
   bad "a consumer's repo must ignore the installed kit's core/.lock-state (no artifact: \$TGZ was empty)"
+  bad "re-installing on the npm path must deliver a later version's rule (no artifact: \$TGZ was empty)"
+  bad "a re-install must not leave npm's renamed copy behind (no artifact: \$TGZ was empty)"
 fi
 
 # --- build must report the cause it ACTUALLY hit ------------------------------

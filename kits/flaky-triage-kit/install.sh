@@ -110,8 +110,17 @@ rm -f "$SKILL_DIR/core/.lock-state"
 # a tree that is not root-owned gets `mismatch` from integrity_tier, which REFUSES every
 # entrypoint. Normalise the name here rather than in one delivery path's packaging, so source
 # checkout, `tar xzf`, and `npm i -g` all converge on the same installed tree.
-if [ ! -f "$SKILL_DIR/core/.gitignore" ] && [ -f "$SKILL_DIR/core/.npmignore" ]; then
-  mv "$SKILL_DIR/core/.npmignore" "$SKILL_DIR/core/.gitignore"
+#
+# UNCONDITIONAL, and that is the point. A first draft guarded this with
+# `[ ! -f "$SKILL_DIR/core/.gitignore" ]`, which made it first-install-only: on RE-install the
+# `cp -R` above lands the new .npmignore, the guard sees the OLD .gitignore already sitting
+# there and skips, and the `rm -f` below then deletes the incoming copy — so a rule added in a
+# later kit version reached source-path users on upgrade and silently never reached npm-path
+# users. That is the staleness this whole branch exists to end, reintroduced one path over. The
+# two names cannot coexist in any source tree (npm writes one, git writes the other), so the
+# guard protected against nothing and cost the upgrade path.
+if [ -f "$SKILL_DIR/core/.npmignore" ]; then
+  mv -f "$SKILL_DIR/core/.npmignore" "$SKILL_DIR/core/.gitignore"
 fi
 rm -f "$SKILL_DIR/core/.npmignore"
 
