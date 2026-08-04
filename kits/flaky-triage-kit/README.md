@@ -26,8 +26,9 @@ hektor-triage-kit install --project /path/to/your/repo
 `install` auto-configures everything — **no manual config step**: it auto-detects **JDK 17** (writes
 `run.java_home`) and **source_roots** (your `src/test/java`), then wires every harness. Other subcommands:
 `hektor-triage-kit lock|unlock|status` (the OS-level protection tier — **hardened** when `sudo` is
-available, chmod-only **degraded** otherwise; see `core/lock-kit.sh`'s header) and `link` (put it on PATH).
-(`./install.sh` still works directly if you prefer.)
+available, chmod-only **degraded** otherwise; see `core/lock-kit.sh`'s header), `link` (put it on PATH),
+`build` (below), and `--version` — which reports *this source checkout's* version, while `status` reports
+which version a given *project* was installed from. (`./install.sh` still works directly if you prefer.)
 
 `all` wires it **everywhere** in one shot:
 - **Claude Code** — engine + skill at `.claude/skills/hektor-flaky-triage/`, gate registered in `.claude/settings.json`.
@@ -58,12 +59,26 @@ Packs the kit into `hektor-flaky-triage-<version>.tgz` and verifies it: no
 `.lock-state`, no dev cruft, and a packed `install.sh` identical to the source's.
 A failed check deletes the artifact rather than leaving a bad one on disk.
 Packing is gated on `scripts/scan-kit.sh`, which refuses a tree carrying internal
-hostnames outside `core/config.json` and `kernel.md`.
+hostnames outside `core/config.json` and `kernel.md`; if it refuses, `build` prints
+the scan's own line — file and line number — rather than a summary.
+
+`npm pack` writes into the directory it runs in, so the `.tgz` lands here, in a
+tracked directory. It is git-ignored on purpose: build it, install it, throw it
+away. Two artifacts means one goes stale, which is why the zip was retired.
+
+Run `build` from **this source checkout**. An unpacked tarball has `package.json`
+but not `scripts/` — packaging tooling is deliberately outside the `files`
+whitelist — so a packaged kit cannot repack itself, and `build` says so (exit 66).
 
 Install it anywhere:
 
     npm i -g ./hektor-flaky-triage-1.0.0.tgz && hektor-triage-kit install
     npx /path/to/kits/flaky-triage-kit install --harness claude
+
+Both forms reach the CLI through a symlink — that is how npm's `bin` works, with no
+opt-out — so the CLI resolves its own symlink chain before locating `install.sh`.
+`npx <tarball>` is **not** a form that works: npx cannot resolve a `bin` from a
+tarball spec. Use `npx <directory>` or `npm i -g <tarball>`.
 
 ## Configure (the only edit needed for a same-infra team)
 Edit `<repo>/.claude/skills/hektor-flaky-triage/core/config.json`:
