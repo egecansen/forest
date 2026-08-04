@@ -392,8 +392,24 @@ esac
 # packager's blacklist. Driven through `npm pack --dry-run --json`, which is npm's
 # own resolution rather than our reading of it.
 pack_list() {  # $1 = kit dir -> newline-separated paths npm would ship
+  # `npm pack --dry-run` genuinely runs `prepack` (verified: it executes the
+  # hostname scan for real). On a scan failure npm's --json output is an
+  # {"error": {...}} OBJECT, not the [{"files": [...]}] LIST this expects --
+  # so name that cause up front instead of letting every caller hit a bare
+  # KeyError/TypeError and a page of mechanically-cascading "files must ship"
+  # failures with no pointer back to the actual refusal.
   ( cd "$1" && npm pack --dry-run --json 2>/dev/null \
-      | python3 -c 'import sys,json; print("\n".join(f["path"] for f in json.load(sys.stdin)[0]["files"]))' )
+      | python3 -c '
+import sys, json
+d = json.load(sys.stdin)
+if isinstance(d, dict) and "error" in d:
+    e = d["error"]
+    sys.exit("pack_list: npm pack refused -- " + e.get("detail", e.get("summary", "?")) +
+             "  (prepack runs the hostname scan: a dirty tree cannot be packed, so every "
+             "files-must-ship / top-level-entries failure below is a SYMPTOM of this, not "
+             "the cause)")
+print("\n".join(f["path"] for f in d[0]["files"]))
+' )
 }
 
 PKG_SRC="$(mktemp -d)"
