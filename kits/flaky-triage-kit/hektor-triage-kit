@@ -4,6 +4,11 @@
 #   hektor-triage-kit install [--harness all|claude|cursor|agents|both] [--project <dir>] [--no-autoconfig]
 #       Install into a repo and wire EVERY harness (Claude Code + Cursor + AGENTS.md) in one shot, and
 #       auto-detect JDK 17 + source_roots so there is no manual config step. Idempotent.
+#   hektor-triage-kit build
+#       Pack the kit into a versioned tarball (npm pack) and VERIFY it: no .lock-state,
+#       no dev cruft, and a packed install.sh identical to the source's. Source checkout
+#       only — an installed kit carries no manifest. A failed verification deletes the
+#       artifact rather than leaving a bad one on disk.
 #   hektor-triage-kit lock | unlock | status
 #       OS-level protection tier for an installed kit (proxies core/lock-kit.sh in the target repo):
 #       hardened (root-owned, password-gated reopen — the wall the PreToolUse gate is not) when sudo is
@@ -44,8 +49,44 @@ case "$sub" in
     echo "linked -> $BINDIR/hektor-triage-kit"
     case ":$PATH:" in *":$BINDIR:"*) ;; *) echo "note: add $BINDIR to PATH to call 'hektor-triage-kit' from anywhere" ;; esac ;;
 
+  build)
+    # Source-checkout only: an install carries SKILL.md and core/ and nothing
+    # else, so there is no manifest to pack. Say which directory to use rather
+    # than failing obscurely inside npm.
+    [ -f "$HERE/package.json" ] || {
+      echo "hektor-triage-kit: build needs the kit SOURCE checkout (no package.json in $HERE)." >&2
+      echo "hektor-triage-kit: an installed kit carries only SKILL.md and core/. Run build from kits/flaky-triage-kit." >&2
+      exit 66; }
+    command -v npm >/dev/null 2>&1 || { echo "hektor-triage-kit: build requires npm" >&2; exit 69; }
+    # cwd is the kit root on purpose: `npm pack` writes to the CURRENT directory,
+    # so inheriting the caller's would scatter artifacts wherever they stood.
+    TGZ="$(cd "$HERE" && npm pack --silent 2>/dev/null | tail -1)"
+    [ -n "$TGZ" ] && [ -f "$HERE/$TGZ" ] || {
+      echo "hektor-triage-kit: build FAILED — npm pack wrote no artifact (the prepack hostname scan refuses a dirty tree)." >&2
+      exit 70; }
+    # Verify what was actually produced. The retired zip packaged cleanly and was
+    # still wrong; a build that does not read its own output cannot say otherwise.
+    bad=0
+    for pat in 'lock-state' '\.achilles/' '\.playwright-mcp/' '\.DS_Store' '\.png$' '\.superpowers/' '^package/scripts/'; do
+      if tar tzf "$HERE/$TGZ" 2>/dev/null | grep -qE "$pat"; then
+        echo "hektor-triage-kit: build FAILED — artifact contains $pat" >&2; bad=1
+      fi
+    done
+    T="$(mktemp -d)"
+    if tar xzf "$HERE/$TGZ" -C "$T" package/install.sh 2>/dev/null; then
+      cmp -s "$T/package/install.sh" "$HERE/install.sh" || {
+        echo "hektor-triage-kit: build FAILED — the packed install.sh differs from the source's" >&2; bad=1; }
+    else
+      echo "hektor-triage-kit: build FAILED — the artifact has no package/install.sh" >&2; bad=1
+    fi
+    rm -rf "$T"
+    [ "$bad" = 0 ] || { rm -f "$HERE/$TGZ"; echo "hektor-triage-kit: removed the bad artifact" >&2; exit 71; }
+    echo "built: $HERE/$TGZ"
+    echo "install it with:  npm i -g $HERE/$TGZ   (then: hektor-triage-kit install)"
+    echo "or run directly:  npx $HERE install --harness claude" ;;
+
   -h|--help|help)
-    sed -n '2,13p' "${BASH_SOURCE[0]:-$0}" | sed 's/^# \{0,1\}//' ;;
+    sed -n '2,21p' "${BASH_SOURCE[0]:-$0}" | sed 's/^# \{0,1\}//' ;;
 
   *)
     echo "hektor-triage-kit: unknown subcommand '$sub' (try: install | lock | unlock | status | link | help)" >&2

@@ -514,5 +514,35 @@ V2="$VER_P2/.claude/skills/hektor-flaky-triage/core/.version"
   && ok || bad "the source tree must carry no .version — that is what keeps it unlike .lock-state"
 rm -rf "$VER_SRC" "$VER_P1" "$VER_P2"
 
+# --- build: pack, then verify what was packed ---------------------------------
+# The retired zip passed packaging and was still wrong — it carried a hardened
+# .lock-state and lacked the installer fix. A build that does not check its own
+# output is how that ships.
+BLD="$(mktemp -d)"
+cp -R "$KITSRC/." "$BLD/kit/" 2>/dev/null || { mkdir -p "$BLD/kit"; cp -R "$KITSRC/." "$BLD/kit/"; }
+( cd "$BLD/kit" && bash ./hektor-triage-kit build >"$BLD/out" 2>"$BLD/err" ); BRC=$?
+[ "$BRC" = 0 ] && ok || bad "build must succeed on a clean kit (rc=$BRC: $(tail -1 "$BLD/err"))"
+TGZ="$(ls "$BLD/kit"/hektor-flaky-triage-*.tgz 2>/dev/null | head -1)"
+[ -n "$TGZ" ] && ok || bad "build must leave a versioned tarball in the kit dir"
+grep -q "$(basename "${TGZ:-none}")" "$BLD/out" && ok || bad "build must print the artifact path"
+tar tzf "$TGZ" 2>/dev/null | grep -q '^package/core/apply.sh$' \
+  && ok || bad "npm tarballs are prefixed package/, and the engine must be inside"
+tar tzf "$TGZ" 2>/dev/null | grep -q 'lock-state' && bad "a tarball must never carry .lock-state" || ok
+
+# build refuses from an INSTALLED kit, which has only SKILL.md and core/. The installed
+# tree ships no hektor-triage-kit binary of its own — install.sh never copies one — so
+# this plants a COPY of the CLI there and runs it from that location. HERE resolves from
+# BASH_SOURCE, not from cwd: invoking the SOURCE binary by its absolute path while merely
+# `cd`ing into the installed dir (as a first draft of this fixture did) leaves HERE
+# pointing at the source, which still has package.json, and the guard never fires —
+# verified by running exactly that and reading rc=0 back. Only a binary whose OWN
+# directory lacks package.json exercises the check.
+BINST="$(mktemp -d)"
+( cd "$BINST" && git init -q . && bash "$BLD/kit/install.sh" --harness claude >/dev/null 2>&1 )
+cp "$BLD/kit/hektor-triage-kit" "$BINST/.claude/skills/hektor-flaky-triage/hektor-triage-kit"
+( cd "$BINST/.claude/skills/hektor-flaky-triage" && bash ./hektor-triage-kit build >/dev/null 2>&1 ); IRC=$?
+[ "$IRC" = 66 ] && ok || bad "build from an installed kit must exit 66, got $IRC"
+rm -rf "$BLD" "$BINST"
+
 echo "install-guard-test: $pass passed, $fail failed"
 [ "$fail" -eq 0 ]
