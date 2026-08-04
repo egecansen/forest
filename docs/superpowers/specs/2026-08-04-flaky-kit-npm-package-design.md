@@ -84,15 +84,36 @@ repo keeps retracting.
 ### 2. `files` — a whitelist, replacing the packager's staging half
 
 ```
-core/           adapters/       install.sh      hektor-triage-kit
-README.md       kernel.md       cross-harness.md  enforcement-codeowners.md
+core/           core/.gitignore   adapters/         install.sh
+hektor-triage-kit  README.md      kernel.md         cross-harness.md
+enforcement-codeowners.md
 ```
 
 A whitelist is stronger than `package-kit.sh`'s blacklist of dev cruft
 (`.playwright-mcp/`, `.achilles/`, `*.png`, `.superpowers/`, `.DS_Store`, …):
 a new kind of junk is excluded by default rather than needing a new `--exclude`.
-The `.lock-state` exclusion added 2026-08-04 is subsumed — `core/.lock-state` is
-not in the whitelist, and npm's own `files` semantics never include it.
+
+**`core/.gitignore` is what keeps `core/.lock-state` out of an artifact — not
+`files`.** An earlier draft of this section said the opposite ("`core/.lock-state`
+is not in the whitelist, and npm's own `files` semantics never include it"), which
+is false: `files: ["core/", …]` means *everything under `core/` minus the ignore
+rules that apply there*, so `core/.lock-state` is squarely inside the whitelist and
+only `core/.gitignore` removes it. Traced by execution — with every layer intact
+`npm pack --dry-run` lists `core/.gitignore` and no `.lock-state`; delete
+`core/.gitignore`, change nothing else, and `package/core/.lock-state` ships. Of
+the three overlapping layers exactly one holds, and a maintainer who trusted the
+old wording could delete `core/.gitignore` as redundant and reship the original
+defect. The third layer, `build`'s own verification of the artifact it just wrote,
+does hold independently: it prints `build FAILED — artifact contains lock-state`,
+exits 71, and deletes the tarball.
+
+`core/.gitignore` therefore needs its **own explicit `files` entry** alongside
+`core/`. npm's always-ignore list drops every `.gitignore` from a tarball no
+matter which directory is whitelisted, and naming the path explicitly is what
+overrides that. Without the entry, an npm-installed project never receives the
+file — the only difference between a source-checkout install and a tarball
+install, and the one that decides whether a consumer commits `.lock-state` into
+their own repo (§5's `.version` reaches them by the same route).
 
 `scripts/` stays out. It is build tooling; a consumer never runs it, and it
 carries the hostname patterns as regex literals.
@@ -193,6 +214,22 @@ npm i -g ./hektor-flaky-triage-1.0.0.tgz   &&   hektor-triage-kit install
 
 and, if the package is ever published, `npx hektor-flaky-triage install` —
 identical commands, different resolution.
+
+**Every one of these forms reaches the CLI through a symlink.** That is how npm's
+`bin` works and there is no opt-out: `<prefix>/bin/hektor-triage-kit` points at
+`../lib/node_modules/hektor-flaky-triage/hektor-triage-kit` (relative), `npx` uses
+`node_modules/.bin/`. bash puts the *symlink's* path in `BASH_SOURCE`, so the CLI
+must walk the chain before taking `dirname` or `$HERE` lands in npm's bin directory
+and `exec "$HERE/install.sh"` fails with rc 126 — every consumption path, silently
+green in a source checkout where nothing is symlinked. macOS is bash 3.2 with BSD
+readlink, so there is no `readlink -f` to lean on. A test invokes the CLI through a
+two-hop chain with a relative outer hop; without it the resolution reads like
+ceremony and gets tidied away.
+
+`npx <tarball>` is **not** a supported form and is not advertised anywhere: npx
+cannot resolve a `bin` from a tarball spec at all — it tries to execute the `.tgz`
+and reports `Permission denied`. `npx <directory>` and `npm i -g <tarball>` are the
+two forms that work.
 
 ### 7. Retiring the zip
 
