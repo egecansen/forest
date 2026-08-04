@@ -531,9 +531,34 @@ if [ -n "$TGZ" ]; then
   tar tzf "$TGZ" 2>/dev/null | grep -q '^package/core/apply.sh$' \
     && ok || bad "npm tarballs are prefixed package/, and the engine must be inside"
   tar tzf "$TGZ" 2>/dev/null | grep -q 'lock-state' && bad "a tarball must never carry .lock-state" || ok
+  # core/.gitignore must SHIP. npm's always-ignore list drops every .gitignore from
+  # a tarball even though core/ is whitelisted, so it needs its OWN `files` entry to
+  # override that. It is also the one and only layer that keeps core/.lock-state out
+  # of an artifact — `files: ["core/"]` includes everything under core/ minus ignore
+  # rules, so with this file gone the whitelist ships .lock-state, verified.
+  tar tzf "$TGZ" 2>/dev/null | grep -qxF 'package/core/.gitignore' \
+    && ok || bad "the tarball must carry core/.gitignore — npm's always-ignore drops it unless files names it explicitly"
+
+  # An install FROM THE TARBALL must be indistinguishable from one from the source:
+  # this branch exists to reach someone who does NOT have the source directory, so
+  # anything the tarball drops is dropped for them permanently. core/.gitignore is
+  # what stops them committing .lock-state into their repo — a teammate who clones
+  # that gets a record saying `hardened` over a tree that is not root-owned, which
+  # integrity_tier reads as `mismatch` and every entrypoint then refuses.
+  UNP="$(mktemp -d)"; TP="$(mktemp -d)"
+  tar xzf "$TGZ" -C "$UNP" 2>/dev/null
+  ( cd "$TP" && git init -q . && bash "$UNP/package/install.sh" --harness claude >/dev/null 2>&1 )
+  [ -f "$TP/.claude/skills/hektor-flaky-triage/core/.gitignore" ] \
+    && ok || bad "an install from the TARBALL must carry core/.gitignore downstream — cp -R can only carry what shipped"
+  [ -f "$TP/.claude/skills/hektor-flaky-triage/core/.version" ] \
+    && ok || bad "an install from the TARBALL must record .version (npm ships package.json in every tarball regardless of files)"
+  rm -rf "$UNP" "$TP"
 else
   bad "npm tarballs are prefixed package/, and the engine must be inside (no artifact: \$TGZ was empty)"
   bad "a tarball must never carry .lock-state (no artifact: \$TGZ was empty)"
+  bad "the tarball must carry core/.gitignore (no artifact: \$TGZ was empty)"
+  bad "an install from the TARBALL must carry core/.gitignore downstream (no artifact: \$TGZ was empty)"
+  bad "an install from the TARBALL must record .version (no artifact: \$TGZ was empty)"
 fi
 
 # build refuses from an INSTALLED kit, which has only SKILL.md and core/. The installed

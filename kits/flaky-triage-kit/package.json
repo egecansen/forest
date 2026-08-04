@@ -6,6 +6,7 @@
   "scripts": { "prepack": "scripts/scan-kit.sh" },
   "files": [
     "core/",
+    "core/.gitignore",
     "adapters/",
     "install.sh",
     "hektor-triage-kit",
