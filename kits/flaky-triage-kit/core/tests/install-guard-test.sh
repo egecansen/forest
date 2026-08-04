@@ -386,5 +386,60 @@ esac
 [ "$(cksum "$REALZIP" 2>/dev/null)" = "$REALZIP_BEFORE" ] \
   && ok || bad "CONTROL: the real, already-shipped kits/flaky-triage-kit.zip must never be touched by this fixture — it changed"
 
+# --- packaging: the files whitelist decides what ships ------------------------
+# npm's `files` is a WHITELIST: a new kind of dev cruft is excluded by default
+# rather than needing a new rule after it escapes. That is why this replaced the
+# packager's blacklist. Driven through `npm pack --dry-run --json`, which is npm's
+# own resolution rather than our reading of it.
+pack_list() {  # $1 = kit dir -> newline-separated paths npm would ship
+  ( cd "$1" && npm pack --dry-run --json 2>/dev/null \
+      | python3 -c 'import sys,json; print("\n".join(f["path"] for f in json.load(sys.stdin)[0]["files"]))' )
+}
+
+PKG_SRC="$(mktemp -d)"
+cp -R "$KITSRC/." "$PKG_SRC/kit/" 2>/dev/null || { mkdir -p "$PKG_SRC/kit"; cp -R "$KITSRC/." "$PKG_SRC/kit/"; }
+# plant every kind of thing that must NOT ship
+mkdir -p "$PKG_SRC/kit/.achilles" "$PKG_SRC/kit/.playwright-mcp"
+echo x > "$PKG_SRC/kit/.achilles/note.md"
+echo x > "$PKG_SRC/kit/.playwright-mcp/capture.txt"
+echo x > "$PKG_SRC/kit/.DS_Store"
+echo x > "$PKG_SRC/kit/shot.png"
+printf '{"tier":"hardened","at":"2020-01-01T00:00:00Z"}\n' > "$PKG_SRC/kit/core/.lock-state"
+LIST="$(pack_list "$PKG_SRC/kit")"
+
+for want in core/ adapters/ install.sh hektor-triage-kit README.md kernel.md cross-harness.md enforcement-codeowners.md; do
+  case "$want" in
+    */) printf '%s\n' "$LIST" | grep -q "^${want}" && ok || bad "files must ship $want" ;;
+    *)  printf '%s\n' "$LIST" | grep -qx "$want" && ok || bad "files must ship $want" ;;
+  esac
+done
+
+# whitelist excludes these without help from gitignore or npm's hardcoded defaults
+for junk in .achilles/note.md .playwright-mcp/capture.txt shot.png scripts/package-kit.sh; do
+  printf '%s\n' "$LIST" | grep -q "$junk" && bad "whitelist must exclude $junk" || ok
+done
+
+# these are excluded by other layers (defence in depth), independent of files
+# .DS_Store: npm's hardcoded ignore list. core/.lock-state: core/.gitignore.
+for excluded in .DS_Store core/.lock-state; do
+  printf '%s\n' "$LIST" | grep -q "$excluded" && bad "must not ship $excluded (excluded by layer outside whitelist)" || ok
+done
+
+# the set of top-level entries is exactly what files names: adding anything new
+# to the top level reddens this, even if every item is already excluded by other means
+TOP_LEVEL="$(printf '%s\n' "$LIST" | sed -n 's|^\([^/]*\).*|\1|p' | sort -u)"
+WANT_TOP="README.md
+adapters
+core
+cross-harness.md
+enforcement-codeowners.md
+hektor-triage-kit
+install.sh
+kernel.md
+package.json"
+[ "$TOP_LEVEL" = "$WANT_TOP" ] && ok || bad "top-level entries must be exactly $(printf '%s' "$WANT_TOP" | tr '\n' ' ') — got: $(printf '%s' "$TOP_LEVEL" | tr '\n' ' ')"
+
+rm -rf "$PKG_SRC"
+
 echo "install-guard-test: $pass passed, $fail failed"
 [ "$fail" -eq 0 ]
