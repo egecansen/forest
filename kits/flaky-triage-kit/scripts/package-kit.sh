@@ -68,10 +68,12 @@ HOSTNAME_RE='sahibindenlocal\.net|\.tzla\.|ocptbox'
 # + the doc that describes it (kernel.md §10), plus this packager's OWN source — it necessarily
 # carries the hostname patterns as regex/test-fixture literals (HOSTNAME_RE above, and the
 # --self-test planted string), which is not a disclosure, just the guard's own code.
-# scripts/scan-kit.sh (its extracted sibling, Task 2) carries the identical self-reference;
-# core/tests/install-guard-test.sh plants the same literal to exercise scan-kit.sh's own
-# regression test. Both are guard/test code, not a leak — same rationale as this file's own entry.
-ALLOWED_HOSTNAME_FILES=("core/config.json" "kernel.md" "scripts/package-kit.sh" "scripts/scan-kit.sh" "core/tests/install-guard-test.sh")
+# scripts/scan-kit.sh (its extracted sibling, Task 2) carries the identical self-reference.
+# core/tests/install-guard-test.sh is NOT here: it SHIPS (core/ is in the npm `files`
+# whitelist), so it assembles its test hostname from fragments at runtime rather than
+# writing it literally — exempting a shipped file would blind the guard to everything
+# else in it.
+ALLOWED_HOSTNAME_FILES=("core/config.json" "kernel.md" "scripts/package-kit.sh" "scripts/scan-kit.sh")
 
 is_allowed() { # $1 = path relative to stage root
   local rel="$1" a

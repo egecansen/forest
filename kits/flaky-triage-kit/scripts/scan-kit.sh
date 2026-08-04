@@ -31,10 +31,11 @@ HOSTNAME_RE='sahibindenlocal\.net|\.tzla\.|ocptbox'
 # OWN source — it necessarily carries the patterns as regex/self-test literals,
 # which is not a disclosure, just the guard's own code. scripts/package-kit.sh
 # carries the identical self-reference (same HOSTNAME_RE, same self-test shape)
-# until a later task retires it; core/tests/install-guard-test.sh plants the
-# same literal to exercise this guard's own regression test — both are the
-# guard's own code/tests, not a leak.
-ALLOWED_HOSTNAME_FILES=("core/config.json" "kernel.md" "scripts/scan-kit.sh" "scripts/package-kit.sh" "core/tests/install-guard-test.sh")
+# until a later task retires it. core/tests/install-guard-test.sh is NOT here:
+# it SHIPS (core/ is in the npm `files` whitelist), so it plants its test
+# hostname assembled at runtime from fragments rather than as a literal —
+# exempting a shipped file would blind the guard to everything else in it.
+ALLOWED_HOSTNAME_FILES=("core/config.json" "kernel.md" "scripts/scan-kit.sh" "scripts/package-kit.sh")
 
 is_allowed() { # $1 = path relative to the kit root
   local rel="$1"
