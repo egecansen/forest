@@ -74,11 +74,20 @@ cursor_failed_file=""
 # recorded non-event, not a failure), `[ "$AUTOCFG" = 1 ] && autoconfig` (`--no-autoconfig` would
 # abort the installer), the `[ -n "$r" ] && [ -d … ] && existing=…` body of autoconfig's while-loop
 # (every root that does not exist here), and `{ [ -f "$AG" ] && printf '\n'; cat <<EOF …` in the
-# AGENTS.md block (every project that has no AGENTS.md yet). `-e` also contradicts this file's own
-# design, stated at the top of this section: the install RUNS TO COMPLETION and only then reports,
-# because a partial install that aborts mid-way is worse than one that finishes and says what it
-# could not do. A targeted assertion over the finished tree gives the guarantee `-e` cannot: it
-# checks what LANDED rather than what returned zero, so a partial `cp` that exits 0 is still caught.
+# AGENTS.md block (every project that has no AGENTS.md yet). And the load-bearing reason: `-e`
+# observes ATTEMPTS — what returned zero — while the property that matters is what is ON DISK, so a
+# partial `cp` that exits 0, or one whose failure an existing `|| true` swallows, still yields a
+# broken install under `-e`. Checking outcomes is what closes that; see the block below for why rc
+# observation is nevertheless carried alongside it rather than instead of it.
+#
+# RUN-TO-COMPLETION NOW HAS AN EXCEPTION, and it is deliberate. The note at the top of this file says
+# the install runs to completion and only then reports; `verify_report` breaks that, exiting mid-flow,
+# so a failed Claude gate copy skips the Cursor and AGENTS.md blocks entirely. That rule was written
+# for REGISTRATION MERGE failures, where every other artefact is independent of the merge that broke
+# and landing them is strictly better than not — which is why rc 74 still completes the run and the
+# P4/P6 fixtures assert exactly that. A failed COPY is different in kind: the blocks below depend on
+# what did not land, so continuing produces more false claims rather than more useful work. Two
+# endings by severity: rc 73 stops where the damage is, rc 74 finishes and reports.
 #
 # Each check runs where its own artefact has just been written and BEFORE anything claims that
 # artefact landed — the engine check precedes both harness blocks (either would otherwise print
@@ -99,6 +108,14 @@ verify_dir_nonempty() { # $1=path  $2=what it is
   if [ ! -d "$1" ]; then verify_note "MISSING: $1  ($2)"
   elif [ -z "$(ls -A "$1" 2>/dev/null)" ]; then verify_note "EMPTY: $1  ($2)"
   fi
+}
+# The rc half — see the block below. `cp`/`mkdir` wrappers rather than bare calls, so that a copy
+# added later without a check is a visible inconsistency at the call site rather than an invisible one.
+verify_cp() {    # $1=src  $2=dest  $3=what it is
+  cp "$1" "$2" || verify_note "COPY FAILED: $2  ($3)"
+}
+verify_mkdir() { # $1=dir  $2=what it is
+  mkdir -p "$1" || verify_note "MKDIR FAILED: $1  ($2)"
 }
 # The named files are not an arbitrary sample: they are exactly the ones the closing next-steps block
 # tells the reader to go and open (1 -> core/config.json, 2 -> core/lock-kit.sh, 3 -> SKILL.md and
@@ -124,6 +141,29 @@ verify_claude_gates() {
 verify_cursor_gates() {
   verify_exec "$PROJ/.cursor/hooks/flaky-kit-self-protection-gate.sh" "the Cursor self-protection gate — registered at beforeShellExecution + preToolUse"
 }
+# --- and the OTHER half, which is why both are here -----------------------------------------------
+#
+# The assertions above check outcomes. That was chosen over `set -e` for good reasons (see the block
+# above), but it took on an ENUMERATION, and an outcome assertion is only ever as complete as its
+# list. Three artefacts this installer copies sat outside that list, and each one reproduced the
+# original defect in full — rc 0, "… wired", "install: done":
+#
+#   * `.cursor/rules/hektor-flaky-triage.mdc` and `.cursor/hooks/lib/cursor-compat.sh`. Measured with
+#     those two directories unwritable: the banner still said "Cursor wired (.cursor/: rule + …)"
+#     with an EMPTY rules directory, and the installed gate — which does
+#     `if [ -f "$_COMPAT" ]; then . "$_COMPAT"; else exit 0; fi` — was driven with a real
+#     `rm -rf` of the kit tree on stdin and returned 0 without blocking. Registered, reported
+#     wired, enforcing nothing. `--harness all` is the default, so this is the ordinary path.
+#   * `core/gate-src/`, which is where `core/_wiring_repair.sh` restores a DELETED gate from. With it
+#     unwritable the install printed the full success banner and "install: vendored audit.sh" twice
+#     over an empty directory. `verify_dir_nonempty "$SKILL_DIR/core"` cannot see it: core/ is full.
+#
+# Return-code observation is total by construction; outcome assertion is specific and actionable.
+# NEITHER ALONE IS ENOUGH, and that is the point of carrying both. The rc check catches everything
+# nobody thought to list, including "the file is present but is not the one we just tried to copy";
+# the assertion turns it into a message that names the artefact. Every `cp`, and every `mkdir` a
+# `cp` depends on, is checked from here on — adding a copy without a check is the way back in.
+#
 # Names the artefact, because "install failed" alone leaves the reader with the same question the
 # whole defect created. rc 73 (EX_CANTCREAT) is distinct from 74 (INCOMPLETE: everything landed, a
 # registration merge did not) — this is the stronger failure and must not be read as that one.
@@ -135,16 +175,17 @@ verify_report() {
     echo "These artefacts did not land (a copy failed: out of disk, a permission error, a partial cp, or"
     echo "a kit source at $HERE that does not hold them):"
     printf '%s' "$verify_missing"
-    echo "Nothing here can enforce anything: a hook registration this run made names a path that does not"
-    echo "exist, and the kit's own safety surface is not installed. Fix the cause above and re-run this"
-    echo "installer against this project. Do NOT run '$KIT/core/lock-kit.sh lock' — nothing is there to lock."
+    echo "The kit's safety surface is not fully on disk, so nothing this run would have registered can be"
+    echo "trusted to enforce anything. Fix the cause above and re-run this installer against this project."
+    echo "Do NOT run '$KIT/core/lock-kit.sh lock' over it — hardening a broken install turns one repairable"
+    echo "failure into unlock (password) -> fix -> reinstall -> relock."
   } >&2
   exit 73
 }
 
 # --- engine + skill: the canonical home for EVERY harness (the gate's surface + the AGENTS.md/rule
 #     pointers all reference this path; the engine runs from here in any terminal). Always installed. ---
-mkdir -p "$SKILL_DIR/core"
+verify_mkdir "$SKILL_DIR/core" "the kit directory"
 
 # Refuse to overwrite a hardened install. cp -R would hit EACCES on every root-owned file and bury
 # the real message under a wall of errors — and that EACCES is the protection working, not a bug.
@@ -174,7 +215,46 @@ if [ -r "$HERE/core/_integrity.sh" ]; then
   fi
 fi
 
-cp -R "$HERE/core/." "$SKILL_DIR/core/"
+# PRESENCE IS NOT FRESHNESS, and the refusal above only catches ONE of the two protected tiers.
+# It keys on root ownership, i.e. `hardened`. The DEGRADED tier is `chmod a-w` over the whole
+# surface with the owner unchanged — what `lock-kit.sh lock` leaves on any machine without sudo,
+# and step 2 of this installer's own next-steps block tells EVERY user to run lock. Measured on
+# that shape: a re-install printed 44 "Permission denied" lines, replaced NOT ONE file, and still
+# exited 0 with "Claude Code wired" and "install: done". Every outcome assertion passed, because
+# they check that the artefacts are PRESENT and the old ones all still were — a planted marker in
+# core/gate.sh survived, and core/.version still named the version the project was installed from.
+# An upgrade that silently upgrades nothing is precisely the staleness this branch exists to end.
+#
+# Refuse before touching anything, and name the remedy: `unlock` is what reopens a degraded tree,
+# the same command the hardened tier needs, and nobody learns that from a wall of cp errors. rc 75
+# is deliberately the SAME code the hardened refusal uses — from a caller's point of view these are
+# one contract ("a protected kit is already here; reopen it, then re-run"), and splitting them
+# would make a scripted upgrade handle the two tiers differently for no reason.
+#
+# `-w` on the directory is the cheap, total check for the shape lock actually creates. A tree whose
+# directory is writable but whose FILES are read-only slips past it — and is caught by the `cp`
+# return codes below, which is the whole reason both mechanisms are here.
+#
+# Conditioned on `core/lock-kit.sh` existing, i.e. on a kit ACTUALLY being here, not merely on an
+# unwritable directory called core/. Everything this refusal says — "already has a kit", "that is a
+# PROTECTED kit", "reopen it with unlock" — is false of a bare unwritable directory with no install
+# in it, and that shape is a plain copy failure the assertions below already report as such. Using
+# the hardening script itself as the marker keeps the condition and the remedy in step: the file the
+# message tells you to run is the file whose presence made the message apply.
+if [ -f "$SKILL_DIR/core/lock-kit.sh" ] && [ ! -w "$SKILL_DIR/core" ]; then
+  echo "install: this project already has a flaky-triage kit at $SKILL_DIR, and $KIT/core is NOT WRITABLE." >&2
+  echo "install: that is a PROTECTED kit — normally the degraded tier ('lock-kit.sh lock' without sudo:" >&2
+  echo "install: read-only, owner unchanged), or a hardened tree this installer could not identify." >&2
+  echo "install: refusing to half-overwrite it. Every copy would fail, nothing would be replaced, and the" >&2
+  echo "install: install would still look successful, because the OLD files are all still there — you would" >&2
+  echo "install: be told you upgraded and keep running the version you already had. Reopen it first:" >&2
+  echo "install:   HEKTOR_FLAKYKIT_UNLOCK=1 $SKILL_DIR/core/lock-kit.sh unlock" >&2
+  echo "install: then re-run this installer, and re-lock afterwards with 'core/lock-kit.sh lock'." >&2
+  exit 75
+fi
+
+cp -R "$HERE/core/." "$SKILL_DIR/core/" \
+  || verify_note "COPY FAILED: $SKILL_DIR/core/  (the engine, from $HERE/core/)"
 # .lock-state describes the TREE IT SITS IN, not the tree it was copied from. `cp -R` above just
 # copied the source's own record along with everything else, so a fresh install made from an
 # already-locked (or already-unlocked) source landed claiming a tier it never earned. At `hardened`
@@ -211,7 +291,7 @@ if [ -f "$SKILL_DIR/core/.npmignore" ]; then
 fi
 rm -f "$SKILL_DIR/core/.npmignore"
 
-cp "$HERE/adapters/claude/SKILL.md" "$SKILL_DIR/SKILL.md"
+verify_cp "$HERE/adapters/claude/SKILL.md" "$SKILL_DIR/SKILL.md" "the skill"
 chmod +x "$SKILL_DIR"/core/*.sh "$SKILL_DIR"/core/*.py 2>/dev/null || true
 
 # The wiring check must require exactly the harnesses this kit was installed for. Written under
@@ -305,8 +385,13 @@ vendor() { # $1=src  $2=dest (only if absent — never clobber an existing insta
   # flag "we didn't touch it."
   if [ -f "$2" ]; then
     echo "install: WARN $(basename "$2") already exists at $2 — leaving it AS-IS (not overwriting); if it's stale or was hand-edited/tampered with, remove it and re-run install.sh to re-vendor from $1" >&2
+  # "install: vendored X" used to print whether or not the `cp` worked — measured printing twice over
+  # a directory the copies could not be written into. It is a success claim like any other and must
+  # follow the write, not accompany it.
+  elif mkdir -p "$(dirname "$2")" && cp "$1" "$2"; then
+    chmod +x "$2" 2>/dev/null || true; echo "install: vendored $(basename "$2")"
   else
-    mkdir -p "$(dirname "$2")"; cp "$1" "$2"; chmod +x "$2" 2>/dev/null || true; echo "install: vendored $(basename "$2")"
+    verify_note "COPY FAILED: $2  (the vendored lib $(basename "$2"), from $1)"
   fi
 }
 
@@ -314,14 +399,19 @@ vendor() { # $1=src  $2=dest (only if absent — never clobber an existing insta
 # The gate installs to .claude/hooks/ — OUTSIDE the kit tree at .claude/skills/hektor-flaky-triage/
 # — so renaming that tree aside cannot take its own detector along with it (Task 5).
 if [ "$do_claude" = 1 ]; then
-  mkdir -p "$PROJ/.claude/hooks"
-  cp "$HERE/adapters/claude/flaky-kit-self-protection-gate.sh" "$PROJ/.claude/hooks/flaky-kit-self-protection-gate.sh"
+  verify_mkdir "$PROJ/.claude/hooks" "the Claude hooks directory"
+  verify_cp "$HERE/adapters/claude/flaky-kit-self-protection-gate.sh" "$PROJ/.claude/hooks/flaky-kit-self-protection-gate.sh" "the Claude self-protection gate"
   chmod +x "$PROJ/.claude/hooks/flaky-kit-self-protection-gate.sh" 2>/dev/null || true
   vendor "$HERE/adapters/_lib/audit.sh" "$PROJ/.claude/hooks/lib/audit.sh"
   # The restore source for core/_wiring_repair.sh. Under core/ so harden_targets covers it: at a
   # root-owned tier the file a repair would copy from cannot be rewritten by an agent.
-  mkdir -p "$SKILL_DIR/core/gate-src/claude/lib"
-  cp "$HERE/adapters/claude/flaky-kit-self-protection-gate.sh" "$SKILL_DIR/core/gate-src/claude/flaky-kit-self-protection-gate.sh"
+  #
+  # This whole directory was outside the outcome assertions and reproduced the defect on its own:
+  # pre-created unwritable, the install reported complete success over an empty gate-src/, and
+  # _wr_restore_gate can then only report that it has no usable source — the kit's self-heal gone,
+  # silently, on an install that said it was fine.
+  verify_mkdir "$SKILL_DIR/core/gate-src/claude/lib" "the Claude gate restore source directory"
+  verify_cp "$HERE/adapters/claude/flaky-kit-self-protection-gate.sh" "$SKILL_DIR/core/gate-src/claude/flaky-kit-self-protection-gate.sh" "the Claude self-protection gate restore source"
   chmod +x "$SKILL_DIR/core/gate-src/claude/flaky-kit-self-protection-gate.sh" 2>/dev/null || true
   vendor "$HERE/adapters/_lib/audit.sh" "$SKILL_DIR/core/gate-src/claude/lib/audit.sh"
 
@@ -338,10 +428,10 @@ if [ "$do_claude" = 1 ]; then
   # above still vendoring lib/audit.sh — is exercised by install-guard-test.sh's audit-lib
   # assertion, which drives the INSTALLED gate and fails if lib/audit.sh is ever missing for
   # either reason. Same reasoning for the restore source: no gate-src vendor() call here either.
-  cp "$HERE/adapters/claude/flaky-kit-delivery-gate.sh" "$PROJ/.claude/hooks/flaky-kit-delivery-gate.sh"
+  verify_cp "$HERE/adapters/claude/flaky-kit-delivery-gate.sh" "$PROJ/.claude/hooks/flaky-kit-delivery-gate.sh" "the Claude delivery gate"
   chmod +x "$PROJ/.claude/hooks/flaky-kit-delivery-gate.sh" 2>/dev/null || true
-  mkdir -p "$SKILL_DIR/core/gate-src/claude"
-  cp "$HERE/adapters/claude/flaky-kit-delivery-gate.sh" "$SKILL_DIR/core/gate-src/claude/flaky-kit-delivery-gate.sh"
+  verify_mkdir "$SKILL_DIR/core/gate-src/claude" "the Claude gate restore source directory"
+  verify_cp "$HERE/adapters/claude/flaky-kit-delivery-gate.sh" "$SKILL_DIR/core/gate-src/claude/flaky-kit-delivery-gate.sh" "the Claude delivery gate restore source"
   chmod +x "$SKILL_DIR/core/gate-src/claude/flaky-kit-delivery-gate.sh" 2>/dev/null || true
 
   # Both gate FILES, before a single line of settings.json is merged and before the "Claude Code
@@ -419,16 +509,23 @@ fi
 
 # --- Cursor: rule + gate + vendored libs + hooks.json registration ---
 if [ "$do_cursor" = 1 ]; then
-  mkdir -p "$PROJ/.cursor/hooks/lib" "$PROJ/.cursor/rules"
-  cp "$HERE/adapters/cursor/flaky-kit-self-protection-gate.sh" "$PROJ/.cursor/hooks/flaky-kit-self-protection-gate.sh"
+  verify_mkdir "$PROJ/.cursor/hooks/lib" "the Cursor hooks lib directory"
+  verify_mkdir "$PROJ/.cursor/rules" "the Cursor rules directory"
+  verify_cp "$HERE/adapters/cursor/flaky-kit-self-protection-gate.sh" "$PROJ/.cursor/hooks/flaky-kit-self-protection-gate.sh" "the Cursor self-protection gate"
   chmod +x "$PROJ/.cursor/hooks/flaky-kit-self-protection-gate.sh" 2>/dev/null || true
-  cp "$HERE/adapters/cursor/hektor-flaky-triage.mdc" "$PROJ/.cursor/rules/hektor-flaky-triage.mdc"
+  # The rule and cursor-compat.sh were both outside the outcome assertions, and BOTH matter to
+  # enforcement rather than to documentation: the gate's own header does
+  # `if [ -f "$_COMPAT" ]; then . "$_COMPAT"; else exit 0; fi`, so a missing cursor-compat.sh makes
+  # the INSTALLED, REGISTERED gate allow every call. Driven with an `rm -rf` of the kit tree on
+  # stdin it returned 0 and blocked nothing, under a banner that said "Cursor wired (.cursor/: rule
+  # + beforeShellExecution + preToolUse Write|Edit)" over an empty rules directory.
+  verify_cp "$HERE/adapters/cursor/hektor-flaky-triage.mdc" "$PROJ/.cursor/rules/hektor-flaky-triage.mdc" "the Cursor rule the banner names"
   vendor "$HERE/adapters/cursor/lib/cursor-compat.sh" "$PROJ/.cursor/hooks/lib/cursor-compat.sh"
   vendor "$HERE/adapters/_lib/audit.sh" "$PROJ/.cursor/hooks/lib/audit.sh"
   # The restore source for core/_wiring_repair.sh. Under core/ so harden_targets covers it: at a
   # root-owned tier the file a repair would copy from cannot be rewritten by an agent.
-  mkdir -p "$SKILL_DIR/core/gate-src/cursor/lib"
-  cp "$HERE/adapters/cursor/flaky-kit-self-protection-gate.sh" "$SKILL_DIR/core/gate-src/cursor/flaky-kit-self-protection-gate.sh"
+  verify_mkdir "$SKILL_DIR/core/gate-src/cursor/lib" "the Cursor gate restore source directory"
+  verify_cp "$HERE/adapters/cursor/flaky-kit-self-protection-gate.sh" "$SKILL_DIR/core/gate-src/cursor/flaky-kit-self-protection-gate.sh" "the Cursor self-protection gate restore source"
   chmod +x "$SKILL_DIR/core/gate-src/cursor/flaky-kit-self-protection-gate.sh" 2>/dev/null || true
   vendor "$HERE/adapters/_lib/audit.sh" "$SKILL_DIR/core/gate-src/cursor/lib/audit.sh"
   # Same reasoning as the Claude block: the gate FILE before its registration and before the

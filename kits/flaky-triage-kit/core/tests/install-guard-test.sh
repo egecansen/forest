@@ -391,6 +391,101 @@ case "$OUT10" in *"NOT EXECUTABLE: $P10/.claude/hooks/$SPG"*) ok ;; *) bad "the 
 case "$OUT10" in *"Claude Code wired"*) bad "a gate that cannot be executed must not be reported as wired — got: $OUT10" ;; *) ok ;; esac
 rm -f "$SHIM/chmod"
 
+# --- what the OUTCOME assertions above could not see -----------------------------------------------
+# Checking outcomes instead of return codes was the right call, but it took on an ENUMERATION, and an
+# assertion list is only ever as complete as somebody's memory. Three artefacts sat outside it, each
+# verified to reproduce the original defect in full — rc 0, "… wired", "install: done". install.sh now
+# carries BOTH mechanisms: rc observation on every `cp`/`mkdir` (total by construction, catches what
+# nobody listed) and the outcome assertions (specific, actionable). Neither alone is enough.
+
+# I1 — a REGISTERED Cursor gate that enforces nothing. The Cursor block also copies the rule and
+# `cursor-compat.sh`, and the gate's own header is
+# `if [ -f "$_COMPAT" ]; then . "$_COMPAT"; else exit 0; fi` — so a missing compat lib does not
+# degrade the gate, it disables it. `--harness all` is the default, so this is the ordinary path.
+PC1="$TMP/proj-cursor-libfail"; mkdir -p "$PC1/.cursor/hooks/lib" "$PC1/.cursor/rules"; git -C "$PC1" init -q
+chmod 500 "$PC1/.cursor/hooks/lib" "$PC1/.cursor/rules"
+OUTC1="$("$KITSRC/install.sh" --harness cursor --project "$PC1" 2>&1)"; RCC1=$?
+chmod 700 "$PC1/.cursor/hooks/lib" "$PC1/.cursor/rules"
+[ -z "$(ls -A "$PC1/.cursor/rules" 2>/dev/null)" ] \
+  && ok || bad "CONTROL: the fixture must actually have stopped the rule copy, or nothing below proves anything"
+[ "$RCC1" = 73 ] && ok || bad "a Cursor install whose rule and compat lib did not land must exit 73 — got rc $RCC1"
+case "$OUTC1" in *"Cursor wired"*) bad "the banner must not say 'Cursor wired (.cursor/: rule + …)' over an EMPTY rules directory — got: $OUTC1" ;; *) ok ;; esac
+case "$OUTC1" in *"install: done"*) bad "a Cursor install whose rule and compat lib did not land must not print 'install: done' — got: $OUTC1" ;; *) ok ;; esac
+case "$OUTC1" in *"COPY FAILED: $PC1/.cursor/rules/hektor-flaky-triage.mdc"*) ok ;; *) bad "the failure must name the Cursor rule the banner claims — got: $OUTC1" ;; esac
+case "$OUTC1" in *"COPY FAILED: $PC1/.cursor/hooks/lib/cursor-compat.sh"*) ok ;; *) bad "the failure must name cursor-compat.sh, whose absence disables the gate outright — got: $OUTC1" ;; esac
+# CONTROL, and the reason this is an enforcement failure rather than a cosmetic one: drive the
+# INSTALLED gate for real. The Cursor gate signals through a JSON `"permission": "deny"` payload on
+# stdout, not through its exit code, so rc is not the observable here — with the compat lib present
+# it denies; without it, it prints nothing at all and the call goes through.
+CURGATE="$PC1/.cursor/hooks/flaky-kit-self-protection-gate.sh"
+CURPAY='{"hook_event_name":"beforeShellExecution","command":"rm -rf .claude/skills/hektor-flaky-triage"}'
+GOUT1="$( cd "$PC1" && printf '%s' "$CURPAY" | "$CURGATE" 2>&1 )"
+case "$GOUT1" in *'"permission": "deny"'*) bad "CONTROL: with cursor-compat.sh absent the gate is expected to allow silently — if it denies, this fixture no longer models the hole" ;; *) ok ;; esac
+# ...and the same gate, same payload, once the compat lib is actually there: it must deny. Without
+# this the assertion above would pass against a gate that denies nothing under any circumstances.
+cp "$KITSRC/adapters/cursor/lib/cursor-compat.sh" "$PC1/.cursor/hooks/lib/cursor-compat.sh"
+GOUT2="$( cd "$PC1" && printf '%s' "$CURPAY" | "$CURGATE" 2>&1 )"
+case "$GOUT2" in *'"permission": "deny"'*) ok ;; *) bad "CONTROL: with cursor-compat.sh present the gate must deny — got: $GOUT2" ;; esac
+
+# I2 — `core/gate-src/` is the RECOVERY path and was unverified. `core/_wiring_repair.sh`'s
+# `_wr_restore_gate` restores a deleted gate from there; with it empty the repair can only report that
+# it has no usable source. `verify_dir_nonempty "$SKILL_DIR/core"` cannot see this: core/ is full.
+PC2="$TMP/proj-gatesrcfail"; mkdir -p "$PC2/.claude/skills/hektor-flaky-triage/core/gate-src"; git -C "$PC2" init -q
+chmod 500 "$PC2/.claude/skills/hektor-flaky-triage/core/gate-src"
+OUTC2="$("$KITSRC/install.sh" --harness claude --project "$PC2" 2>&1)"; RCC2=$?
+chmod 700 "$PC2/.claude/skills/hektor-flaky-triage/core/gate-src"
+[ -z "$(ls -A "$PC2/.claude/skills/hektor-flaky-triage/core/gate-src" 2>/dev/null)" ] \
+  && ok || bad "CONTROL: the fixture must actually have stopped the gate-src copies"
+# The control that says this is a NEW check and not the engine assertion firing again.
+[ -f "$PC2/.claude/skills/hektor-flaky-triage/core/gate.sh" ] \
+  && ok || bad "CONTROL: the engine must have landed here — core/ is full, which is exactly why verify_dir_nonempty cannot see this"
+[ "$RCC2" = 73 ] && ok || bad "an install whose gate restore source did not land must exit 73 — got rc $RCC2"
+case "$OUTC2" in *"Claude Code wired"*) bad "an install with no restore source must not be reported as wired — got: $OUTC2" ;; *) ok ;; esac
+case "$OUTC2" in *"install: done"*) bad "an install with no restore source must not print 'install: done' — got: $OUTC2" ;; *) ok ;; esac
+case "$OUTC2" in *"$PC2/.claude/skills/hektor-flaky-triage/core/gate-src/claude"*) ok ;; *) bad "the failure must name core/gate-src/claude — got: $OUTC2" ;; esac
+# vendor() printed "install: vendored audit.sh" whether or not its `cp` worked — measured printing it
+# TWICE here, over a directory neither copy could be written into. One vendor call succeeds in this
+# fixture (.claude/hooks/lib/audit.sh) and one fails (gate-src/claude/lib/audit.sh), so the count is
+# the assertion: a success line per successful write, not per attempt.
+[ "$(printf '%s\n' "$OUTC2" | grep -c 'install: vendored')" = 1 ] \
+  && ok || bad "vendor() must claim 'vendored' only for a copy that actually landed — got $(printf '%s\n' "$OUTC2" | grep -c 'install: vendored') claims"
+
+# I3 — PRESENCE IS NOT FRESHNESS. The refusal at the top of install.sh keys on root ownership, i.e.
+# the HARDENED tier. The DEGRADED tier is `chmod a-w` with the owner unchanged — what `lock-kit.sh
+# lock` leaves on any machine without sudo, and the installer's own step 2 tells every user to run
+# lock. Re-installing over it produced 44 "Permission denied" lines, replaced NOTHING, and exited 0
+# with the full success banner: every outcome assertion passed because the OLD files were all still
+# present. An upgrade that upgrades nothing and says it worked is this branch's own staleness shape.
+#
+# No chown: `chmod -R a-w` reproduces the degraded tier exactly, owner unchanged, and is reversed
+# immediately below (and again by the EXIT trap).
+PC3="$TMP/proj-degraded"; mkdir -p "$PC3"; git -C "$PC3" init -q
+"$KITSRC/install.sh" --harness claude --project "$PC3" >/dev/null 2>&1
+SC3="$PC3/.claude/skills/hektor-flaky-triage"
+printf '\n# STALE MARKER\n' >> "$SC3/core/gate.sh"
+chmod -R a-w "$SC3/core"
+OUTC3="$("$KITSRC/install.sh" --harness claude --project "$PC3" 2>&1)"; RCC3=$?
+chmod -R u+w "$SC3/core"
+[ "$RCC3" = 75 ] \
+  && ok || bad "re-installing over a read-only (degraded-tier) kit must be REFUSED with 75, the same contract the hardened refusal uses — got rc $RCC3"
+case "$OUTC3" in *"install: done"*) bad "a refused degraded-tier re-install must not print 'install: done' — got: $OUTC3" ;; *) ok ;; esac
+case "$OUTC3" in *wired*) bad "a refused degraded-tier re-install must not claim any harness is wired — got: $OUTC3" ;; *) ok ;; esac
+case "$OUTC3" in *"NOT WRITABLE"*) ok ;; *) bad "the refusal must say the existing kit is not writable — got: $OUTC3" ;; esac
+# The remedy, named: `unlock` is what reopens a degraded tree and nobody learns that from cp errors.
+case "$OUTC3" in *"lock-kit.sh unlock"*) ok ;; *) bad "the refusal must name 'lock-kit.sh unlock' as the way to reopen the tree — got: $OUTC3" ;; esac
+# Refused BEFORE touching anything: the pre-fix run emitted a wall of 44 of these.
+[ "$(printf '%s\n' "$OUTC3" | grep -c 'Permission denied')" = 0 ] \
+  && ok || bad "the refusal must come before any copy is attempted — got $(printf '%s\n' "$OUTC3" | grep -c 'Permission denied') permission errors"
+grep -q 'STALE MARKER' "$SC3/core/gate.sh" \
+  && ok || bad "CONTROL: the refused run must not have replaced anything — the marker is what proves the tree was untouched"
+# CONTROL, same fixture: reopen it and the install goes through and REPLACES the stale file. This is
+# what says the refusal was the read-only tier and not something else about this project, and that
+# the remedy the message names actually works.
+OUTC3B="$("$KITSRC/install.sh" --harness claude --project "$PC3" 2>&1)"; RCC3B=$?
+[ "$RCC3B" = 0 ] && ok || bad "CONTROL: the same tree made writable again must install cleanly — got rc $RCC3B"
+grep -q 'STALE MARKER' "$SC3/core/gate.sh" \
+  && bad "CONTROL: the successful re-install must actually REPLACE the stale file — presence is not freshness" || ok
+
 # --- carried forward from the gate's own task: the audit-lib fallback is a SILENT no-op ------------
 # (`hektor_audit() { :; }`) whenever lib/audit.sh is not beside the installed gate, which would turn
 # every one of the delivery gate's "fail open and SAY so" paths quiet. install.sh vendors the lib
