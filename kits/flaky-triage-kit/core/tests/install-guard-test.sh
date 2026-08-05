@@ -918,6 +918,11 @@ done < "$TMP/help-leak.txt"
 # output is how that ships.
 BLD="$(mktemp -d)"
 cp -R "$KITSRC/." "$BLD/kit/" 2>/dev/null || { mkdir -p "$BLD/kit"; cp -R "$KITSRC/." "$BLD/kit/"; }
+# `cp -R` copies the maintainer's own build artifacts along with the source. Once `build`
+# bumps the version, a stale tarball no longer shares a name with the fresh one, so
+# `ls | head -1` below would pick the STALE one and every assertion keyed off it would
+# describe a file this run never produced. Start the fixture with no artifacts at all.
+rm -f "$BLD/kit"/*.tgz
 ( cd "$BLD/kit" && bash ./hektor-triage-kit build >"$BLD/out" 2>"$BLD/err" ); BRC=$?
 [ "$BRC" = 0 ] && ok || bad "build must succeed on a clean kit (rc=$BRC: $(tail -1 "$BLD/err"))"
 TGZ="$(ls "$BLD/kit"/hektor-flaky-triage-*.tgz 2>/dev/null | head -1)"
@@ -1032,6 +1037,9 @@ fi
 # same reason as the scan fixtures above: this file ships.
 DRT="$(mktemp -d)"
 cp -R "$KITSRC/." "$DRT/kit/" 2>/dev/null || { mkdir -p "$DRT/kit"; cp -R "$KITSRC/." "$DRT/kit/"; }
+# As above: `cp -R` brings the maintainer's own artifacts along, and "a refused pack must
+# leave no artifact behind" can only mean anything if the fixture started with none.
+rm -f "$DRT/kit"/*.tgz
 _h="$(printf '%s%s.%stzla.%s%s' 'ocpt' 'box' '' 'sahibinden' 'local.net')"
 printf '\nsee %s\n' "$_h" >> "$DRT/kit/cross-harness.md"
 DOUT="$( cd "$DRT/kit" && bash ./hektor-triage-kit build 2>&1 )"; DRC=$?

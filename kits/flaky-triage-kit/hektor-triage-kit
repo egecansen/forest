@@ -5,10 +5,10 @@
 #       Install into a repo and wire EVERY harness (Claude Code + Cursor + AGENTS.md) in one shot, and
 #       auto-detect JDK 17 + source_roots so there is no manual config step. Idempotent.
 #   hektor-triage-kit build
-#       Pack the kit into a versioned tarball (npm pack) and VERIFY it: no .lock-state,
-#       no dev cruft, and a packed install.sh identical to the source's. Source checkout
-#       only — an installed kit carries no manifest. A failed verification deletes the
-#       artifact rather than leaving a bad one on disk.
+#       Bump the patch version, then pack the kit into a versioned tarball (npm pack) and
+#       VERIFY it: no .lock-state, no dev cruft, and a packed install.sh identical to the
+#       source's. Every build is a distinct version, so builds never overwrite each other.
+#       Source checkout only. A failed verification deletes the artifact, not leaves it.
 #   hektor-triage-kit lock | unlock | status
 #       OS-level protection tier for an installed kit (proxies core/lock-kit.sh in the target repo):
 #       hardened (root-owned, password-gated reopen — the wall the PreToolUse gate is not) when sudo is
@@ -92,6 +92,23 @@ case "$sub" in
       echo "hektor-triage-kit: this tree. Run build from the source checkout at kits/flaky-triage-kit." >&2
       exit 66; }
     command -v npm >/dev/null 2>&1 || { echo "hektor-triage-kit: build requires npm" >&2; exit 69; }
+    # EVERY build is a distinct version. npm pack derives the artifact's filename from
+    # package.json's version, so without this a version that never moves means every
+    # build silently OVERWRITES the last one and there is nothing to roll back to.
+    #
+    # --no-git-tag-version is deliberate and load-bearing: no commit, no tag. Two reasons.
+    # First, this repo's tree is routinely dirty with in-progress work, and `npm version`
+    # WOULD otherwise refuse outright ("Git working directory not clean") — verified, not
+    # assumed. Second, sweeping whatever happens to be uncommitted into an automatic commit
+    # is not a packaging tool's decision to make. The bump lands as a visible one-line edit
+    # to a tracked file; the maintainer commits it when they choose.
+    #
+    # A build that later FAILS verification still consumed its version, so the sequence can
+    # have gaps. That is fine and preferable to the alternative: reusing a number whose
+    # artifact was deleted for being wrong is how a bad build gets mistaken for a good one.
+    ( cd "$HERE" && npm version patch --no-git-tag-version >/dev/null ) || {
+      echo "hektor-triage-kit: build FAILED — could not bump the version in package.json" >&2
+      exit 72; }
     # cwd is the kit root on purpose: `npm pack` writes to the CURRENT directory,
     # so inheriting the caller's would scatter artifacts wherever they stood.
     # npm's stderr is CAPTURED, not discarded: it carries the prepack scan's own
