@@ -55,6 +55,93 @@ stop_failed_file=""
 cursor_failed=0
 cursor_failed_file=""
 
+# --- post-copy verification: nothing here may claim an artefact that is not on disk ---------------
+#
+# There is no `set -e` and no `cp || exit` anywhere below, and NONE of the six non-zero exits above
+# observes a copy result — the first copy happens after all of them. So a copy that failed was
+# invisible: a full disk, a permission error, a partial `cp`, or a $HERE that does not hold what this
+# installer expects all produced a run that wrote core/.harness, merged three hook registrations,
+# printed "Claude Code wired (…)" and "install: done", named `lock-kit.sh lock` as step 2, and exited
+# 0 — over a project with NO engine, NO SKILL.md and hook commands pointing at paths that do not
+# exist. Measured: `chmod 500` on $SKILL_DIR/core before the run reproduces it exactly, and invoking
+# this script through a symlink (install.sh does not walk the chain, so every `cp` source is missing)
+# reproduces the whole-tree version of it. A user is told they are wired and protected while nothing
+# is installed, and enforcement is the only thing this kit is for.
+#
+# NOT `set -euo pipefail`. `-u` and `pipefail` are already on; `-e` is the wrong instrument here and
+# would break paths that are deliberately permissive, each of which ends a statement on a command
+# that is ALLOWED to be false: `[ -n "$_kv" ] && printf … > core/.version` (no jq/manifest is a
+# recorded non-event, not a failure), `[ "$AUTOCFG" = 1 ] && autoconfig` (`--no-autoconfig` would
+# abort the installer), the `[ -n "$r" ] && [ -d … ] && existing=…` body of autoconfig's while-loop
+# (every root that does not exist here), and `{ [ -f "$AG" ] && printf '\n'; cat <<EOF …` in the
+# AGENTS.md block (every project that has no AGENTS.md yet). `-e` also contradicts this file's own
+# design, stated at the top of this section: the install RUNS TO COMPLETION and only then reports,
+# because a partial install that aborts mid-way is worse than one that finishes and says what it
+# could not do. A targeted assertion over the finished tree gives the guarantee `-e` cannot: it
+# checks what LANDED rather than what returned zero, so a partial `cp` that exits 0 is still caught.
+#
+# Each check runs where its own artefact has just been written and BEFORE anything claims that
+# artefact landed — the engine check precedes both harness blocks (either would otherwise print
+# "… wired"), and each gate check precedes its own harness's registration merge and its own success
+# line. The closing call re-runs every check over the finished tree as one statement.
+verify_missing=""
+verify_note() { verify_missing="${verify_missing}  - $1
+"; }
+verify_file() { # $1=path  $2=what it is
+  [ -f "$1" ] || verify_note "MISSING: $1  ($2)"
+}
+verify_exec() { # $1=path  $2=what it is
+  if [ ! -f "$1" ]; then verify_note "MISSING: $1  ($2)"
+  elif [ ! -x "$1" ]; then verify_note "NOT EXECUTABLE: $1  ($2)"
+  fi
+}
+verify_dir_nonempty() { # $1=path  $2=what it is
+  if [ ! -d "$1" ]; then verify_note "MISSING: $1  ($2)"
+  elif [ -z "$(ls -A "$1" 2>/dev/null)" ]; then verify_note "EMPTY: $1  ($2)"
+  fi
+}
+# The named files are not an arbitrary sample: they are exactly the ones the closing next-steps block
+# tells the reader to go and open (1 -> core/config.json, 2 -> core/lock-kit.sh, 3 -> SKILL.md and
+# core/README.md), plus the wiring record. "core/ is non-empty" alone is too weak to carry that and
+# was measured to be: run through a symlink, every `cp` source is missing, yet `core/.harness` still
+# gets written INTO core/ a few lines later — so the directory is non-empty with no engine in it.
+verify_engine() {
+  verify_dir_nonempty "$SKILL_DIR/core" "the engine directory"
+  verify_file "$SKILL_DIR/SKILL.md" "the skill — next-step 3"
+  verify_file "$SKILL_DIR/core/README.md" "the engine contracts — next-step 3"
+  verify_file "$SKILL_DIR/core/config.json" "the engine config — next-step 1 tells you to verify it"
+  verify_exec "$SKILL_DIR/core/lock-kit.sh" "the hardening script — next-step 2 tells you to run it"
+  verify_file "$SKILL_DIR/core/.harness" "the wiring record the integrity axis reads"
+}
+verify_claude_gates() {
+  verify_exec "$PROJ/.claude/hooks/flaky-kit-self-protection-gate.sh" "the Claude self-protection gate — registered at PreToolUse Write|Edit + Bash"
+  verify_exec "$PROJ/.claude/hooks/flaky-kit-delivery-gate.sh" "the Claude delivery gate — registered at Stop"
+  # A missing lib/audit.sh does not stop either gate: their fallback is `hektor_audit() { :; }`, so
+  # every "fail open and SAY so" path goes quiet instead. vendor() prints "install: vendored audit.sh"
+  # whether or not its `cp` worked, which is one more success this file reports without checking.
+  verify_file "$PROJ/.claude/hooks/lib/audit.sh" "the audit lib both Claude gates load"
+}
+verify_cursor_gates() {
+  verify_exec "$PROJ/.cursor/hooks/flaky-kit-self-protection-gate.sh" "the Cursor self-protection gate — registered at beforeShellExecution + preToolUse"
+}
+# Names the artefact, because "install failed" alone leaves the reader with the same question the
+# whole defect created. rc 73 (EX_CANTCREAT) is distinct from 74 (INCOMPLETE: everything landed, a
+# registration merge did not) — this is the stronger failure and must not be read as that one.
+verify_report() {
+  [ -z "$verify_missing" ] && return 0
+  {
+    echo ""
+    echo "install: FAILED ($HARNESS) in $PROJ — this install did not produce what it was about to report."
+    echo "These artefacts did not land (a copy failed: out of disk, a permission error, a partial cp, or"
+    echo "a kit source at $HERE that does not hold them):"
+    printf '%s' "$verify_missing"
+    echo "Nothing here can enforce anything: a hook registration this run made names a path that does not"
+    echo "exist, and the kit's own safety surface is not installed. Fix the cause above and re-run this"
+    echo "installer against this project. Do NOT run '$KIT/core/lock-kit.sh lock' — nothing is there to lock."
+  } >&2
+  exit 73
+}
+
 # --- engine + skill: the canonical home for EVERY harness (the gate's surface + the AGENTS.md/rule
 #     pointers all reference this path; the engine runs from here in any terminal). Always installed. ---
 mkdir -p "$SKILL_DIR/core"
@@ -126,7 +213,6 @@ rm -f "$SKILL_DIR/core/.npmignore"
 
 cp "$HERE/adapters/claude/SKILL.md" "$SKILL_DIR/SKILL.md"
 chmod +x "$SKILL_DIR"/core/*.sh "$SKILL_DIR"/core/*.py 2>/dev/null || true
-echo "install: engine + SKILL.md -> $KIT/"
 
 # The wiring check must require exactly the harnesses this kit was installed for. Written under
 # core/, which harden_targets already chowns, so at the hardened tier an agent cannot rewrite it to
@@ -152,6 +238,15 @@ if [ -r "$HERE/package.json" ] && command -v jq >/dev/null 2>&1; then
   [ -n "$_kv" ] && printf '%s %s\n' "$_kv" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" > "$SKILL_DIR/core/.version"
   unset _kv
 fi
+
+# The engine, the skill and the wiring record, checked before ANYTHING claims them. This runs ahead
+# of both harness blocks on purpose: each of those prints its own "… wired" line, and a registration
+# whose engine never landed points at nothing. `core/.version` is deliberately not required — it is
+# written only when a readable manifest and jq are both present, and `status` already reads its
+# absence as "unknown", so demanding it would fail installs from trees where it was never a claim.
+verify_engine
+verify_report
+echo "install: engine + SKILL.md -> $KIT/"
 
 # UPGRADE PATH. Before the relocation, the gate installed INSIDE the kit tree at
 # $SKILL_DIR/hooks/flaky-kit-self-protection-gate.sh. Nothing removed it, so upgrading an existing
@@ -249,6 +344,12 @@ if [ "$do_claude" = 1 ]; then
   cp "$HERE/adapters/claude/flaky-kit-delivery-gate.sh" "$SKILL_DIR/core/gate-src/claude/flaky-kit-delivery-gate.sh"
   chmod +x "$SKILL_DIR/core/gate-src/claude/flaky-kit-delivery-gate.sh" 2>/dev/null || true
 
+  # Both gate FILES, before a single line of settings.json is merged and before the "Claude Code
+  # wired" line below. A registration is a promise that the command it names will run; registering a
+  # path that does not exist, and then reporting it as wired, is the defect in its purest form.
+  verify_claude_gates
+  verify_report
+
   S="$PROJ/.claude/settings.json"; [ -f "$S" ] || echo '{}' > "$S"
   C='"$CLAUDE_PROJECT_DIR/.claude/hooks/flaky-kit-self-protection-gate.sh"'
   # Drop any registration of the PRE-RELOCATION in-tree gate path FIRST. The jq below only ever
@@ -330,6 +431,11 @@ if [ "$do_cursor" = 1 ]; then
   cp "$HERE/adapters/cursor/flaky-kit-self-protection-gate.sh" "$SKILL_DIR/core/gate-src/cursor/flaky-kit-self-protection-gate.sh"
   chmod +x "$SKILL_DIR/core/gate-src/cursor/flaky-kit-self-protection-gate.sh" 2>/dev/null || true
   vendor "$HERE/adapters/_lib/audit.sh" "$SKILL_DIR/core/gate-src/cursor/lib/audit.sh"
+  # Same reasoning as the Claude block: the gate FILE before its registration and before the
+  # "Cursor wired" line below.
+  verify_cursor_gates
+  verify_report
+
   H="$PROJ/.cursor/hooks.json"; [ -f "$H" ] || echo '{"version":1,"hooks":{}}' > "$H"
   C=".cursor/hooks/flaky-kit-self-protection-gate.sh"
   # `[ -s "$t" ]` and the `rm -f` are the same two guards the Claude Stop merge below carries, for the
@@ -394,6 +500,19 @@ EOF
     echo "install: AGENTS.md pointer added (works for any AGENTS.md-reading LLM)"
   fi
 fi
+
+# --- what actually landed, over the FINISHED tree, before either ending -------------------------
+# The in-flow calls above each guard one claim at the moment it is made. This one is the statement
+# the two endings below rest on: every artefact this run was asked for is on disk, and every gate it
+# registered is present and executable. It re-checks what the in-flow calls already passed, on
+# purpose — those ran before later blocks could delete or overwrite anything (the stale-gate `rm -rf`
+# and both `cp -R`s of gate-src/ are between them), and a check that only ever ran mid-flight cannot
+# speak for the tree the user is left with. Deliberately BEFORE the rc-74 INCOMPLETE ending too: a
+# tree with no engine must not be reported as "everything landed, one registration did not".
+verify_engine
+[ "$do_claude" = 1 ] && verify_claude_gates
+[ "$do_cursor" = 1 ] && verify_cursor_gates
+verify_report
 
 # --- the ending, and there are two of them ------------------------------------------------------
 # Everything above has already run. What differs here is what the script CLAIMS and what it hands

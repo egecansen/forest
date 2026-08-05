@@ -276,6 +276,121 @@ esac
 case "$OUT7" in *"install: done"*) ok ;; *) bad "CONTROL: a healthy Cursor install must still print 'install: done'" ;; esac
 case "$OUT7" in *"INCOMPLETE"*) bad "CONTROL: a healthy Cursor install must not call itself incomplete" ;; *) ok ;; esac
 
+# --- the COPIES: an install must not report a success it never achieved ---------------------------
+# Everything above is about a registration MERGE failing over an install that otherwise landed.
+# Nothing had ever asked whether the install landed at all. install.sh has no `set -e`, no
+# `cp || exit`, and none of its six non-zero exits observes a copy result — the first copy happens
+# after all of them, and the sixth is about `.hooks.Stop`. So a copy that failed was invisible:
+# measured, an unwritable target directory left the project with no engine, no core/.harness
+# and no core/.version, while the installer registered three hooks, printed "install: Claude Code
+# wired (.claude/settings.json: PreToolUse Write|Edit + Bash, Stop)" and "install: done", named
+# `lock-kit.sh lock` as step 2, and exited 0. The registrations named paths that did not exist. A
+# user was told they were wired and protected with nothing installed, and enforcement is the only
+# thing this kit is for.
+#
+# Not scoped to any one route in. Invoking install.sh through a symlink produces the whole-tree
+# version of the same thing — install.sh does not walk the chain, so every `cp` SOURCE is missing —
+# and that route is unreachable through the CLI today (which execs install.sh by resolved absolute
+# path). The defect is that ANY copy failure, from a full disk to a permission error to a partial
+# `cp`, produced a confident success; the fixtures below drive two different causes for that reason.
+#
+# NO real `chown`, ever: a directory the invoking user cannot write into raises the same EACCES on
+# `cp` that a read-only mount does, and one `chmod` reverses it. It is restored immediately after the
+# run (and again by the EXIT trap's `chmod -R u+w`) so the fixture can be removed.
+P8="$TMP/proj-copyfail"; mkdir -p "$P8/.claude/skills/hektor-flaky-triage"; git -C "$P8" init -q
+chmod 500 "$P8/.claude/skills/hektor-flaky-triage"
+OUT8="$("$KITSRC/install.sh" --harness claude --project "$P8" 2>&1)"; RC8=$?
+chmod 700 "$P8/.claude/skills/hektor-flaky-triage"
+# CONTROL first: without this the whole block could pass against a fixture that installed fine and an
+# installer that simply prints "FAILED" at random.
+[ ! -f "$P8/.claude/skills/hektor-flaky-triage/core/gate.sh" ] \
+  && ok || bad "CONTROL: the fixture must actually have stopped the engine copy, or nothing below proves anything"
+[ "$RC8" -ne 0 ] && ok || bad "an install whose engine copy failed must exit non-zero — got rc $RC8"
+[ "$RC8" = 73 ] \
+  && ok || bad "a failed copy must exit 73, kept distinct from 74 (everything landed, a registration merge did not) — got rc $RC8"
+case "$OUT8" in *"install: done"*) bad "an install whose engine copy failed must not print 'install: done' — got: $OUT8" ;; *) ok ;; esac
+case "$OUT8" in *wired*) bad "an install whose engine copy failed must not claim any harness is wired — got: $OUT8" ;; *) ok ;; esac
+case "$OUT8" in *"HARDEN (do not skip"*) bad "an install whose engine copy failed must not print the HARDEN step — there is nothing there to lock — got: $OUT8" ;; *) ok ;; esac
+case "$OUT8" in *"install: FAILED"*) ok ;; *) bad "a failed copy must SAY the install failed, not merely return a number — got: $OUT8" ;; esac
+# Naming the artefact is the requirement, not a generic failure: these are what the closing
+# next-steps block tells the reader to open, so they are exactly what it may not claim falsely.
+#
+# Anchored to "MISSING: <exact path>", the report's own shape, NOT to the bare path. Proven
+# necessary by mutation: with the artefact list deleted from the report, a bare `*"SKILL.md"*` still
+# matched — `cp`'s own "Permission denied" for that copy is in the captured output — and a bare
+# `*"core/lock-kit.sh"*` matched the "Do NOT run …" remedy line that the report prints regardless.
+# Both would have been assertions that could not fail.
+S8="$P8/.claude/skills/hektor-flaky-triage"
+case "$OUT8" in *"MISSING: $S8/core/config.json"*) ok ;; *) bad "the failure must NAME the missing artefact — core/config.json is what next-step 1 sends the reader to — got: $OUT8" ;; esac
+case "$OUT8" in *"MISSING: $S8/core/lock-kit.sh"*) ok ;; *) bad "the failure must name the missing hardening script next-step 2 sends the reader to run — got: $OUT8" ;; esac
+case "$OUT8" in *"MISSING: $S8/SKILL.md"*) ok ;; *) bad "the failure must name the missing SKILL.md — got: $OUT8" ;; esac
+case "$OUT8" in *"MISSING: $S8/core/README.md"*) ok ;; *) bad "the failure must name the missing core/README.md — got: $OUT8" ;; esac
+# A failed install must not leave the project half-wired either: the check runs BEFORE the merge.
+[ ! -f "$P8/.claude/settings.json" ] \
+  && ok || bad "an install that failed before the engine landed must not have registered anything — settings.json was written"
+# CONTROL, on the SAME fixture: restore the one permission and it installs cleanly. This is what says
+# the refusal was caused by the copy failure rather than by anything else about this project.
+OUT8B="$("$KITSRC/install.sh" --harness claude --project "$P8" 2>&1)"; RC8B=$?
+[ "$RC8B" = 0 ] && ok || bad "CONTROL: the same fixture with the permission restored must install cleanly — got rc $RC8B: $OUT8B"
+case "$OUT8B" in *"install: done"*) ok ;; *) bad "CONTROL: the repaired fixture must print 'install: done'" ;; esac
+case "$OUT8B" in *"install: FAILED"*) bad "CONTROL: the repaired fixture must not still report FAILED" ;; *) ok ;; esac
+
+# A directory that EXISTS with nothing in it is the other shape a failed copy leaves behind, and it
+# is the one "the engine directory is non-empty" was written for: here `mkdir -p core` succeeds, the
+# `cp -R` into it does not, and the `.harness`/`.version` writes that would otherwise have made the
+# directory non-empty without an engine in it fail for the same reason.
+P8C="$TMP/proj-copyfail-empty"; mkdir -p "$P8C/.claude/skills/hektor-flaky-triage/core"; git -C "$P8C" init -q
+chmod 500 "$P8C/.claude/skills/hektor-flaky-triage/core"
+OUT8C="$("$KITSRC/install.sh" --harness claude --project "$P8C" 2>&1)"; RC8C=$?
+chmod 700 "$P8C/.claude/skills/hektor-flaky-triage/core"
+[ "$RC8C" = 73 ] && ok || bad "an engine directory left EMPTY by a failed copy must fail the install with 73 — got rc $RC8C"
+case "$OUT8C" in *"EMPTY:"*) ok ;; *) bad "an engine directory that exists but is empty must be reported as empty, not merely missing — got: $OUT8C" ;; esac
+case "$OUT8C" in *"install: done"*) bad "an empty engine directory must not print 'install: done' — got: $OUT8C" ;; *) ok ;; esac
+
+# The other half of the requirement: the GATE SCRIPTS. A gate whose file did not land is a
+# registration naming a path that does not exist, and the pre-fix installer reported it as wired.
+# Driven from a staged source with the delivery gate removed — a missing `cp` SOURCE, a different
+# cause from the unwritable destination above, reaching the copy that happens after the engine's.
+GSRC="$TMP/src-nogate"; mkdir -p "$GSRC"; cp -R "$KITSRC/." "$GSRC/"
+rm -f "$GSRC/adapters/claude/flaky-kit-delivery-gate.sh"
+P9="$TMP/proj-gatefail"; mkdir -p "$P9"; git -C "$P9" init -q
+OUT9="$("$GSRC/install.sh" --harness claude --project "$P9" 2>&1)"; RC9=$?
+[ "$RC9" = 73 ] && ok || bad "an install whose gate copy failed must exit 73 — got rc $RC9"
+case "$OUT9" in *"Claude Code wired"*) bad "a gate whose file never landed must not be reported as wired — got: $OUT9" ;; *) ok ;; esac
+case "$OUT9" in *"install: done"*) bad "an install whose gate copy failed must not print 'install: done' — got: $OUT9" ;; *) ok ;; esac
+# Anchored for the same reason as the engine artefacts above: the bare filename also appears in
+# `cp`'s own "No such file or directory" for the SOURCE this fixture removed.
+case "$OUT9" in *"MISSING: $P9/.claude/hooks/flaky-kit-delivery-gate.sh"*) ok ;; *) bad "the failure must name the gate that is missing — got: $OUT9" ;; esac
+# The engine DID land here, so this fixture also proves the gate check is its own check and not the
+# engine one firing again.
+[ -f "$P9/.claude/skills/hektor-flaky-triage/core/gate.sh" ] \
+  && ok || bad "CONTROL: the engine must have landed in this fixture, or this is the engine check firing, not the gate one"
+[ ! -f "$P9/.claude/settings.json" ] \
+  && ok || bad "the installer must not register a gate whose file never landed — settings.json was written"
+
+# ...and PRESENT is not the same claim as EXECUTABLE. A gate that is registered but not executable is
+# a hook Claude Code cannot run, which is the same silence as a missing one. Reached with a `chmod`
+# SHIM — the same seam as the `stat` and `mktemp` shims above — because install.sh chmod +x's every
+# gate it copies, so a non-executable SOURCE alone cannot produce a non-executable install. Only the
+# one destination path is intercepted; every other chmod falls through to the real binary.
+cat > "$SHIM/chmod" <<'SH'
+#!/bin/bash
+for a in "$@"; do [ "$a" = "${CHMOD_SKIP:-}" ] && exit 0; done
+exec /bin/chmod "$@"
+SH
+/bin/chmod +x "$SHIM/chmod"
+GSRC2="$TMP/src-noexec"; mkdir -p "$GSRC2"; cp -R "$KITSRC/." "$GSRC2/"
+SPG="flaky-kit-self-protection-gate.sh"
+/bin/chmod -x "$GSRC2/adapters/claude/$SPG"
+P10="$TMP/proj-gatenoexec"; mkdir -p "$P10"; git -C "$P10" init -q
+OUT10="$(CHMOD_SKIP="$P10/.claude/hooks/$SPG" PATH="$SHIM:$PATH" "$GSRC2/install.sh" --harness claude --project "$P10" 2>&1)"; RC10=$?
+[ -f "$P10/.claude/hooks/$SPG" ] && [ ! -x "$P10/.claude/hooks/$SPG" ] \
+  && ok || bad "CONTROL: the shim must have left the gate present-but-not-executable, or this asserts nothing"
+[ "$RC10" = 73 ] && ok || bad "a gate that landed but is not executable must fail the install with 73 — got rc $RC10"
+case "$OUT10" in *"NOT EXECUTABLE: $P10/.claude/hooks/$SPG"*) ok ;; *) bad "the failure must distinguish a non-executable gate from a missing one — got: $OUT10" ;; esac
+case "$OUT10" in *"Claude Code wired"*) bad "a gate that cannot be executed must not be reported as wired — got: $OUT10" ;; *) ok ;; esac
+rm -f "$SHIM/chmod"
+
 # --- carried forward from the gate's own task: the audit-lib fallback is a SILENT no-op ------------
 # (`hektor_audit() { :; }`) whenever lib/audit.sh is not beside the installed gate, which would turn
 # every one of the delivery gate's "fail open and SAY so" paths quiet. install.sh vendors the lib
