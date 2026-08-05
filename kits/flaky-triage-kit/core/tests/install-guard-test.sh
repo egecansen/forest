@@ -471,6 +471,36 @@ case "$OUTC2B" in *"COPY FAILED: $GS2B/flaky-kit-self-protection-gate.sh"*) ok ;
 case "$OUTC2B" in *"COPY FAILED: $GS2B/flaky-kit-delivery-gate.sh"*) ok ;; *) bad "the failure must name the delivery gate restore source — got: $OUTC2B" ;; esac
 case "$OUTC2B" in *"Claude Code wired"*) bad "a missing restore source must not be reported as wired — got: $OUTC2B" ;; *) ok ;; esac
 
+# ...and the CURSOR twin of it, because the Cursor block copies its own restore source and had no
+# fixture at all. The existing Cursor gate-src assertions in this file are presence checks on a
+# HEALTHY install, and `verify_cursor_gates` names only the deployed gate, so nothing on the outcome
+# side covered it either: the rc check at that copy was the only thing standing, and it was held by
+# no test. Verified by downgrading it to a bare `cp` — rc 0, "Cursor wired", "install: done",
+# `.cursor/hooks.json` written so the gate is REGISTERED, and gate-src/cursor/ with no gate in it.
+# That is the I2 defect bit-for-bit, one harness over, shipped inside the fix for I2. A guard nothing
+# holds is the defect this round exists to close, so it does not get to be the exception.
+PC2C="$TMP/proj-gatesrc-cursor-only"
+mkdir -p "$PC2C/.claude/skills/hektor-flaky-triage/core/gate-src/cursor/lib"; git -C "$PC2C" init -q
+GS2C="$PC2C/.claude/skills/hektor-flaky-triage/core/gate-src/cursor"
+printf 'pre-seeded so vendor() skips\n' > "$GS2C/lib/audit.sh"
+chmod 500 "$GS2C"
+OUTC2C="$("$KITSRC/install.sh" --harness cursor --project "$PC2C" 2>&1)"; RCC2C=$?
+chmod 700 "$GS2C"
+[ ! -f "$GS2C/flaky-kit-self-protection-gate.sh" ] \
+  && ok || bad "CONTROL: the fixture must actually have stopped the Cursor gate-src copy"
+case "$OUTC2C" in *"already exists at $GS2C/lib/audit.sh"*) ok ;; *) bad "CONTROL: vendor() must take its skip branch here, or the Cursor gate-src copy is not the only thing that can fail — got: $OUTC2C" ;; esac
+# The engine and the DEPLOYED Cursor gate both land here — so this cannot be the engine assertion or
+# verify_cursor_gates firing. Only the restore-source copy failed.
+[ -f "$PC2C/.claude/skills/hektor-flaky-triage/core/gate.sh" ] && [ -x "$PC2C/.cursor/hooks/flaky-kit-self-protection-gate.sh" ] \
+  && ok || bad "CONTROL: the engine and the deployed Cursor gate must have landed, or this is a different check firing"
+[ "$RCC2C" = 73 ] && ok || bad "a Cursor gate restore source that did not land must fail the install even when vendor() succeeds — got rc $RCC2C"
+case "$OUTC2C" in *"COPY FAILED: $GS2C/flaky-kit-self-protection-gate.sh"*) ok ;; *) bad "the failure must name the Cursor self-protection gate restore source — got: $OUTC2C" ;; esac
+case "$OUTC2C" in *"Cursor wired"*) bad "a Cursor install with no restore source must not be reported as wired — got: $OUTC2C" ;; *) ok ;; esac
+case "$OUTC2C" in *"install: done"*) bad "a Cursor install with no restore source must not print 'install: done' — got: $OUTC2C" ;; *) ok ;; esac
+# ...and it must not be left REGISTERED with no recovery path: the check runs before the merge.
+[ ! -f "$PC2C/.cursor/hooks.json" ] \
+  && ok || bad "the installer must not register the Cursor gate when its restore source never landed — hooks.json was written"
+
 # I3 — PRESENCE IS NOT FRESHNESS. The refusal at the top of install.sh keys on root ownership, i.e.
 # the HARDENED tier. The DEGRADED tier is `chmod a-w` with the owner unchanged — what `lock-kit.sh
 # lock` leaves on any machine without sudo, and the installer's own step 2 tells every user to run
