@@ -115,6 +115,37 @@ file — the only difference between a source-checkout install and a tarball
 install, and the one that decides whether a consumer commits `.lock-state` into
 their own repo (§5's `.version` reaches them by the same route).
 
+**Shipping the file is not the same as delivering it, because npm's extractor
+RENAMES it.** `files` gets `core/.gitignore` into the tarball; on the way *out*
+— `npm i`, `npm i -g`, `npx`, any install into `node_modules` — npm writes it to
+disk as `core/.npmignore`. A plain `tar xzf` of the very same tarball writes
+`core/.gitignore`. So the npm path, the only path a consumer who lacks this
+repo actually uses, delivers the file under a name git never reads: the project
+does not ignore `core/.lock-state`, a user who follows the installer's step 2
+(`lock-kit.sh lock`) commits a record saying `hardened`, and a teammate who
+clones onto a tree that is not root-owned gets `mismatch` from `integrity_tier`
+— which refuses every entrypoint. Every tar-based check can be green while this
+holds, which is how it was missed; only driving `npm i -g` end to end sees it.
+
+**`install.sh` therefore normalises the name after its `cp -R`**: if
+`core/.npmignore` landed in the installed tree, it is moved back to
+`core/.gitignore`. That belongs in the installer rather than in one delivery
+path's packaging, so that source checkout, `tar xzf` and `npm i -g` all converge
+on the same installed tree. It reads as an unexplained `mv` next to the copy —
+record it here, because a maintainer tidying that line away silently breaks
+every npm consumer and nothing in the tar-based tests goes red.
+
+**The normalisation is unconditional, deliberately.** A first draft guarded it
+with `[ ! -f "$SKILL_DIR/core/.gitignore" ]`, which made it first-install-only:
+on re-install the `cp -R` lands the new `.npmignore`, the guard sees the *old*
+`.gitignore` already sitting there and skips, and the `rm -f` after it deletes
+the incoming copy — so a rule added in a later kit version reached source-path
+users on upgrade and silently never reached npm-path users. That was found and
+fixed. The two names cannot coexist in any source tree (npm writes one, git
+writes the other), so the guard protected against nothing and cost the upgrade
+path; the upgrade is covered by a test that appends a rule to the *installed
+package's* `core/.npmignore` and re-installs.
+
 `scripts/` stays out. It is build tooling; a consumer never runs it, and it
 carries the hostname patterns as regex literals.
 
