@@ -65,7 +65,8 @@ function sizeCell(w) { return w.sizeBytes == null ? '—' : `${(w.sizeBytes / 1e
 // lives in the drawer's description, where it is asked for rather than hit by
 // accident.
 function branchCell(w) {
-  return esc(w.branch) || '(detached)';
+  const dot = w.priority ? `<span class="prio-dot prio-${w.priority}"></span>` : '';
+  return `${dot}${esc(w.branch) || '(detached)'}`;
 }
 
 function matches(w, repo) {
@@ -77,7 +78,7 @@ function matches(w, repo) {
 function rowHtml(w, repo) {
   const enc = encodeURIComponent(w.path);
   const pruneable = (w.stale || w.merged) && !w.isPrimary;
-  return `<div class="row ${w.isPrimary ? '' : 'nested'}" data-path="${enc}">
+  return `<div class="row ${w.isPrimary ? '' : 'nested'}${w.priority ? ` prio-${w.priority}` : ''}" data-path="${enc}">
     <div class="col-branch branch">${branchCell(w)}</div>
     <div class="col-status">${statusBadge(w)}${gateBadge(w)}</div>
     <div class="col-owner">${esc(w.owner)}</div>
@@ -242,6 +243,14 @@ function closeDrawer() {
   drawerPath = null;
 }
 
+// Priority swatches — user-assigned color labels; forest renders them and
+// never interprets them. The ✕ clears.
+const PRIO_COLORS = ['red', 'amber', 'blue', 'green'];
+function prioSwatches(w) {
+  const dots = PRIO_COLORS.map((c) => `<button class="prio-pick prio-${c}${w.priority === c ? ' sel' : ''}" data-prio="${c}" title="Label ${c}"></button>`).join('');
+  return `${dots}<button class="prio-pick prio-clear${w.priority ? '' : ' sel'}" data-prio="" title="No label">✕</button>`;
+}
+
 async function openDrawer(path) {
   const w = findWorktree(path);
   if (!w) return;
@@ -267,6 +276,7 @@ async function openDrawer(path) {
   d.innerHTML = `<button id="drawer-close" class="drawer-close">Close ✕</button>
     <h3>${esc(w.branch) || '(detached)'}</h3>
     <p class="meta-line">${esc(w.repo)} · ${esc(w.owner)} · ${ageCell(w)} · ${sizeCell(w)}</p>
+    <div class="prio-row">${prioSwatches(w)}</div>
     ${applyHtml}
     <h4 class="desc-head"><button id="desc-toggle" class="desc-toggle" aria-expanded="true">Description</button></h4>
     <div id="desc-panel" class="desc"><p class="desc-loading">loading…</p></div>
@@ -275,6 +285,16 @@ async function openDrawer(path) {
     ${removeHtml}
     ${ejectHtml}`;
   $('#drawer-close').onclick = closeDrawer;
+  for (const btn of d.querySelectorAll('.prio-pick')) {
+    btn.onclick = async () => {
+      const r = await api('/api/worktree/priority', { path, priority: btn.dataset.prio });
+      if (!r || r.error) { toast(`Priority: ${(r && r.error) || 'server unreachable'}`); return; }
+      // Local echo so the deck and swatch ring recolor now; SSE confirms.
+      w.priority = r.priority;
+      for (const b of d.querySelectorAll('.prio-pick')) b.classList.toggle('sel', (b.dataset.prio || '') === (w.priority || ''));
+      render();
+    };
+  }
   const finishBtn = $('#drawer-finish');
   if (finishBtn) finishBtn.onclick = () => openFinish(w.path);
   const ejectBtn = $('#eject-go');
@@ -350,6 +370,16 @@ function autoGrow(area) {
   area.style.height = `${Math.max(area.scrollHeight, 38)}px`;
 }
 
+// Rendered only when everything the click needs exists: a ticket to write to,
+// a branch to write, and a configured field to write into. Anything less and
+// the feature simply is not there — no disabled button to explain.
+function jiraBranchButton(path, d) {
+  const branch = findWorktree(path)?.branch;
+  if (!d.ticket || !branch || !state.config?.jiraBranchFieldId) return '';
+  return `<button id="desc-jira-branch" class="desc-flat"
+    title="Write ${esc(branch)} into ${esc(d.ticket)}'s Git Branch Name field">Branch → Jira</button>`;
+}
+
 function renderDescription(path, d, { editing = false } = {}) {
   const panel = $('#desc-panel');
   // The drawer may have been closed or switched to another worktree while the
@@ -366,7 +396,7 @@ function renderDescription(path, d, { editing = false } = {}) {
     ? `<button id="desc-save" class="btn-accent">Save</button>
        <button id="desc-cancel" class="desc-flat">Cancel</button>
        ${d.override ? '<button id="desc-reset" class="desc-flat">Reset to auto</button>' : ''}`
-    : `<button id="desc-edit" class="desc-flat">Edit</button>`;
+    : `<button id="desc-edit" class="desc-flat">Edit</button>${jiraBranchButton(path, d)}`;
 
   panel.innerHTML = `${body}
     <div class="desc-row">${controls}<span class="desc-note">${note}</span></div>
@@ -375,6 +405,20 @@ function renderDescription(path, d, { editing = false } = {}) {
 
   const edit = $('#desc-edit');
   if (edit) edit.onclick = () => renderDescription(path, d, { editing: true });
+  const jiraBtn = $('#desc-jira-branch');
+  if (jiraBtn) {
+    jiraBtn.onclick = async () => {
+      let r = await api('/api/jira/submit-branch', { path });
+      if (r && r.conflict) {
+        if (!confirm(`${d.ticket}'s Git Branch Name already holds "${r.conflict}" — overwrite?`)) return;
+        r = await api('/api/jira/submit-branch', { path, force: true });
+      }
+      if (!r || r.error) { toast(`Jira: ${(r && r.error) || 'server unreachable'}`); return; }
+      jiraBtn.classList.remove('attn');
+      toast(r.already ? `Git Branch Name already set on ${r.key}` : `Git Branch Name set on ${r.key}`);
+    };
+    checkBranchField(path, d);
+  }
   if (!editing) return;
 
   const area = $('#desc-text');
@@ -406,6 +450,18 @@ function renderDescription(path, d, { editing = false } = {}) {
     toast('Reset to the ticket');
     renderDescription(path, r);
   };
+}
+
+// Quietly asks what the ticket's branch field holds; an empty field earns the
+// button a small dot, so an unfilled ticket is visible at a glance. Errors stay
+// silent — the description panel already reports Jira trouble.
+async function checkBranchField(path, d) {
+  const r = await api('/api/jira/branch-field', { path });
+  if (drawerPath !== path) return;
+  const btn = $('#desc-jira-branch');
+  if (!btn || !r || !r.ok || r.value) return;
+  btn.classList.add('attn');
+  btn.title = `${d.ticket}'s Git Branch Name is empty — click to fill it`;
 }
 
 async function loadDescription(path) {

@@ -417,3 +417,23 @@ main { max-width: 1320px; margin: 0 auto; padding: 16px 18px 210px; }
   .run { animation: none; }
   .row, header button { transition: none; }
 }
+
+/* ---- priority labels — user-assigned colors; forest renders, never interprets */
+.prio-dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; margin-right: 7px; }
+.prio-red { background: var(--danger); }
+.prio-amber { background: var(--amber); }
+.prio-blue { background: var(--run); }
+.prio-green { background: var(--green); }
+.row.prio-red { box-shadow: inset 3px 0 0 var(--danger); }
+.row.prio-amber { box-shadow: inset 3px 0 0 var(--amber); }
+.row.prio-blue { box-shadow: inset 3px 0 0 var(--run); }
+.row.prio-green { box-shadow: inset 3px 0 0 var(--green); }
+.prio-row { display: flex; gap: 8px; align-items: center; margin: 2px 0 14px; }
+.prio-pick { width: 16px; height: 16px; border-radius: 50%; border: 2px solid transparent; padding: 0; cursor: pointer; }
+.prio-pick:hover { transform: scale(1.15); }
+.prio-pick.sel { border-color: var(--ink); }
+.prio-clear { background: transparent; border: 1px solid var(--line); color: var(--muted); font-size: 9px; line-height: 1; }
+.prio-clear.sel { border-color: var(--ink); }
+
+/* the Branch → Jira button's "field is empty" nudge */
+.desc-flat.attn::after { content: ''; display: inline-block; width: 7px; height: 7px; border-radius: 50%; background: var(--amber); margin-left: 6px; }
