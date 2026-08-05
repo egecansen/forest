@@ -418,18 +418,25 @@ main { max-width: 1320px; margin: 0 auto; padding: 16px 18px 210px; }
   .row, header button { transition: none; }
 }
 
-/* ---- priority labels — user-assigned colors; forest renders, never interprets */
-.prio-dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; margin-right: 7px; }
-.prio-red { background: var(--danger); }
-.prio-amber { background: var(--amber); }
-.prio-blue { background: var(--run); }
-.prio-green { background: var(--green); }
-.row.prio-red { box-shadow: inset 3px 0 0 var(--danger); }
-.row.prio-amber { box-shadow: inset 3px 0 0 var(--amber); }
-.row.prio-blue { box-shadow: inset 3px 0 0 var(--run); }
-.row.prio-green { box-shadow: inset 3px 0 0 var(--green); }
+/* ---- priority labels — user-assigned colors; forest renders, never interprets.
+   Each color class only defines --prio (dimmed toward the panel so it sits in
+   the theme); what actually paints is scoped: the dot, the swatch, and a soft
+   row tint + stripe. A bare .prio-* must never paint an element by itself —
+   that is how rows once ended up solid red. */
+.prio-red { --prio: color-mix(in srgb, var(--danger) 70%, var(--panel)); }
+.prio-amber { --prio: color-mix(in srgb, var(--amber) 70%, var(--panel)); }
+.prio-blue { --prio: color-mix(in srgb, var(--run) 70%, var(--panel)); }
+.prio-green { --prio: color-mix(in srgb, var(--green) 70%, var(--panel)); }
+.prio-dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; margin-right: 7px; background: var(--prio); }
+.row.prio-red, .row.prio-amber, .row.prio-blue, .row.prio-green {
+  box-shadow: inset 3px 0 0 var(--prio);
+  background: color-mix(in srgb, var(--prio) 9%, transparent);
+}
+.row.prio-red:hover, .row.prio-amber:hover, .row.prio-blue:hover, .row.prio-green:hover {
+  background: color-mix(in srgb, var(--prio) 16%, transparent);
+}
 .prio-row { display: flex; gap: 8px; align-items: center; margin: 2px 0 14px; }
-.prio-pick { width: 16px; height: 16px; border-radius: 50%; border: 2px solid transparent; padding: 0; cursor: pointer; }
+.prio-pick { width: 16px; height: 16px; border-radius: 50%; border: 2px solid transparent; padding: 0; cursor: pointer; background: var(--prio); }
 .prio-pick:hover { transform: scale(1.15); }
 .prio-pick.sel { border-color: var(--ink); }
 .prio-clear { background: transparent; border: 1px solid var(--line); color: var(--muted); font-size: 9px; line-height: 1; }
