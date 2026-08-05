@@ -450,6 +450,27 @@ case "$OUTC2" in *"$PC2/.claude/skills/hektor-flaky-triage/core/gate-src/claude"
 [ "$(printf '%s\n' "$OUTC2" | grep -c 'install: vendored')" = 1 ] \
   && ok || bad "vendor() must claim 'vendored' only for a copy that actually landed — got $(printf '%s\n' "$OUTC2" | grep -c 'install: vendored') claims"
 
+# ...and the SAME failure with vendor() taken out of the picture. Mutation found the fixture above is
+# carried ENTIRELY by vendor()'s own rc check: with the two gate-src `verify_cp`/`verify_mkdir` calls
+# reverted to bare `cp`/`mkdir` the suite still reported all-green, because the vendored audit.sh
+# under gate-src/claude/lib was failing too and raising the alarm on their behalf. Pre-seeding that
+# lib so vendor() takes its "already exists, leaving it AS-IS" branch leaves the two gate copies as
+# the only things that can fail, which is what pins their checks.
+PC2B="$TMP/proj-gatesrc-only"
+mkdir -p "$PC2B/.claude/skills/hektor-flaky-triage/core/gate-src/claude/lib"; git -C "$PC2B" init -q
+GS2B="$PC2B/.claude/skills/hektor-flaky-triage/core/gate-src/claude"
+printf 'pre-seeded so vendor() skips\n' > "$GS2B/lib/audit.sh"
+chmod 500 "$GS2B"
+OUTC2B="$("$KITSRC/install.sh" --harness claude --project "$PC2B" 2>&1)"; RCC2B=$?
+chmod 700 "$GS2B"
+[ ! -f "$GS2B/flaky-kit-self-protection-gate.sh" ] \
+  && ok || bad "CONTROL: the fixture must actually have stopped the gate-src gate copies"
+case "$OUTC2B" in *"already exists at $GS2B/lib/audit.sh"*) ok ;; *) bad "CONTROL: vendor() must take its skip branch here, or this fixture is the previous one again — got: $OUTC2B" ;; esac
+[ "$RCC2B" = 73 ] && ok || bad "a gate restore source that did not land must fail the install even when vendor() succeeds — got rc $RCC2B"
+case "$OUTC2B" in *"COPY FAILED: $GS2B/flaky-kit-self-protection-gate.sh"*) ok ;; *) bad "the failure must name the self-protection gate restore source — got: $OUTC2B" ;; esac
+case "$OUTC2B" in *"COPY FAILED: $GS2B/flaky-kit-delivery-gate.sh"*) ok ;; *) bad "the failure must name the delivery gate restore source — got: $OUTC2B" ;; esac
+case "$OUTC2B" in *"Claude Code wired"*) bad "a missing restore source must not be reported as wired — got: $OUTC2B" ;; *) ok ;; esac
+
 # I3 — PRESENCE IS NOT FRESHNESS. The refusal at the top of install.sh keys on root ownership, i.e.
 # the HARDENED tier. The DEGRADED tier is `chmod a-w` with the owner unchanged — what `lock-kit.sh
 # lock` leaves on any machine without sudo, and the installer's own step 2 tells every user to run
@@ -485,6 +506,30 @@ OUTC3B="$("$KITSRC/install.sh" --harness claude --project "$PC3" 2>&1)"; RCC3B=$
 [ "$RCC3B" = 0 ] && ok || bad "CONTROL: the same tree made writable again must install cleanly — got rc $RCC3B"
 grep -q 'STALE MARKER' "$SC3/core/gate.sh" \
   && bad "CONTROL: the successful re-install must actually REPLACE the stale file — presence is not freshness" || ok
+
+# The case that is neither of the above, and the one that says why BOTH mechanisms are carried: a
+# writable core/ containing ONE read-only file. `[ -w "$SKILL_DIR/core" ]` is true, so the refusal
+# does not fire; every artefact the outcome assertions name is present, so they all pass; and only
+# `cp -R`'s return code says the engine was not actually replaced. Mutation is what found this gap —
+# with the engine `cp -R` reverted to unchecked the suite stayed all-green, and nothing anywhere
+# noticed a half-applied upgrade.
+PC4="$TMP/proj-partial-cp"; mkdir -p "$PC4"; git -C "$PC4" init -q
+"$KITSRC/install.sh" --harness claude --project "$PC4" >/dev/null 2>&1
+SC4="$PC4/.claude/skills/hektor-flaky-triage"
+chmod a-w "$SC4/core/README.md"
+OUTC4="$("$KITSRC/install.sh" --harness claude --project "$PC4" 2>&1)"; RCC4=$?
+chmod u+w "$SC4/core/README.md"
+[ -w "$SC4/core" ] \
+  && ok || bad "CONTROL: core/ itself must stay writable here, or this is the degraded-tier fixture again"
+[ "$RCC4" != 75 ] \
+  && ok || bad "CONTROL: the not-writable refusal must NOT be what fired — this fixture exists to test the copy return code"
+[ -f "$SC4/core/config.json" ] && [ -f "$SC4/core/lock-kit.sh" ] && [ -f "$SC4/SKILL.md" ] && [ -f "$SC4/core/.harness" ] \
+  && ok || bad "CONTROL: every artefact the outcome assertions name must be PRESENT here — that is the whole point of this fixture"
+[ "$RCC4" = 73 ] \
+  && ok || bad "a partial engine copy must fail the install even when every asserted artefact is present — got rc $RCC4"
+case "$OUTC4" in *"COPY FAILED: $SC4/core/"*) ok ;; *) bad "the failure must name the engine copy that did not complete — got: $OUTC4" ;; esac
+case "$OUTC4" in *"install: done"*) bad "a partial engine copy must not print 'install: done' — got: $OUTC4" ;; *) ok ;; esac
+case "$OUTC4" in *wired*) bad "a partial engine copy must not claim any harness is wired — got: $OUTC4" ;; *) ok ;; esac
 
 # --- carried forward from the gate's own task: the audit-lib fallback is a SILENT no-op ------------
 # (`hektor_audit() { :; }`) whenever lib/audit.sh is not beside the installed gate, which would turn
