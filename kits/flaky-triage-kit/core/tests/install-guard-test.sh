@@ -659,6 +659,89 @@ for w in install build lock unlock status link --version help; do
 done
 rm -rf "$VER_SRC" "$VER_P1" "$VER_P2"
 
+# --- `help` itself, which had no coverage at all ---------------------------------------------
+# The hint above is the surface a user reaches by getting a subcommand WRONG. `help` is the one they
+# reach on purpose, and `grep -rn` across all twelve test files found no assertion on its output.
+# It is printed by a HAND-MAINTAINED line range — `sed -n '2,25p' "$0" | sed 's/^# \{0,1\}//'` — over
+# this CLI's own header comment, and both ways of getting that number wrong are silent. Add a
+# subcommand with a header block and leave the `25` alone: the CLI's primary discovery surface is
+# truncated. Bump it one past the header: `set -uo pipefail` is printed verbatim as help text.
+# Neither errors, neither failed anything. Same defect class the unknown-subcommand hint assertions
+# directly above closed, left open one door over.
+CLI="$KITSRC/hektor-triage-kit"
+HELPOUT="$(bash "$CLI" help 2>&1)"; HELPRC=$?
+[ "$HELPRC" = 0 ] && ok || bad "help must exit 0 — got rc $HELPRC"
+[ -n "$HELPOUT" ] && ok || bad "help must print something"
+
+# DERIVED from the `case` arms rather than written out by hand: a subcommand added to the CLI and
+# left undocumented then reddens here on its own, which a literal list can never do. Read from the
+# ONE top-level `case "$sub" in … esac` — the other `case` in the file is a single-line
+# `case ":$PATH:" in …; esac` whose `esac` is not at column 0, so the range cannot end early. The
+# charset excludes `*)`.
+SUBARMS="$TMP/subarms.txt"
+sed -n '/^case "\$sub" in$/,/^esac$/p' "$CLI" \
+  | sed -n 's/^  \([-A-Za-z0-9|]*\))$/\1/p' | tr '|' '\n' | grep -v '^$' | sort -u > "$SUBARMS"
+# CONTROL: a derivation that silently matched nothing would make the loop below assert nothing at
+# all — the failure mode this whole follow-up exists to catch, reintroduced inside its own test.
+[ "$(wc -l < "$SUBARMS" | tr -d ' ')" -ge 8 ] \
+  && ok || bad "CONTROL: the case-arm derivation must find the subcommands — got: $(tr '\n' ' ' < "$SUBARMS")"
+for c in install build link lock unlock status --version help; do
+  grep -qx -- "$c" "$SUBARMS" \
+    && ok || bad "CONTROL: the case-arm derivation must include '$c' — got: $(tr '\n' ' ' < "$SUBARMS")"
+done
+# Whole-word, not substring: the install line carries `--harness`, which CONTAINS `-h`, so a bare
+# substring match would report the `-h` alias as documented against a help text never mentioning it.
+while IFS= read -r c; do
+  [ -z "$c" ] && continue
+  printf '%s\n' "$HELPOUT" | grep -qE "(^|[^A-Za-z0-9_-])$c($|[^A-Za-z0-9_-])" \
+    && ok || bad "help must document every subcommand the case block accepts — '$c' is not in its output"
+done < "$SUBARMS"
+
+# The other direction. Checked generically rather than against one known line: `sed 's/^# \{0,1\}//'`
+# passes ANY non-comment line in range through verbatim, so the property is that every line help
+# prints originates from a comment line of this file.
+#
+# HELPOUT goes through a FILE, not a heredoc: the header contains backticks (`status`, `npm pack`),
+# and an unquoted heredoc would run them as command substitutions.
+printf '%s\n' "$HELPOUT" > "$TMP/help.txt"
+LEAKED=""
+while IFS= read -r hl; do
+  [ -z "$hl" ] && continue
+  grep -qxF "# $hl" "$CLI" && continue
+  grep -qxF "#$hl" "$CLI" && continue
+  LEAKED="$hl"
+done < "$TMP/help.txt"
+[ -z "$LEAKED" ] \
+  && ok || bad "no shell source may leak into help — the range printed a line that is not a comment: $LEAKED"
+# ...and the specific line exactly one bump away, named so the failure says what happened.
+case "$HELPOUT" in *"set -uo pipefail"*) bad "help must not leak the shell-options line that follows the header block" ;; *) ok ;; esac
+# The range end, stated directly: it must land on the LAST line of the header block. One less and the
+# header is truncated, one more and source leaks. Both numbers are read out of the file — hardcoding
+# either here would reintroduce the hand-maintained literal this whole block exists to stop trusting.
+HFIRSTSRC="$(awk 'NR>1 && $0 !~ /^#/ && $0 != "" {print NR; exit}' "$CLI")"
+HEND="$(sed -n "s/.*sed -n '2,\([0-9]*\)p'.*/\1/p" "$CLI" | head -1)"
+[ -n "$HFIRSTSRC" ] && [ -n "$HEND" ] \
+  && ok || bad "CONTROL: the header's end and help's range end must both be readable from the CLI — got '$HFIRSTSRC' / '$HEND'"
+[ "$HEND" = "$((HFIRSTSRC - 1))" ] \
+  && ok || bad "help's range must end on the last header comment line ($((HFIRSTSRC - 1))) — got $HEND; one less truncates the header, one more leaks source"
+
+# CONTROL for the leak check: it must be capable of seeing a leak at all. A throwaway copy whose range
+# is extended to the first NON-comment line — derived, so this control keeps working whatever the real
+# range is — must be caught by the identical check. If it is not, the check above is inert.
+HCOPY="$TMP/help-leak-copy"; mkdir -p "$HCOPY"
+sed "s/sed -n '2,[0-9]*p'/sed -n '2,${HFIRSTSRC}p'/" "$CLI" > "$HCOPY/hektor-triage-kit"
+LEAKOUT="$(bash "$HCOPY/hektor-triage-kit" help 2>&1)"
+LEAKED2=""
+printf '%s\n' "$LEAKOUT" > "$TMP/help-leak.txt"
+while IFS= read -r hl; do
+  [ -z "$hl" ] && continue
+  grep -qxF "# $hl" "$HCOPY/hektor-triage-kit" && continue
+  grep -qxF "#$hl" "$HCOPY/hektor-triage-kit" && continue
+  LEAKED2="$hl"
+done < "$TMP/help-leak.txt"
+[ -n "$LEAKED2" ] \
+  && ok || bad "CONTROL: bumping the range one line past the header must be DETECTED as a leak, or the check above cannot fail"
+
 # --- build: pack, then verify what was packed ---------------------------------
 # The retired zip passed packaging and was still wrong — it carried a hardened
 # .lock-state and lacked the installer fix. A build that does not check its own

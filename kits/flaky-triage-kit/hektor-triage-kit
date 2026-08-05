@@ -18,11 +18,11 @@
 #       core/lock-kit.sh's header; read it before calling a kit protected.
 #   hektor-triage-kit link [<bindir>]
 #       Symlink this command onto PATH (default ~/.local/bin) so `hektor-triage-kit` works from anywhere.
-#   hektor-triage-kit --version
+#   hektor-triage-kit --version | -V
 #       The version of THIS SOURCE checkout, read from package.json. `status` answers the other
 #       question — which version a given PROJECT was installed from — by reading that project's
 #       core/.version. An installed kit has no manifest, so --version there says to ask `status`.
-#   hektor-triage-kit help
+#   hektor-triage-kit help | -h | --help
 set -uo pipefail
 # Resolve the symlink chain BEFORE taking dirname. npm's `bin` mechanism always
 # installs this command as a symlink — `<prefix>/bin/hektor-triage-kit ->
@@ -146,6 +146,12 @@ case "$sub" in
     echo "hektor-triage-kit $_v ($HERE)" ;;
 
   -h|--help|help)
+    # A HAND-MAINTAINED line range over this file's own header, and both ways of getting it wrong are
+    # silent: add a subcommand with a header block and leave the `25` alone and the CLI's primary
+    # discovery surface is truncated; bump it past the header and `set -uo pipefail` is printed
+    # verbatim as help text. Neither errors and neither used to fail anything — install-guard-test.sh
+    # now derives the expected subcommand list from the `case` arms below and asserts that every line
+    # printed here originates from a comment, which reddens in both directions.
     sed -n '2,25p' "${BASH_SOURCE[0]:-$0}" | sed 's/^# \{0,1\}//' ;;
 
   *)
