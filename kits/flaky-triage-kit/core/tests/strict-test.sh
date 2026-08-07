@@ -107,5 +107,34 @@ echo "$OUT_F" | grep -q 'bad fqcn rejected' && ok || bad "dom-on-failure.sh erro
 OUT_FG="$(DOMFAIL_DRY=1 "$CORE/dom-on-failure.sh" "com.x.FooTest.methodName" "128" 2>&1)"; RC_FG=$?
 [ "$RC_FG" -eq 0 ] && ok || bad "dom-on-failure.sh control: a clean fqcn is NOT rejected by the shape check (got $RC_FG: $OUT_FG)"
 
+# --- normalize_tb: one testbox, either spelling, at every entry point.
+# The kit used to demand `161` here while accepting `tb161` at ingest, so a driver that carried
+# the console's own spelling through got exit 77 from the next call with nothing explaining why.
+[ "$(normalize_tb 161)"   = "161" ] && ok || bad "normalize_tb keeps a bare numeric id"
+[ "$(normalize_tb tb161)" = "161" ] && ok || bad "normalize_tb strips the tb prefix"
+[ "$(normalize_tb TB161)" = "161" ] && ok || bad "normalize_tb strips an uppercase TB prefix"
+normalize_tb ""        >/dev/null 2>&1 && bad "normalize_tb must reject an empty value"   || ok
+normalize_tb "tb"      >/dev/null 2>&1 && bad "normalize_tb must reject a bare prefix"    || ok
+normalize_tb "16a"     >/dev/null 2>&1 && bad "normalize_tb must reject a non-numeric id" || ok
+normalize_tb "tb161x"  >/dev/null 2>&1 && bad "normalize_tb must reject trailing junk"    || ok
+normalize_tb '161; id' >/dev/null 2>&1 && bad "normalize_tb must reject a shell metachar" || ok
+# The grep-newline hole this whole file exists for: line 1 is digits, the value is not.
+normalize_tb "$(mal 161 '$(id)')" >/dev/null 2>&1 \
+  && bad "normalize_tb must reject an embedded-newline value whose first line is numeric" || ok
+
+# ...and the three CLIs that carried the raw grep check on tb must now reject it the same way.
+"$CORE/rerun.sh" "com.x.FooTest" "$(mal 161 '$(id)')" >/dev/null 2>&1
+[ $? -eq 77 ] && ok || bad "rerun.sh must reject an embedded-newline testbox with exit 77"
+"$CORE/dom-capture.sh" "https://www.sahibinden.com/otomobil" "$(mal 161 '$(id)')" >/dev/null 2>&1
+[ $? -eq 77 ] && ok || bad "dom-capture.sh must reject an embedded-newline testbox with exit 77"
+"$CORE/dom-on-failure.sh" "com.x.FooTest.m" "$(mal 161 '$(id)')" >/dev/null 2>&1
+[ $? -eq 77 ] && ok || bad "dom-on-failure.sh must reject an embedded-newline testbox with exit 77"
+
+# The prefixed spelling must reach gradle as the BARE id — `-Dapi.url` composes its own `tb`, so a
+# pass-through would build `tbtb161` and route the run at nothing.
+OUT_TB="$(RERUN_DRY=1 "$CORE/rerun.sh" "com.x.FooTest" "tb161" 2>&1)"
+echo "$OUT_TB" | grep -q 'ui.testbox=161' && ok || bad "rerun.sh must pass the bare id to -Dui.testbox given tb161"
+echo "$OUT_TB" | grep -q 'api.url=[^ ]*tbtb' && bad "rerun.sh must not double the tb prefix in -Dapi.url" || ok
+
 echo "strict-test: $pass passed, $fail failed"
 [ "$fail" -eq 0 ]

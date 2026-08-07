@@ -26,7 +26,7 @@
 set -uo pipefail
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"; CFG="$HERE/config.json"
 command -v jq >/dev/null || { echo "rerun: jq required" >&2; exit 69; }
-. "$HERE/_lock.sh"   # A (N6): serialize gradle on this working copy — concurrent --rerun-tasks corrupt build/
+. "$HERE/_lock.sh"   # A (N6): serialize gradle on this working copy — concurrent cleanTest runs corrupt build/
 . "$HERE/_strict.sh"   # Round3: shared whole-string shape matcher (closes the grep-newline anchor bypass)
 
 strip(){ sed -E 's/\x1b\[[0-9;]*m//g'; }
@@ -74,7 +74,8 @@ if [ -n "${RERUN_FROM_LOG:-}" ]; then _t="$(mktemp)"; strip < "$RERUN_FROM_LOG" 
 
 TESTS="${1:-}"; TB="${2:-}"
 [ -n "$TESTS" ] && [ -n "$TB" ] || { echo "usage: rerun.sh <fqcn-csv> <tb>" >&2; exit 64; }
-printf '%s' "$TB"|grep -qE '^[0-9]+$' || { echo "I1: tb must be numeric: $TB" >&2; exit 77; }
+TBN="$(normalize_tb "$TB")" || { echo "I1: tb must be a testbox id (161 or tb161): $TB" >&2; exit 77; }
+TB="$TBN"
 # Round3: strict_match is WHOLE-STRING (unlike line-oriented `grep -qE '^...$'`) — rejects an
 # embedded-newline FQCN-CSV that would otherwise smuggle a metacharacter-laden line past this check.
 strict_match "$TESTS" '[A-Za-z0-9_.,]+' || { echo "I1: bad FQCN list rejected" >&2; exit 77; }
@@ -89,8 +90,20 @@ PROF="$(jq -r '.run.profile' "$CFG")"; LP="$(jq -r '.run.launchpad' "$CFG")"
 DC="${HEKTOR_FK_DATA_CENTER:-$(jq -r '.run.data_center' "$CFG")}"; BR="$(jq -r '.run.browser' "$CFG")"
 SEL="$(jq -r '.run.select_flag' "$CFG")"; N="${RERUN_N:-$(jq -r '.run.flaky_confidence_runs' "$CFG")}"   # RERUN_N overrides config (e.g. fast single-pass cross-box check)
 
-base_cmd=(env "JAVA_HOME=$JH" "$REPO/$WD/gradlew" -p "$REPO/$WD" test --rerun-tasks --no-build-cache
+# `cleanTest test`, NOT `--rerun-tasks`. Both force the test task to re-execute
+# instead of being skipped UP-TO-DATE, but --rerun-tasks also re-runs
+# :generate-method-plugin:instrumentCode, after which the -Dtests-named method is
+# no longer discovered and every pass returns "No tests were executed!" — which
+# the gate then grades run_anomalous, so a rerun can never produce a verdict.
+# This is the invocation web-test/CLAUDE.md documents; see its gradle section.
+base_cmd=(env "JAVA_HOME=$JH" "$REPO/$WD/gradlew" -p "$REPO/$WD" cleanTest test --no-build-cache
      "-Dspring.profiles.active=$PROF" "-Denv.launchpad=$LP" "-Denv.data.center=$DC"
+     # -Dapi.url is MANDATORY: client.properties has no default for it
+     # (`api.url=${sys:api.url}`), so without it the Spring context never loads
+     # and every test reports FAILED with UnknownHostException — an environment
+     # failure the gate would otherwise grade as a real red verdict.
+     # Format per web-test/CLAUDE.md: <dc>tb<dc><id>.
+     "-Dapi.url=${API_URL:-${DC}tb${DC}${TB}}"
      "-Dui.testbox=$TB" "-Dui.browser.type=$BR" "--console=plain")
 # Optional selenoid browser pin (hektor-conventions "mandatory -D set"). Opt-in via config: an
 # EMPTY chrome_version passes nothing, so behaviour is unchanged unless the box actually pins a
@@ -159,7 +172,25 @@ EFF_N="$passes_done"                                          # passes actually 
 incomplete=$(( EFF_N - runs_with_tests ))
 allfail="$(echo "$tests" | jq '(([.[].pass]|add)//0)==0 and (length>=5)')"
 broken_box="$(jq -n --argjson af "$allfail" --argjson h "${healthy:-false}" '$af and ($h|not)')"   # box itself looks broken
-anomalous="$(jq -n --argjson inc "$incomplete" '$inc>0')"  # untrustworthy run = a pass ran but executed NOTHING (early-exit is NOT anomalous: EFF_N counts only passes done)
+# VOID-RUN DETECTION (web-test/CLAUDE.md, "Never trust BUILD SUCCESSFUL").
+# The `incomplete` check above only catches a pass that printed no test line at
+# all. These catch the worse case: a pass that printed FAILED for every test
+# because the environment never came up. Without this, a missing -Dapi.url, a
+# flag that didn't land, or an UP-TO-DATE replay is graded `rejected` — "still
+# red, suspected app-bug" — which is a wrong verdict, not an error.
+void_reason=""
+if grep -qE 'UnknownHostException: api\.url|Failed to load ApplicationContext' "$LOGDIR/combined.txt" 2>/dev/null; then
+  void_reason="context never loaded (api.url / Spring) — the run is void, not red"
+elif grep -qE 'initializationError' "$LOGDIR/combined.txt" 2>/dev/null; then
+  void_reason="test initialization error — the run is void, not red"
+elif grep -qE 'Task :test UP-TO-DATE' "$LOGDIR/combined.txt" 2>/dev/null; then
+  void_reason="gradle replayed cached output; zero tests ran"
+elif grep -qE 'testbox : production' "$LOGDIR/combined.txt" 2>/dev/null; then
+  void_reason="flags did not land (testbox reported as production)"
+fi
+[ -n "$void_reason" ] && echo "rerun: VOID RUN — $void_reason. See $LOGDIR." >&2
+
+anomalous="$(jq -n --argjson inc "$incomplete" --arg void "$void_reason" '$inc>0 or ($void|length)>0')"  # untrustworthy run = a pass ran but executed NOTHING, or the environment never came up (early-exit is NOT anomalous: EFF_N counts only passes done)
 insufficient_runs="$(echo "$tests" | jq -c '[to_entries[]|select(.value.insufficient==true)|.key]')"
 
 echo "$tests" | jq --arg tb "$TB" --argjson n "$EFF_N" --argjson nreq "$N" --argjson rwt "$runs_with_tests" --argjson inc "$incomplete" \

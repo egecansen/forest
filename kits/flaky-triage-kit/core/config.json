@@ -12,7 +12,9 @@
   "run": {
     "workdir": "web-ui-test",
     "java_home": "",
-    "gradle_excludes": [":generate-method-plugin:instrumentCode"],
+    "gradle_excludes": [
+      ":generate-method-plugin:instrumentCode"
+    ],
     "profile": "testbox",
     "launchpad": "selenoid",
     "data_center": "x",
@@ -24,19 +26,60 @@
   },
   "qagent": {
     "endpoint": "https://chroma-s-test-applications.apps.ocptbox.tzla.sahibindenlocal.net",
-    "teststeps":      { "arama": "arama_teststeps", "ilan": "ilan_teststeps", "alisveris": "alisveris_teststeps", "bireysel": "bireysel_teststeps", "s360": "s360_teststeps" },
-    "business_rules": { "arama": "arama_business_rules", "ilan": "ilan_business_rules", "alisveris": "alisveris_business_rules", "bireysel": "bireysel_business_rules", "s360": "s360_business_rules" }
+    "teststeps": {
+      "arama": "arama_teststeps",
+      "ilan": "ilan_teststeps",
+      "alisveris": "alisveris_teststeps",
+      "bireysel": "bireysel_teststeps",
+      "s360": "s360_teststeps"
+    },
+    "business_rules": {
+      "arama": "arama_business_rules",
+      "ilan": "ilan_business_rules",
+      "alisveris": "alisveris_business_rules",
+      "bireysel": "bireysel_business_rules",
+      "s360": "s360_business_rules"
+    }
   },
-  "jira": { "host": "https://jira.sahibinden.com", "fetch": "read-only", "distribution_link_type": "Deployment", "noise_link_types": ["Tests", "relates to"] },
-  "dom_capture": { "test_fqcn": "com.sahibinden.web.ui.testdetails.PageDomCaptureTest", "method": "testDumpRenderedDom", "_doc": "kit-internal tool test, sourced into gradle from the KIT (core/capture-src/) via core/capture.init.gradle --init-script — NEVER in the suite tree. Carries Kure.SEARCH (compile-time Küre rule); @EnabledIfSystemProperty(dump.url) gates it. dom-capture.sh drives it." },
+  "jira": {
+    "host": "https://jira.sahibinden.com",
+    "fetch": "read-only",
+    "distribution_link_type": "Deployment",
+    "noise_link_types": [
+      "Tests",
+      "relates to"
+    ]
+  },
+  "dom_capture": {
+    "test_fqcn": "com.sahibinden.web.ui.testdetails.PageDomCaptureTest",
+    "method": "testDumpRenderedDom",
+    "_doc": "kit-internal tool test, sourced into gradle from the KIT (core/capture-src/) via core/capture.init.gradle --init-script — NEVER in the suite tree. Carries Kure.SEARCH (compile-time Küre rule); @EnabledIfSystemProperty(dump.url) gates it. dom-capture.sh drives it."
+  },
   "source_roots": [
     "web-ui-test/src/test/java",
     "web-ui-test/src/main/java/com/sahibinden/web/client"
   ],
-  "bounds": { "max_tests_per_iteration": 60, "per_cluster_keep_min": 1, "confirm_above": 40 },
+  "bounds": {
+    "max_tests_per_iteration": 60,
+    "per_cluster_keep_min": 1,
+    "confirm_above": 40,
+    "max_rounds": 12
+  },
   "recipes": [
-    { "id": "onetrust-dismiss",           "match": "ElementClickInterceptedException.*ot-sdk-row",  "action": "dismiss-onetrust-in-setup" },
-    { "id": "generated-collapse-id",      "match": "_cllpsID_a[0-9]+",                              "action": "relocate-by-attribute-name" },
-    { "id": "filter-value-by-text-empty", "match": "NoSuchElement.*(label\\[text|contains\\(text)", "action": "data-flag-dependent-rerun-on-control-box" }
+    {
+      "id": "onetrust-dismiss",
+      "match": "ElementClickInterceptedException.*ot-sdk-row",
+      "action": "dismiss-onetrust-in-setup"
+    },
+    {
+      "id": "generated-collapse-id",
+      "match": "_cllpsID_a[0-9]+",
+      "action": "relocate-by-attribute-name"
+    },
+    {
+      "id": "filter-value-by-text-empty",
+      "match": "NoSuchElement.*(label\\[text|contains\\(text)",
+      "action": "data-flag-dependent-rerun-on-control-box"
+    }
   ]
 }

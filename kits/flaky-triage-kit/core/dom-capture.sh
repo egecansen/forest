@@ -20,7 +20,8 @@ for t in jq git; do command -v "$t" >/dev/null || { echo "dom-capture: $t requir
 
 URL="${1:-}"; TB="${2:-}"
 [ -n "$URL" ] && [ -n "$TB" ] || { echo "usage: dom-capture.sh <url> <tb>" >&2; exit 64; }
-printf '%s' "$TB"  | grep -qE '^[0-9]+$' || { echo "I1: tb must be numeric: $TB" >&2; exit 77; }
+TBN="$(normalize_tb "$TB")" || { echo "I1: tb must be a testbox id (161 or tb161): $TB" >&2; exit 77; }
+TB="$TBN"
 # I1: url must be a clean http(s) URL — no spaces / shell / gradle-arg metacharacters (this drives a
 # real browser). strict_match (Round3) is WHOLE-STRING — an embedded-newline url that a line-oriented
 # `grep -qE '^...$'` would have let through on its first line is correctly rejected here.
@@ -49,10 +50,20 @@ OUT="$(mktemp "$BASE/domcap.tb${TB}.XXXXXX")"
 LOG="$(mktemp "$BASE/domcap.tb${TB}.log.XXXXXX")"
 [ -n "$OUT" ] && [ -n "$LOG" ] || { echo "dom-capture: mktemp failed (empty temp path)" >&2; exit 73; }
 
-cmd=(env "JAVA_HOME=$JH" "$REPO/$WD/gradlew" -p "$REPO/$WD" test --rerun-tasks --no-build-cache
+# `cleanTest test`, NOT `--rerun-tasks` — the same trap rerun.sh documents.
+# `--rerun-tasks` also re-runs :generate-method-plugin:instrumentCode, which is
+# in gradle_excludes, so the classes are rebuilt WITHOUT their @GenerateMethods
+# methods and the -Dtests-named method is no longer discovered.
+cmd=(env "JAVA_HOME=$JH" "$REPO/$WD/gradlew" -p "$REPO/$WD" cleanTest test --no-build-cache
      "--init-script" "$INIT" "-Ddomcap.srcDir=$SRC"
      "-Dtests=${FQCN}.${METH}" "-Ddump.url=${URL}" "-Ddump.output=${OUT}"
      "-Dspring.profiles.active=$PROF" "-Denv.launchpad=$LP" "-Denv.data.center=$DC"
+     # -Dapi.url is MANDATORY: client.properties has no default for it
+     # (`api.url=${sys:api.url}`), so without it the Spring context never loads
+     # and every test reports FAILED with UnknownHostException — an environment
+     # failure the gate would otherwise grade as a real red verdict.
+     # Format per web-test/CLAUDE.md: <dc>tb<dc><id>.
+     "-Dapi.url=${API_URL:-${DC}tb${DC}${TB}}"
      "-Dui.testbox=$TB" "-Dui.browser.type=$BR" "--console=plain")
 while IFS= read -r e; do cmd+=("-x" "$e"); done < <(jq -r '.run.gradle_excludes[]' "$CFG")
 

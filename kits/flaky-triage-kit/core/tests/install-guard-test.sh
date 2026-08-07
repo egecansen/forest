@@ -77,6 +77,27 @@ grep -qF '.claude/hooks/flaky-kit-self-protection-gate.sh' "$P/.claude/settings.
 [ "$(jq '[.hooks.PreToolUse[].hooks[].command] | map(select(contains("flaky-kit"))) | length' "$P/.claude/settings.json")" = 2 ] \
   && ok || bad "exactly two flaky-kit registrations must remain (Write|Edit + Bash), one per matcher"
 
+# --- the same strip must reach settings.local.json --------------------------------------------------
+# Claude Code merges settings.json AND settings.local.json into one hook config, so a stale
+# registration surviving in the local file exec-fails on every tool call exactly as one in
+# settings.json would. Observed 2026-08-05 in web-test: the local file was a stale copy of the
+# pre-relocation settings, and the strip above had never seen it. The local file is strip-only —
+# the kit must neither register into it nor create it.
+SL="$P/.claude/settings.local.json"
+jq -n --arg c "$OLDCMD" '{hooks:{PreToolUse:[{matcher:"Bash", hooks:[{type:"command", command:$c, timeout:10}, {type:"command", command:"jq -r .cwd", timeout:10}]}]}}' > "$SL"
+"$KITSRC/install.sh" --harness claude --project "$P" >/dev/null 2>&1
+grep -qF 'skills/hektor-flaky-triage/hooks/flaky-kit-self-protection-gate.sh' "$SL" \
+  && bad "the upgrade must drop the stale in-tree registration from settings.local.json too — Claude Code merges both files, so it spams exit-127 all the same" || ok
+[ "$(jq '.hooks.PreToolUse[0].hooks | length' "$SL")" = 1 ] \
+  && ok || bad "the local-file strip must remove ONLY the stale registration — the unrelated inline hook must survive"
+grep -qF '.claude/hooks/flaky-kit-self-protection-gate.sh' "$SL" \
+  && bad "the kit must never REGISTER into settings.local.json — the local file is strip-only" || ok
+rm -f "$SL"
+P2="$TMP/proj2"; mkdir -p "$P2"; git -C "$P2" init -q
+"$KITSRC/install.sh" --harness claude --project "$P2" >/dev/null 2>&1
+[ -f "$P2/.claude/settings.local.json" ] \
+  && bad "an install must not CREATE settings.local.json — strip-only means touching it only when it already exists" || ok
+
 # --- the restore source ships with the engine ------------------------------------------------
 # Task 3 restores a deleted gate from here. It lives under core/ deliberately: harden_targets
 # chowns that directory, so at a root-owned tier the restore source is root-owned and an agent
@@ -725,7 +746,9 @@ done
 # the set of top-level entries is exactly what files names: adding anything new
 # to the top level reddens this, even if every item is already excluded by other means
 TOP_LEVEL="$(printf '%s\n' "$LIST" | sed -n 's|^\([^/]*\).*|\1|p' | sort -u)"
-WANT_TOP="README.md
+WANT_TOP="CHANGELOG.md
+INTEGRATION.md
+README.md
 adapters
 core
 cross-harness.md

@@ -40,7 +40,19 @@ expect 0  "per-test divergence"      -- "$LEDGER" cluster-state "$F" c1-selector
 expect 65 "applied→proposed rejected"    -- "$LEDGER" cluster-state "$F" c1-selectors proposed
 expect 66 "unknown id rejected"          -- "$LEDGER" cluster-state "$F" nope green
 expect 0  "applied→green"                -- "$LEDGER" cluster-state "$F" c1-selectors green
-expect 65 "terminal→selected rejected"   -- "$LEDGER" cluster-state "$F" c1-selectors selected
+# REVERSAL: a terminal cluster may be re-SELECTED, because a triage is a loop
+# and the operator routinely says "keep going on the one you deferred". It used
+# to be rejected, which left that loop with no legal implementation — the only
+# escape was a fresh cluster id, losing the history the ledger exists to keep.
+expect 0  "terminal→selected reopens a round" -- "$LEDGER" cluster-state "$F" c1-selectors selected
+# Re-opening puts it back in the normal cycle, so selected→applied→green is the
+# ordinary path from here. Walk it, both to prove that and to leave the ledger
+# terminal for the `validate --final` checks below.
+expect 0  "reopened→applied"  -- "$LEDGER" cluster-state "$F" c1-selectors applied
+expect 0  "reopened→green"    -- "$LEDGER" cluster-state "$F" c1-selectors green
+# The reopen is ONLY to selected. Skipping straight back into the middle of the
+# cycle would claim work nobody did.
+expect 65 "terminal→applied still rejected" -- "$LEDGER" cluster-state "$F" c1-selectors applied
 
 # --- events
 expect 0  "phase event"  -- "$LEDGER" event "$F" phase-enter --phase verify
@@ -143,7 +155,10 @@ DF="$TMP/deferredselected.json"
 "$LEDGER" cluster-upsert "$DF" ds --title t >/dev/null 2>&1
 "$LEDGER" cluster-state "$DF" ds selected >/dev/null 2>&1
 "$LEDGER" cluster-state "$DF" ds deferred >/dev/null 2>&1
-expect 65 "deferred→selected rejected" -- "$LEDGER" cluster-state "$DF" ds selected
+# REVERSAL, same reason as terminal→selected above: this is how round 2 picks
+# up work round 1 put down.
+expect 0  "deferred→selected reopens it" -- "$LEDGER" cluster-state "$DF" ds selected
+expect 65 "deferred→green still rejected (nobody did the work)" -- "$LEDGER" cluster-state "$DF" ds green
 MJ="$TMP/malformed.json"
 printf '{not valid json' > "$MJ"
 expect 65 "malformed-JSON validate rejected" -- "$LEDGER" validate "$MJ"

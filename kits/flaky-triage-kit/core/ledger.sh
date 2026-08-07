@@ -9,11 +9,27 @@ set -uo pipefail
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 . "$HERE/_integrity.sh"; integrity_guard "$HERE/.." || exit 76
 command -v jq >/dev/null || { echo "ledger: jq required" >&2; exit 69; }
+. "$HERE/_strict.sh"
 CMD="${1:-}"; FILE="${2:-}"
-[ -n "$CMD" ] && [ -n "$FILE" ] || { echo "usage: ledger.sh init|get|set|cluster-upsert|cluster-state|cluster-vrt|event|validate <file> [...]" >&2; exit 64; }
+[ -n "$CMD" ] && [ -n "$FILE" ] || { echo "usage: ledger.sh init|path|get|set|cluster-upsert|cluster-state|cluster-vrt|cluster-cause|coverage|event|round|round-next|validate <file> [...]" >&2; exit 64; }
 
+# `path <build-name>` takes a build where every other subcommand takes a ledger file.
+BUILD_RE='[A-Za-z0-9._-]{1,120}'
+
+# These enums are the process vocabulary. They are DEFINED in core/process.json — with an
+# order, a label and a meaning per member — and restated here as plain strings so this
+# script, which is the I11 gate, never depends on a second file being readable. The two are
+# kept honest by core/tests/process-parity-test.sh, which fails the moment they disagree.
+# Change process.json first; that test will tell you what to change here.
+#
+# PHASES is in RUNNING ORDER, and the order is load-bearing documentation even though
+# has_word does not read it: `confirm` (rerun the picked clusters to separate real failures
+# from flaky ones) comes AFTER `pick`, which is where SKILL.md step 3 puts it. It used to
+# sit second in this string, where it reads as the pre-cluster health-check instead — so a
+# driver that took this list as the phase order placed `confirm` before `pick` and then
+# dropped every confirm event, forward-only phase advance making a backwards phase a no-op.
 BUCKETS="easy-fix selector vrt app-change infra likely-bug"
-PHASES="ingest confirm cluster pick fix verify report"
+PHASES="ingest cluster pick confirm fix verify report"
 TERMINAL="green deferred flagged resolved-upstream"
 FQCN_RE='^[A-Za-z_][A-Za-z0-9_.]*(#[A-Za-z0-9_]+)?$'
 ID_RE='^[a-z0-9-]{1,40}$'
@@ -63,10 +79,26 @@ jset() {
 }
 
 # transition <from> <to> → 0 ok / 1 reject. Same-status updates allowed for count/test refreshes.
+#
+# Terminal states are one-way WITHIN a round. Across rounds they are not: a
+# triage is a loop (SKILL.md's step 4, "Loop to step 2's decision"), and the
+# operator routinely comes back with "keep going on the one you deferred" or
+# "that app-bug needs a second look". Refusing that left the loop with no
+# legal implementation — the only escape was inventing a fresh cluster id,
+# which loses the history the ledger exists to keep.
+#
+# So a terminal cluster can be re-selected, and only re-selected. Everything
+# else out of a terminal state is still a bug: `green → applied` would mean a
+# fix was applied to something already proven, and `deferred → green` would
+# claim a verdict for work nobody did.
+REOPENABLE="deferred flagged green"
 transition_ok() {
   local from="$1" to="$2"
   [ "$from" = "$to" ] && { has_word "$TERMINAL" "$from" && return 1 || return 0; }
-  has_word "$TERMINAL" "$from" && return 1
+  if has_word "$TERMINAL" "$from"; then
+    [ "$to" = "selected" ] && has_word "$REOPENABLE" "$from" && return 0
+    return 1
+  fi
   case "$from:$to" in
     proposed:selected|proposed:deferred|proposed:resolved-upstream) return 0;;
     selected:applied|selected:deferred|selected:flagged|selected:resolved-upstream) return 0;;
@@ -76,6 +108,26 @@ transition_ok() {
 }
 
 case "$CMD" in
+  # `path <build-name>` — where a ledger for this build BELONGS. The kit used to impose no
+  # convention at all, so every caller invented one: two real runs against the same build
+  # wrote two ledgers to two paths, and neither driver could see the other's. Callers should
+  # ask rather than invent — `ledger.sh init "$(ledger.sh path <build>)"` is the whole idiom.
+  # Creates the directory (idempotent) so that idiom works in one line on a fresh checkout.
+  # $HEKTOR_LEDGER_DIR overrides the location for a driver that owns its own state dir; the
+  # <build> component still decides the filename, so one build still means one ledger.
+  path)
+    BUILD="$FILE"
+    strict_match "$BUILD" "$BUILD_RE" || die "path: invalid build name: $BUILD" 64
+    case "$BUILD" in .|..) die "path: invalid build name: $BUILD" 64;; esac
+    DIR="${HEKTOR_LEDGER_DIR:-}"
+    if [ -z "$DIR" ]; then
+      ROOT="$(git rev-parse --show-toplevel 2>/dev/null)" || ROOT=""
+      [ -n "$ROOT" ] || ROOT="$PWD"
+      DIR="$ROOT/.hektor"
+    fi
+    mkdir -p "$DIR" || die "path: cannot create $DIR" 73
+    printf '%s/ledger-%s.json\n' "$DIR" "$BUILD" ;;
+
   init)
     FORCE_ARG="${3:-}"
     case "$FORCE_ARG" in
@@ -89,7 +141,29 @@ case "$CMD" in
         die "init: refusing to clobber populated ledger ($CLUSTER_COUNT cluster(s)) at $FILE — pass --force to overwrite" 65
       fi
     fi
-    jq -n '{run:{version:2}, clusters:[], events:[]}' > "$FILE"; echo "ledger: initialized $FILE (v2)" >&2 ;;
+    jq -n '{run:{version:2, round:1}, clusters:[], events:[]}' > "$FILE"; echo "ledger: initialized $FILE (v2)" >&2 ;;
+
+  # --- rounds ---------------------------------------------------------------------------------
+  # I10 promises "bound re-clustering — every cluster must reach a terminal status; max
+  # iterations". Only the first half existed: there was no iteration counter anywhere, so
+  # nothing stopped a round loop. That mattered more once terminal clusters became re-openable
+  # (a re-opened cluster means "reached a terminal status" is no longer a natural terminator).
+  #
+  # The round is also the marker a driver needs to render history: round membership was being
+  # reconstructed from cluster state, which the next pick destroys, so two rounds that both
+  # settled before the driver first read the ledger merged into one flat list.
+  # Ledgers written before this existed have no `.run.round` and read as round 1.
+  round) jq -r '.run.round // 1' "$FILE" ;;
+  round-next)
+    MAXR="$(jq -r '.bounds.max_rounds // 12' "$HERE/config.json" 2>/dev/null)"
+    [[ "$MAXR" =~ $INT_RE ]] || MAXR=12
+    CUR="$(jq -r '.run.round // 1' "$FILE" 2>/dev/null)" || die "round-next: unreadable ledger"
+    [[ "$CUR" =~ $INT_RE ]] || die "round-next: ledger has a non-integer round: $CUR"
+    NEXT=$((CUR + 1))
+    [ "$NEXT" -le "$MAXR" ] || die "round-next: max_rounds ($MAXR) reached — converge or raise bounds.max_rounds" 68
+    jset '.run.round = ($r|tonumber)' --arg r "$NEXT"
+    echo "$NEXT" ;;
+
   get)  jq -r "${3:-.}" "$FILE" ;;
   set)  flt="${3:?ledger set: need a jq filter}"; shift 3
         ledger_lock "$FILE"
@@ -119,8 +193,13 @@ case "$CMD" in
       for f in "${FQ[@]}"; do [[ "$f" =~ $FQCN_RE ]] || die "invalid fqcn: $f"; done
       TESTS_JSON="$(printf '%s\n' "${FQ[@]}" | jq -R '{fqcn:.}' | jq -s '.')"
     fi
+    # A cluster is stamped with the round it was FIRST proposed in, and later upserts never
+    # restamp it — that is what lets a reader group rounds it did not watch happen. Bound
+    # up front rather than read inline: `+=` evaluates its right side against the path being
+    # updated (the clusters array), where `.run` does not exist.
     jset '
-      (if any(.clusters[]; .id==$id) then . else .clusters += [{id:$id, status:"proposed", tests:[]}] end)
+      (.run.round // 1) as $round
+      | (if any(.clusters[]; .id==$id) then . else .clusters += [{id:$id, status:"proposed", tests:[], round:$round}] end)
       | .clusters |= map(if .id==$id then
           . + ($ARGS.named | with_entries(select(.key != "id" and .key != "tests" and .key != "hasTests")))
           + (if $hasTests == "1" then {tests:$tests} else {} end)
@@ -179,6 +258,68 @@ case "$CMD" in
           else . end)' \
       --arg id "$ID" --arg fq "$FQ" --arg url "$URL" ;;
 
+  # Why THIS test failed, as opposed to why the cluster exists. A cluster's `detail` explains
+  # the shared root cause; it cannot say why one member timed out where its sibling threw
+  # NoSuchElement. Every consumer showed the operator a bare list of FQCNs and made them go
+  # read the report to tell the members apart.
+  #
+  # I7 governs this exactly like `title`/`detail`: a short human sentence, may quote an
+  # exception TYPE or a signature fragment, NEVER a raw stackTrace and never PII. The 300-char
+  # cap is the enforcement — a trace does not fit in one.
+  # `--message` carries what the test ACTUALLY THREW; the positional cause carries what the
+  # agent makes of it. Keeping them apart is the point: the cause is an interpretation and the
+  # message is evidence, and a reader who cannot tell which is which has to trust the agent
+  # instead of checking it. Same I7 discipline for both — one line, capped, so the exception's
+  # own message fits and its stack trace does not.
+  cluster-cause)
+    ID="${3:-}"; FQ="${4:-}"; CAUSE="${5:-}"
+    [ -n "$ID" ] && [ -n "$FQ" ] && [ -n "$CAUSE" ] || die "cluster-cause: need <id> <fqcn> <cause> [--message <text>]" 64
+    shift 5
+    MSG=""
+    while [ $# -gt 0 ]; do case "$1" in
+      --message) [ $# -ge 2 ] || die "--message: missing value" 64; MSG="$2"; shift 2;;
+      *) die "cluster-cause: unknown flag $1" 64;;
+    esac; done
+    jq -e --arg id "$ID" 'any(.clusters[]; .id==$id)' "$FILE" >/dev/null || die "unknown cluster id: $ID" 66
+    [[ "$FQ" =~ $FQCN_RE ]] || die "invalid fqcn: $FQ"
+    [ ${#CAUSE} -le 300 ] || die "cause >300 chars (I7: a one-line reason, never a stack trace)"
+    case "$CAUSE" in *$'\n'*) die "invalid cause: embedded newline (I7: one line, never a trace)";; esac
+    if [ -n "$MSG" ]; then
+      [ ${#MSG} -le 300 ] || die "message >300 chars (I7: the exception's own line, never its trace)"
+      case "$MSG" in *$'\n'*) die "invalid message: embedded newline (I7: one line, never a trace)";; esac
+    fi
+    jset '.clusters |= map(if .id==$id then
+            .tests |= (map(if .fqcn==$fq then (.cause=$cause | (if $msg != "" then .message=$msg else . end)) else . end)
+                       + (if any(.[]; .fqcn==$fq) then []
+                          else [({fqcn:$fq, cause:$cause} + (if $msg != "" then {message:$msg} else {} end))] end))
+          else . end)' \
+      --arg id "$ID" --arg fq "$FQ" --arg cause "$CAUSE" --arg msg "$MSG" ;;
+
+  # How much of the report the table actually covers. `ingest.sh` warns on stderr when ES
+  # truncated the result set (and sets `truncated`/`failTotal`); `cluster.sh` warns when I6's
+  # per-cluster cap dropped entries (and emits `dropped`). In a terminal those scroll past; in a
+  # GUI they vanish entirely, and an incomplete cluster table is indistinguishable from a
+  # complete one — which is the worst failure this kit has, because the operator picks from it.
+  #
+  # Recording the numbers is what lets any driver say "these 4 clusters cover 10 of 14 failures"
+  # instead of silently implying they cover everything.
+  coverage)
+    shift 2
+    FAILTOTAL=""; TRUNC=""; DROPPED=""
+    while [ $# -gt 0 ]; do case "$1" in
+      --fail-total) [ $# -ge 2 ] || die "--fail-total: missing value" 64; [[ "$2" =~ $INT_RE ]] || die "fail-total must be an integer"; FAILTOTAL="$2"; shift 2;;
+      --dropped)    [ $# -ge 2 ] || die "--dropped: missing value" 64;    [[ "$2" =~ $INT_RE ]] || die "dropped must be an integer";    DROPPED="$2";   shift 2;;
+      --truncated)  [ $# -ge 2 ] || die "--truncated: missing value" 64
+                    has_word "true false" "$2" || die "truncated must be true or false"; TRUNC="$2"; shift 2;;
+      *) die "coverage: unknown flag $1" 64;;
+    esac; done
+    [ -n "$FAILTOTAL$TRUNC$DROPPED" ] || die "coverage: give at least one of --fail-total/--truncated/--dropped" 64
+    jset '.run.coverage = ((.run.coverage // {})
+            + (if $ft != "" then {failTotal:($ft|tonumber)} else {} end)
+            + (if $dr != "" then {dropped:($dr|tonumber)}   else {} end)
+            + (if $tr != "" then {truncated:($tr=="true")}  else {} end))' \
+      --arg ft "$FAILTOTAL" --arg dr "$DROPPED" --arg tr "$TRUNC" ;;
+
   event)
     WHAT="${3:-}"; [ -n "$WHAT" ] || die "event: need <what>" 64; shift 3
     PHASE=""; WHO="${USER:-unknown}"
@@ -217,6 +358,7 @@ case "$CMD" in
         elif ((.tests? // []) | any(.[]; ((.fqcn? // "") | fullmatch("'"$FQCN_RE"'") | not))) then "bad-fqcn"
         elif ((.tests? // []) | any(.[]; has("status") and ((.status) as $ts | (["red","green","skipped"] | index($ts) | not)))) then "bad-test-status"
         elif ((.tests? // []) | any(.[]; has("vrt") and ((.vrt) as $v | (($v|fullmatch("'"$VRT_RE"'"))|not)))) then "bad-vrt"
+        elif ((.tests? // []) | any(.[]; has("cause") and (((.cause|length) > 300) or (.cause|test("\n"))))) then "bad-cause"
         else null end;
       ( [ .clusters[] as $c | ($c|reason) as $r | select($r != null) | {id: ($c.id? // "?"), reason: $r} ] )
       + ( [.clusters[] | .id? // "?"] | group_by(.) | map(select(length>1) | {id: .[0], reason: "dup-id"}) )

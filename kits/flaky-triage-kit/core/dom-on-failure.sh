@@ -18,7 +18,8 @@ for t in jq git; do command -v "$t" >/dev/null || { echo "dom-on-failure: $t req
 
 FQCN="${1:-}"; TB="${2:-}"
 [ -n "$FQCN" ] && [ -n "$TB" ] || { echo "usage: dom-on-failure.sh <test-fqcn[.method]> <tb>" >&2; exit 64; }
-printf '%s' "$TB"   | grep -qE '^[0-9]+$'        || { echo "I1: tb must be numeric: $TB" >&2; exit 77; }
+TBN="$(normalize_tb "$TB")" || { echo "I1: tb must be a testbox id (161 or tb161): $TB" >&2; exit 77; }
+TB="$TBN"
 # Round3: strict_match is WHOLE-STRING — an embedded-newline fqcn that a line-oriented `grep -qE
 # '^...$'` would have let through on its first line is correctly rejected here.
 strict_match "$FQCN" '[A-Za-z0-9_.]+' || { echo "I1: bad fqcn rejected: $FQCN" >&2; exit 77; }
@@ -35,10 +36,20 @@ BASE="${TMPDIR:-/tmp}/hektor-flaky-rerun"; mkdir -p "$BASE"
 find "$BASE" -maxdepth 1 -mindepth 1 -mtime +1 -exec rm -rf {} + 2>/dev/null || true
 FAILDIR="$(mktemp -d "$BASE/domfail.tb${TB}.XXXXXX")"
 
-cmd=(env "JAVA_HOME=$JH" "$REPO/$WD/gradlew" -p "$REPO/$WD" test --rerun-tasks --no-build-cache
+# `cleanTest test`, NOT `--rerun-tasks` — the same trap rerun.sh documents.
+# `--rerun-tasks` also re-runs :generate-method-plugin:instrumentCode, which is
+# in gradle_excludes, so the classes are rebuilt WITHOUT their @GenerateMethods
+# methods and the -Dtests-named method is no longer discovered.
+cmd=(env "JAVA_HOME=$JH" "$REPO/$WD/gradlew" -p "$REPO/$WD" cleanTest test --no-build-cache
      "--init-script" "$INIT" "-Ddomcap.srcDir=$SRC" "-Ddomcap.resDir=$RES"
      "-Djunit.jupiter.extensions.autodetection.enabled=true" "-Ddump.failDir=$FAILDIR"
      "-Dtests=$FQCN" "-Dspring.profiles.active=$PROF" "-Denv.launchpad=$LP" "-Denv.data.center=$DC"
+     # -Dapi.url is MANDATORY: client.properties has no default for it
+     # (`api.url=${sys:api.url}`), so without it the Spring context never loads
+     # and every test reports FAILED with UnknownHostException — an environment
+     # failure the gate would otherwise grade as a real red verdict.
+     # Format per web-test/CLAUDE.md: <dc>tb<dc><id>.
+     "-Dapi.url=${API_URL:-${DC}tb${DC}${TB}}"
      "-Dui.testbox=$TB" "-Dui.browser.type=$BR" "--console=plain")
 while IFS= read -r e; do cmd+=("-x" "$e"); done < <(jq -r '.run.gradle_excludes[]' "$CFG")
 
@@ -54,6 +65,13 @@ if [ "$n" -gt 0 ]; then
   find "$FAILDIR" -name '*.html' 2>/dev/null -exec sh -c 'echo "  $1 ($(wc -c <"$1"|tr -d " ") bytes)" >&2' _ {} \;
   find "$FAILDIR" -name '*.html' 2>/dev/null
   exit 0
+fi
+# Distinguish "nothing ran" from "the test passed" — reporting a run that
+# never executed as a pass is the wrong-verdict shape this kit exists to avoid.
+if grep -qiE 'No tests were executed|NO-SOURCE' "$FAILDIR/run.log" 2>/dev/null; then
+  echo "dom-on-failure: NO TESTS EXECUTED — the run never happened, this is not a pass. See $FAILDIR/run.log." >&2
+  grep -iE 'No tests|BUILD (SUCC|FAIL)' "$FAILDIR/run.log" 2>/dev/null | tail -8 >&2 || true
+  exit 66
 fi
 echo "dom-on-failure: NO DOM dumped — test PASSED, or the driver was gone at failure (check the hook timing)." >&2
 grep -iE 'DOM-DUMP-ON-FAIL|> .*\(\) (PASSED|FAILED)|BUILD (SUCC|FAIL)|No tests' "$FAILDIR/run.log" 2>/dev/null | tail -8 >&2 || true

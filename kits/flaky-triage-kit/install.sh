@@ -446,14 +446,23 @@ if [ "$do_claude" = 1 ]; then
   # appends, so without this an upgraded project ends up with two registered gates — the new one plus
   # a stale command pointing into the kit tree (whose file the block above has just deleted, so the
   # registration would also start failing to execute).
+  #
+  # The strip runs on settings.local.json too. Claude Code merges BOTH files into one hook config,
+  # so a stale registration surviving in the local file exec-fails on every tool call exactly as one
+  # in settings.json would — observed 2026-08-05 in web-test, where the local file was a stale copy
+  # this strip had never seen. The local file is strip-only: the kit registers nothing there, and a
+  # project without one must not have one created ([ -f ] guard).
   OLD_GATE_CMD="skills/hektor-flaky-triage/hooks/flaky-kit-self-protection-gate.sh"
-  t="$(mktemp)"; jq --arg old "$OLD_GATE_CMD" '
-    if (.hooks.PreToolUse? // null) != null then
-      .hooks.PreToolUse |= map(
-        if (.hooks? // null) != null
-        then .hooks |= map(select(((.command // "") | contains($old)) | not))
-        else . end)
-    else . end' "$S" > "$t" && mv "$t" "$S"
+  for SF in "$S" "$PROJ/.claude/settings.local.json"; do
+    [ -f "$SF" ] || continue
+    t="$(mktemp)"; jq --arg old "$OLD_GATE_CMD" '
+      if (.hooks.PreToolUse? // null) != null then
+        .hooks.PreToolUse |= map(
+          if (.hooks? // null) != null
+          then .hooks |= map(select(((.command // "") | contains($old)) | not))
+          else . end)
+      else . end' "$SF" > "$t" 2>/dev/null && [ -s "$t" ] && mv "$t" "$SF" || rm -f "$t"
+  done
   for M in "Write|Edit" "Bash"; do
     t="$(mktemp)"; jq --arg m "$M" --arg c "$C" '
       .hooks //= {} | .hooks.PreToolUse //= [] |

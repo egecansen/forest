@@ -26,3 +26,26 @@ strict_match() {
   case "$value" in *$'\n'*) return 1 ;; esac
   [[ "$value" =~ ^$ere$ ]]
 }
+
+# normalize_tb <value>
+#   Echoes the BARE NUMERIC testbox id, or returns 1. Accepts `161` and `tb161`/`TB161` alike.
+#
+# WHY: a testbox has two spellings and the kit took a different one per entry point.
+# `ingest.sh --testbox` accepts `[0-9A-Za-z._-]+` because ES holds the prefixed form; `rerun.sh`,
+# `dom-capture.sh` and `dom-on-failure.sh` demanded `^[0-9]+$` because gradle wants the bare id
+# (`-Dui.testbox=<n>`, and `-Dapi.url` composes the `tb` itself — a prefixed value would build
+# `tbtb161`). So the testbox a caller had just ingested successfully was rejected with exit 77 by
+# the very next call, and every driver had to know which script wanted which spelling. Nothing
+# documented that. Callers now hand either spelling to any entry point; the engine normalises once,
+# here, and the drivers stop translating.
+#
+# It also closes the last of the grep-newline holes this file exists for: those three checks were
+# still `printf … | grep -qE '^[0-9]+$'`, which passes any value whose FIRST LINE is digits,
+# however the rest of it reads. `[[ =~ ]]` after an explicit newline reject anchors the whole string.
+normalize_tb() {
+  local v="$1"
+  case "$v" in *$'\n'*) return 1 ;; esac
+  case "$v" in [tT][bB]*) v="${v#[tT][bB]}" ;; esac
+  [[ "$v" =~ ^[0-9]+$ ]] || return 1
+  printf '%s' "$v"
+}
