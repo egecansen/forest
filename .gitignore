@@ -13,4 +13,9 @@ docs/hektor/skill-stocktake.json
 # run it there. The zip was retired (kernel §7/§12) exactly to stop a stale binary
 # being committed and drifting from the source; committing a .tgz instead would just
 # trade one stale artifact for another. Build it, install it, throw it away.
-kits/flaky-triage-kit/*.tgz
+# Any kit directory, not only the one that existed when this rule was written: a copy taken
+# to work on the next version (kits/flaky-triage-kit-next) falls outside a hardcoded name, so
+# the guard install-guard-test.sh enforces stopped covering the very tree being edited — it
+# failed there and passed in the original, which reads as a defect in the copy rather than a
+# gap in this line.
+kits/*/*.tgz
