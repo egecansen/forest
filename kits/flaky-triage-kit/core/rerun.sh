@@ -51,9 +51,45 @@ aggregate(){ jq -R -n --argjson n "$1" '
         + (if $insuff then {insufficient:true} else {} end))})
   | from_entries'; }
 # parse + aggregate + attach a failure CAUSE per failed test (so all-fail is diagnosable)
-build_result(){ # $1=stripped-combined-log  $2=runs_requested (N — see aggregate() above)
-  local lf="$1" n="$2" tests causes='{}' t m c
-  tests="$(parse_outcomes < "$lf" | aggregate "$n")"
+# Gradle prints "ClassName > method() PASSED" — the PACKAGE is not on that line, so
+# parse_outcomes can only ever key on the simple name. The ledger keys on FQCNs (ledger.sh's
+# FQCN_RE), and gate.sh passes these keys straight through as `candidate_id`, so every consumer
+# was left holding `FooTest.a` where it needed `com.x.FooTest.a` and doing the translation by
+# hand — which nothing did. Two same-named classes in different packages merged into ONE verdict.
+#
+# The information is right here: the caller told us the FQCNs. `rekey_to_fqcn` maps each simple
+# key back to the FQCN that was asked for.
+#
+# When two REQUESTED fqcns share a simple name the log genuinely cannot tell them apart — that
+# is missing information, not a puzzle to solve. Both are emitted under their own fqcn, marked
+# `ambiguous` and forced `insufficient`, which gate.sh already turns into `inconclusive`. An
+# honest "we could not tell" beats a verdict assigned to a coin flip.
+#
+# $1 = the requested fqcn csv. A key with no match is passed through unchanged (RERUN_FROM_LOG
+# has no request list, and a stray test in the log is not ours to rename).
+rekey_to_fqcn(){
+  local csv="${1:-}"
+  [ -n "$csv" ] || { cat; return 0; }
+  jq --arg csv "$csv" '
+    ($csv | split(",") | map(select(length>0))) as $req
+    | ($req | map({simple: (split(".") | .[-2:] | join(".")), fq: .})
+            | group_by(.simple)
+            | map({key: .[0].simple, value: map(.fq)})
+            | from_entries) as $bysimple
+    | . as $tests
+    | reduce ($tests | keys_unsorted[]) as $k (
+        {};
+        ($bysimple[$k] // []) as $matches
+        | if ($matches | length) == 0 then . + {($k): $tests[$k]}
+          elif ($matches | length) == 1 then . + {($matches[0]): $tests[$k]}
+          else . + (reduce $matches[] as $fq ({};
+              . + {($fq): ($tests[$k] + {ambiguous: true, insufficient: true, confidence: null})}))
+          end)'
+}
+
+build_result(){ # $1=stripped-combined-log  $2=runs_requested (N)  $3=requested fqcn csv (optional)
+  local lf="$1" n="$2" req="${3:-}" tests causes='{}' t m c
+  tests="$(parse_outcomes < "$lf" | aggregate "$n" | rekey_to_fqcn "$req")"
   for t in $(echo "$tests" | jq -r 'to_entries[]|select(.value.fail>0)|.key'); do
     m="${t##*.}"
     c="$(grep -A3 "> ${m}() FAILED" "$lf" | grep -m1 -E 'Exception|Error:' | sed -E 's/^[[:space:]]+//' | cut -c1-110)"
@@ -137,7 +173,11 @@ find "$BASE" -maxdepth 1 -mindepth 1 -mtime +1 -exec rm -rf {} + 2>/dev/null || 
 LOGDIR="$(mktemp -d "$BASE/tb${TB}.XXXXXX")"
 echo "rerun: re-running on tb$TB ×$N via Selenoid (slow); logs in $LOGDIR" >&2
 gradle_lock_acquire "$REPO/$WD"   # A: wait out any concurrent gradle on this working copy (auto-released on exit)
-healthy="$(echo "$box_health" | jq '(.rate // 0) >= 0.8')"
+# Health is TRI-state: measured-good, measured-bad, or not measured at all. `(.rate // 0)`
+# collapsed the last two into `false`, so "ES told us nothing" was indistinguishable from "this
+# box is sick" — and every conclusion built on `healthy` inherited that confusion.
+health_known="$(echo "$box_health" | jq 'type=="object" and (.rate != null)')"
+healthy="$(echo "$box_health" | jq '(.rate != null) and (.rate >= 0.8)')"
 EARLY="${RERUN_EARLY_EXIT:-1}"   # 1 = decisive-stop + drop-proven-flaky from later passes (Selenoid dominates wall-clock); 0 = always N full passes
 runs_with_tests=0; passes_done=0; cur="$TESTS"; passlogs=()
 for i in $(seq 1 "$N"); do
@@ -147,7 +187,7 @@ for i in $(seq 1 "$N"); do
 
   { [ "$EARLY" = "1" ] && [ "$i" -lt "$N" ]; } || continue
   cat "${passlogs[@]}" | strip > "$LOGDIR/combined.txt"
-  agg="$(build_result "$LOGDIR/combined.txt" "$N")"   # runs_requested — the decisive-stop/narrowing checks below only read .pass/.fail, so this is safe pre-early-exit
+  agg="$(build_result "$LOGDIR/combined.txt" "$N" "$TESTS")"   # runs_requested — the decisive-stop/narrowing checks below only read .pass/.fail, so this is safe pre-early-exit
   # DECISIVE-STOP: healthy box + uniform reproduce (every executed test fail-only) + cluster >=5 → real; more passes won't move it.
   if [ "$(echo "$agg" | jq --argjson h "${healthy:-false}" '$h and (length>=5) and (all(.[]; .pass==0 and .fail>0))')" = "true" ]; then
     echo "rerun: early-exit after pass $passes_done — healthy box + all $(echo "$agg"|jq 'length') tests reproduce (fail-only); skipping remaining." >&2; break
@@ -166,12 +206,21 @@ for i in $(seq 1 "$N"); do
   cur="$next"
 done
 cat "$LOGDIR"/r*.log | strip > "$LOGDIR/combined.txt"
-tests="$(build_result "$LOGDIR/combined.txt" "$N")"   # runs_requested — I11: per-test completeness vs the full N, not just passes-done
+tests="$(build_result "$LOGDIR/combined.txt" "$N" "$TESTS")"   # runs_requested — I11: per-test completeness vs the full N, not just passes-done
 
 EFF_N="$passes_done"                                          # passes actually run (≤ N when early-exit fired)
 incomplete=$(( EFF_N - runs_with_tests ))
-allfail="$(echo "$tests" | jq '(([.[].pass]|add)//0)==0 and (length>=5)')"
-broken_box="$(jq -n --argjson af "$allfail" --argjson h "${healthy:-false}" '$af and ($h|not)')"   # box itself looks broken
+# I9's protection, and it used to require `length>=5` — but a PICKED cluster is typically 1-3
+# tests, so it never applied where verdicts are actually made. A sick box failing all three of
+# them was graded `rejected` ("still red, suspected app-bug") instead of `inconclusive`, which
+# points the operator at the wrong culprit. The size floor added nothing that `healthy` was not
+# already carrying: this fires only when the box's OWN health probe says it is unwell.
+allfail="$(echo "$tests" | jq '(([.[].pass]|add)//0)==0 and (length>0)')"
+# Requires MEASURED ill health, not merely the absence of a measurement. Without `health_known`,
+# a setup where the ES aggregation returns nothing would call every all-fail cluster a broken
+# box — and then no real failure could ever be confirmed, because "run more" would be the answer
+# to everything.
+broken_box="$(jq -n --argjson af "$allfail" --argjson h "${healthy:-false}" --argjson k "${health_known:-false}" '$af and $k and ($h|not)')"
 # VOID-RUN DETECTION (web-test/CLAUDE.md, "Never trust BUILD SUCCESSFUL").
 # The `incomplete` check above only catches a pass that printed no test line at
 # all. These catch the worse case: a pass that printed FAILED for every test
@@ -194,6 +243,6 @@ anomalous="$(jq -n --argjson inc "$incomplete" --arg void "$void_reason" '$inc>0
 insufficient_runs="$(echo "$tests" | jq -c '[to_entries[]|select(.value.insufficient==true)|.key]')"
 
 echo "$tests" | jq --arg tb "$TB" --argjson n "$EFF_N" --argjson nreq "$N" --argjson rwt "$runs_with_tests" --argjson inc "$incomplete" \
-  --argjson bh "$box_health" --argjson bb "$broken_box" --argjson an "$anomalous" --arg ld "$LOGDIR" --argjson ir "$insufficient_runs" \
-  '{tb:$tb, runs:$n, runs_requested:$nreq, early_exit:($n<$nreq), runs_with_tests:$rwt, incomplete_runs:$inc, box_health:$bh,
+  --argjson bh "$box_health" --argjson bhk "${health_known:-false}" --argjson bb "$broken_box" --argjson an "$anomalous" --arg ld "$LOGDIR" --argjson ir "$insufficient_runs" \
+  '{tb:$tb, runs:$n, runs_requested:$nreq, early_exit:($n<$nreq), runs_with_tests:$rwt, incomplete_runs:$inc, box_health:$bh, box_health_known:$bhk,
     broken_box_suspected:$bb, run_anomalous:$an, logdir:$ld, insufficient_runs:$ir, tests:.}'

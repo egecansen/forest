@@ -98,5 +98,74 @@ case "$DRY_OUT" in *"-Dchrome.version=131"*) ok ;; *) bad "HEKTOR_FK_CHROME_VERS
 DRY_OUT="$(HEKTOR_FK_CHROME_VERSION='1;rm -rf /' RERUN_DRY=1 bash "$TESTDIR/../rerun.sh" com.x.AaTest 161 2>&1)"
 case "$DRY_OUT" in *"I1"*) ok ;; *) bad "a malformed HEKTOR_FK_CHROME_VERSION must be I1-rejected, not passed through" ;; esac
 
+# --- verdict keys are FQCNs, not simple class names ------------------------------------------
+# Gradle prints "ClassName > method()" — the package is not on that line — while the ledger keys
+# on FQCNs and gate.sh passes these straight through as candidate_id. Every consumer was left
+# holding `FooTest.a` where it needed `com.x.FooTest.a`, and two same-named classes in different
+# packages merged into ONE verdict.
+LOGF="$(mktemp)"
+printf 'FooTest > a() PASSED\nBarTest > b() FAILED\n' > "$LOGF"
+
+OUT="$(build_result "$LOGF" 1 "com.x.FooTest.a,com.y.BarTest.b")"
+[ "$(echo "$OUT" | jq -r 'keys|join(",")')" = "com.x.FooTest.a,com.y.BarTest.b" ] \
+  && ok || bad "verdicts must be keyed on the fqcns the caller asked for"
+
+# The verdict itself must survive the rekeying untouched.
+[ "$(echo "$OUT" | jq -r '."com.y.BarTest.b".fail')" = "1" ] \
+  && ok || bad "rekeying must not disturb the verdict it carries"
+
+# No request list (RERUN_FROM_LOG) — nothing to map against, so pass through rather than guess.
+OUT_NOREQ="$(build_result "$LOGF" 1 "")"
+[ "$(echo "$OUT_NOREQ" | jq -r 'keys|join(",")')" = "BarTest.b,FooTest.a" ] \
+  && ok || bad "with no request list the simple keys pass through unchanged"
+
+# A test in the log that was never requested is not ours to rename.
+OUT_EXTRA="$(build_result "$LOGF" 1 "com.x.FooTest.a")"
+echo "$OUT_EXTRA" | jq -e 'has("com.x.FooTest.a") and has("BarTest.b")' >/dev/null \
+  && ok || bad "an unrequested test keeps its own key"
+
+# THE COLLISION. Two requested fqcns share a simple name, so the log genuinely cannot tell them
+# apart. That is missing information, not a puzzle — both are marked and forced inconclusive
+# rather than one of them being handed the other's verdict.
+LOGC="$(mktemp)"; printf 'FooTest > a() PASSED\n' > "$LOGC"
+OUT_AMB="$(build_result "$LOGC" 1 "com.x.FooTest.a,com.y.FooTest.a")"
+echo "$OUT_AMB" | jq -e 'has("com.x.FooTest.a") and has("com.y.FooTest.a")' >/dev/null \
+  && ok || bad "an ambiguous key must be emitted under BOTH fqcns, never merged into one"
+[ "$(echo "$OUT_AMB" | jq -r '[.[]|select(.ambiguous==true)]|length')" = "2" ] \
+  && ok || bad "both sides of a collision must be marked ambiguous"
+[ "$(echo "$OUT_AMB" | jq -r '[.[]|select(.insufficient==true and .confidence==null)]|length')" = "2" ] \
+  && ok || bad "an ambiguous verdict must be forced inconclusive, never a coin-flip green"
+rm -f "$LOGF" "$LOGC"
+
+# --- I9 applies where verdicts are actually made ---------------------------------------------
+# `allfail` required length>=5, but a PICKED cluster is typically 1-3 tests — so the broken-box
+# protection never applied where it mattered, and a sick box failing all three was graded
+# `rejected` ("still red, suspected app-bug") rather than `inconclusive`.
+allfail_of(){ echo "$1" | jq '(([.[].pass]|add)//0)==0 and (length>0)'; }
+broken_of(){ jq -n --argjson af "$1" --argjson h "$2" --argjson k "$3" '$af and $k and ($h|not)'; }
+
+THREE='{"a":{"pass":0,"fail":2},"b":{"pass":0,"fail":2},"c":{"pass":0,"fail":2}}'
+[ "$(allfail_of "$THREE")" = "true" ] \
+  && ok || bad "three tests, all failing, is an all-fail cluster — the old >=5 floor said otherwise"
+
+# Measured-sick box + all-fail => broken box, whatever the cluster size.
+[ "$(broken_of true false true)" = "true" ] \
+  && ok || bad "a measured-unhealthy box with an all-fail cluster is a broken box"
+
+# NOT measured is not the same as measured-sick. Without this distinction a setup where the ES
+# aggregation returns nothing would call every all-fail cluster a broken box — and then no real
+# failure could ever be confirmed, because "run more" would be the answer to everything.
+[ "$(broken_of true false false)" = "false" ] \
+  && ok || bad "unmeasured health must not read as a broken box"
+
+# A healthy box never is one, however red the cluster.
+[ "$(broken_of true true true)" = "false" ] \
+  && ok || bad "a measured-healthy box is not a broken box"
+
+# One passing test is enough to say the box runs.
+ONEPASS='{"a":{"pass":1,"fail":1},"b":{"pass":0,"fail":2}}'
+[ "$(allfail_of "$ONEPASS")" = "false" ] \
+  && ok || bad "any pass at all means this is not an all-fail cluster"
+
 echo "rerun-test: $pass passed, $fail failed"
 [ "$fail" -eq 0 ]

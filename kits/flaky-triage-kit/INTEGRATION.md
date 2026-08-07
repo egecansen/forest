@@ -241,7 +241,7 @@ corrupt `build/`), so a second job blocks rather than racing.
 | `ingest.sh <report-url>` | s-report URL | `{build:{...}, fails:[...]}`, build pinned by `@timestamp` |
 | `ingest.sh --testbox <tb> [--tests <Class.method,...>]` | a box, optionally a test list | same shape; resolves the box's freshest build, and `build.missing_requested` names requested tests that build never ran |
 | `cluster.sh` | ingest JSON (stdin) | `[{sig,count,sample,tier_hint,tests:[fqcn]}]` — a **mechanical** cut; the driver re-groups it by meaning |
-| `rerun.sh <fqcn-csv> <tb>` | tests + box | per-test `{pass,fail,skip,runs,confidence,cause,insufficient?}` plus box-health flags |
+| `rerun.sh <fqcn-csv> <tb>` | tests + box | per-test `{pass,fail,skip,runs,confidence,cause,insufficient?,ambiguous?}` keyed on YOUR fqcns, plus `box_health`, `box_health_known` and `broken_box_suspected` |
 | `gate.sh` | rerun JSON (stdin) | `verifier-result` — per-test `accepted` / `rejected` / `inconclusive`, plus `all_accepted` |
 | `apply.sh` | `{file,old,new}` (stdin) | literal unique replace inside `source_roots`, prints `git diff`. Never commits. |
 | `compile.sh` | — | `{ok, errors[]}` |
@@ -258,11 +258,15 @@ under-proven **or an untrustworthy box** — run more; never round it up. One gr
 proof: a flaky test passes about half the time, so a single green is the likeliest false
 "fixed".
 
-**`rerun.sh` keys its output on the simple class name; the ledger requires FQCNs.** Two
-same-named classes in different packages merge into one verdict, and `gate.sh` emits those
-same keys as `candidate_id`. Mapping a gate verdict onto `cluster-state --test <fqcn>=green`
-needs a translation the kit does not perform — your driver must do it, and must notice when
-two classes collide. This is a known defect, not a design.
+**Verdicts come back keyed on the FQCNs you asked for.** Gradle prints
+`ClassName > method()` — the package is not on that line — so the raw parse can only key on
+the simple name. `rerun.sh` maps those back using your own request list, so
+`cluster-state --test <fqcn>=green` takes the key straight through with no translation.
+
+When two REQUESTED fqcns share a simple class name the log genuinely cannot tell them apart.
+Both are emitted under their own fqcn, marked `ambiguous: true` and forced `insufficient`,
+which `gate.sh` turns into `inconclusive` for each. Nothing is merged and nothing is guessed —
+if you see `ambiguous`, the run could not distinguish those two tests and neither can you.
 
 ## 12. Exit codes
 

@@ -9,6 +9,32 @@ refactors that change no behaviour are not entries.
 
 ---
 
+## 1.0.9
+
+### Fixed — verdict correctness
+
+- **Verdicts are keyed on the FQCNs the caller asked for.** Gradle prints
+  `ClassName > method()` with no package, so the parse could only ever key on the simple name —
+  while the ledger keys on FQCNs and `gate.sh` passes those keys straight through as
+  `candidate_id`. Every consumer was left holding `FooTest.a` where it needed
+  `com.x.FooTest.a`, and **two same-named classes in different packages merged into one
+  verdict**. `rerun.sh` now maps back using the caller's own request list. When two requested
+  FQCNs share a simple name the log genuinely cannot tell them apart, so both are emitted,
+  marked `ambiguous`, and forced inconclusive — an honest "could not tell" instead of one test
+  being handed the other's result.
+- **I9's broken-box protection now applies where verdicts are made.** It required a cluster of
+  ≥5 tests, but a *picked* cluster is typically 1–3 — so a sick box failing all three was graded
+  `rejected` ("still red, suspected app-bug") rather than `inconclusive`, pointing the operator
+  at the wrong culprit. The size floor added nothing the box's own health probe was not already
+  carrying.
+- **"Could not measure the box" is no longer the same as "the box is sick."** `(.rate // 0) >= 0.8`
+  collapsed both into `false`. Health is now tri-state and `broken_box_suspected` requires
+  *measured* ill health — without that, a setup where the ES aggregation returns nothing would
+  call every all-fail cluster a broken box, and no real failure could ever be confirmed. The new
+  `box_health_known` field makes the difference visible rather than silent.
+
+---
+
 ## 1.0.8
 
 ### Fixed
