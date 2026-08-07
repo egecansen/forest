@@ -167,5 +167,27 @@ ONEPASS='{"a":{"pass":1,"fail":1},"b":{"pass":0,"fail":2}}'
 [ "$(allfail_of "$ONEPASS")" = "false" ] \
   && ok || bad "any pass at all means this is not an all-fail cluster"
 
+# --- narrowing compares CLASSES, on both sides ------------------------------------------------
+# Keys were compared on `split(".")[0]` (for `com.x.FooTest.a` that is `com`) while entries used
+# `${e##*.}` (the METHOD). Class names were matched against method names, so nothing ever matched
+# and the optimisation silently did nothing — and reported nothing — for as long as it existed.
+classof_jq(){ jq -rn --arg k "$1" '$k|gsub("#";".")|split(".")|(.[-2] // .[0])'; }
+classof_sh(){ local c="${1//#/.}"; c="${c%.*}"; echo "${c##*.}"; }
+
+for t in "com.x.FooTest.aMethod" "com.x.FooTest#aMethod" "FooTest.aMethod"; do
+  [ "$(classof_jq "$t")" = "FooTest" ] && ok || bad "jq side must read the class from $t"
+  [ "$(classof_sh "$t")" = "FooTest" ] && ok || bad "shell side must read the class from $t"
+  [ "$(classof_jq "$t")" = "$(classof_sh "$t")" ] \
+    && ok || bad "both sides must agree on the class for $t — disagreeing is what made this a no-op"
+done
+
+# A proven-flaky class (a pass AND a fail seen) is what narrowing drops; an all-fail or all-pass
+# one is still ambiguous and kept.
+AGG='{"com.x.FooTest.a":{"pass":1,"fail":1},"com.x.BarTest.b":{"pass":0,"fail":2}}'
+FLK="$(echo "$AGG" | jq -r 'to_entries|map(select(.value.pass>0 and .value.fail>0))|map(.key|gsub("#";".")|split(".")|(.[-2] // .[0]))|unique|.[]')"
+AMB="$(echo "$AGG" | jq -r 'to_entries|map(select(.value.pass==0 or .value.fail==0))|map(.key|gsub("#";".")|split(".")|(.[-2] // .[0]))|unique|.[]')"
+[ "$FLK" = "FooTest" ] && ok || bad "a class with both a pass and a fail is the one narrowing drops (got '$FLK')"
+[ "$AMB" = "BarTest" ] && ok || bad "an all-fail class stays ambiguous and is kept (got '$AMB')"
+
 echo "rerun-test: $pass passed, $fail failed"
 [ "$fail" -eq 0 ]

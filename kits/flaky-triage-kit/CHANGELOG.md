@@ -27,6 +27,11 @@ refactors that change no behaviour are not entries.
   `rejected` ("still red, suspected app-bug") rather than `inconclusive`, pointing the operator
   at the wrong culprit. The size floor added nothing the box's own health probe was not already
   carrying.
+- **Cluster narrowing actually narrows.** It compared the aggregate's keys on their FIRST
+  dot-segment (`com` for `com.x.FooTest.a`) against each entry's LAST one (the method) — class
+  names matched against method names, so nothing ever matched, every entry fell to
+  default-keep, and the optimisation silently did nothing and said nothing about it. Both
+  sides now read the class.
 - **"Could not measure the box" is no longer the same as "the box is sick."** `(.rate // 0) >= 0.8`
   collapsed both into `false`. Health is now tri-state and `broken_box_suspected` requires
   *measured* ill health — without that, a setup where the ES aggregation returns nothing would

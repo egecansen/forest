@@ -194,10 +194,22 @@ for i in $(seq 1 "$N"); do
   fi
   # NARROW: drop classes whose every method has flipped (proven flaky: both a pass AND a fail seen) from later passes.
   # Always a SUBSET of the pass-1 selector (each kept entry demonstrably ran) + default-KEEP on any uncertainty → never the N1 "ran 0 tests" trap.
-  ambc="$(echo "$agg" | jq -r 'to_entries|map(select(.value.pass==0 or .value.fail==0))|map(.key|split(".")[0])|unique|.[]' 2>/dev/null)"
-  flkc="$(echo "$agg" | jq -r 'to_entries|map(select(.value.pass>0 and .value.fail>0))|map(.key|split(".")[0])|unique|.[]' 2>/dev/null)"
+  # Both sides must name the CLASS, and neither did. The keys were compared on
+  # `split(".")[0]` — the first segment, which for `com.x.FooTest.a` is `com` — while each
+  # entry used `${e##*.}`, the LAST segment, which is the method. Class names were matched
+  # against method names, nothing ever matched, and every entry fell to default-keep: the
+  # optimisation silently did nothing, and reported nothing, for as long as it has existed.
+  #
+  # A class is the second-to-last segment once `#` is normalised to `.`, so `com.x.FooTest.a`
+  # and `com.x.FooTest#a` both yield `FooTest`, and a bare `FooTest.a` still does too. A bare
+  # CLASS selector (`com.x.FooTest`, meaning every method) yields the package segment instead
+  # and therefore matches nothing — which lands on default-keep, the safe direction this
+  # block already takes on any uncertainty. Losing the optimisation costs a pass; guessing
+  # wrong costs a verdict.
+  ambc="$(echo "$agg" | jq -r 'to_entries|map(select(.value.pass==0 or .value.fail==0))|map(.key|gsub("#";".")|split(".")|(.[-2] // .[0]))|unique|.[]' 2>/dev/null)"
+  flkc="$(echo "$agg" | jq -r 'to_entries|map(select(.value.pass>0 and .value.fail>0))|map(.key|gsub("#";".")|split(".")|(.[-2] // .[0]))|unique|.[]' 2>/dev/null)"
   next=""; IFS=',' read -ra ENT <<<"$cur"
-  for e in "${ENT[@]}"; do sc="${e##*.}"
+  for e in "${ENT[@]}"; do _c="${e//#/.}"; _c="${_c%.*}"; sc="${_c##*.}"
     if   printf '%s\n' "$ambc" | grep -qx "$sc"; then next="${next:+$next,}$e"   # still ambiguous → keep
     elif printf '%s\n' "$flkc" | grep -qx "$sc"; then :                          # fully proven flaky → drop
     else next="${next:+$next,}$e"; fi                                            # unmatched → default-keep
