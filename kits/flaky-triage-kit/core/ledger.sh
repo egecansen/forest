@@ -126,6 +126,13 @@ case "$CMD" in
       DIR="$ROOT/.hektor"
     fi
     mkdir -p "$DIR" || die "path: cannot create $DIR" 73
+    # The ledger lands INSIDE the repo, so without this a `git add -A` commits it — run state,
+    # in someone's PR, in a kit whose whole discipline is never to commit anything. A
+    # self-ignoring directory is the least invasive way to stop that: it touches no tracked
+    # file, so the operator gets no diff they did not ask for, and it needs no cooperation from
+    # whatever ignore conventions the project already has. Written once; never rewritten, so a
+    # deliberate edit survives.
+    [ -e "$DIR/.gitignore" ] || printf '*\n' > "$DIR/.gitignore" 2>/dev/null || true
     printf '%s/ledger-%s.json\n' "$DIR" "$BUILD" ;;
 
   init)

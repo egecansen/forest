@@ -204,5 +204,26 @@ printf '%s' '{"run":{"version":2},"clusters":[],"events":[]}' > "$F"
 [ "$("$LEDGER" round "$F")" = "1" ] \
   && ok || bad "a pre-rounds ledger must read as round 1"
 
+# --- the ledger must not be committable ------------------------------------------------------
+# It lands INSIDE the repo, so without an ignore a `git add -A` commits run state into someone's
+# PR — in a kit whose whole discipline is never to commit anything.
+( cd "$TMP" && rm -rf gitcheck && mkdir gitcheck && cd gitcheck && git init -q .
+  P="$("$LEDGER" path some-build 2>/dev/null)"
+  "$LEDGER" init "$P" >/dev/null 2>&1
+  # git's own verdict, not our reading of it.
+  git check-ignore -q "$P" ) \
+  && ok || bad "the ledger must be git-ignored where it is written"
+
+# Nothing else may appear either — a self-ignoring directory is only useful if it covers the
+# directory it is in.
+( cd "$TMP/gitcheck" && [ -z "$(git status --porcelain)" ] ) \
+  && ok || bad "initialising a ledger must leave git status clean"
+
+# The ignore file is written once. A deliberate edit has to survive a later `path` call.
+( cd "$TMP/gitcheck" && printf 'custom\n' > .hektor/.gitignore
+  "$LEDGER" path another-build >/dev/null 2>&1
+  [ "$(cat .hektor/.gitignore)" = "custom" ] ) \
+  && ok || bad "an existing .hektor/.gitignore must not be overwritten"
+
 echo "process-parity-test: $pass passed, $fail failed"
 [ "$fail" -eq 0 ]

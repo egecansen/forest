@@ -9,6 +9,18 @@ refactors that change no behaviour are not entries.
 
 ---
 
+## 1.0.10
+
+### Fixed
+
+- **The ledger could be committed.** `ledger.sh path` writes to `<repo>/.hektor/`, inside the
+  repo, and nothing ignored it — so a `git add -A` put run state into someone's PR, in a kit
+  whose entire discipline is never to commit anything. The directory now ignores itself
+  (`.hektor/.gitignore` containing `*`), which touches no tracked file, needs no cooperation
+  from the project's own ignore conventions, and is written once so a deliberate edit survives.
+
+---
+
 ## 1.0.9
 
 ### Fixed — verdict correctness
