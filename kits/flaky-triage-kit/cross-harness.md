@@ -8,7 +8,7 @@ layer and the enforcement gate are harness-specific, and both degrade gracefully
 | Layer | Claude Code | Cursor | Any other terminal-capable harness (Codex, Windsurf, Cline, Aider, plain CLI, human) |
 |---|---|---|---|
 | **Engine** (`core/ingest`·`cluster`·`rerun`·`apply`·`summary`·`dom-capture`) | ✅ run from terminal | ✅ run from terminal | ✅ run from terminal — it's just `bash`+`jq`+`curl`+`python3`+`gradle` |
-| **Reasoning** (the loop / safety discipline) | `SKILL.md` (skill) | `.cursor/rules/hektor.mdc` (rule) | point the harness's instructions file (`AGENTS.md`, `.windsurfrules`, system prompt) at `SKILL.md` + `kernel.md` |
+| **Reasoning** (the loop / safety discipline) | `SKILL.md` (skill) | `.cursor/rules/hektor-flaky-triage.mdc` (rule) | point the harness's instructions file (`AGENTS.md`, `.windsurfrules`, system prompt) at `SKILL.md` + `kernel.md` |
 | **MCP** (qagent, Jira — advisory) | ✅ | ✅ | ✅ if the harness speaks MCP |
 | **Gate — block a Bash *write* to the kit** | PreToolUse:Bash hook | `beforeShellExecution` hook (`.cursor/hooks/flaky-kit-self-protection-gate.sh`) | only if the harness has a pre-shell hook |
 | **Gate — block an *edit* of the kit** | PreToolUse:Write\|Edit hook | best-effort `preToolUse` Write\|Edit (Cursor has no reliable pre-edit block) | usually none |
@@ -47,7 +47,10 @@ exactly what `SKILL.md` describes. Any model can follow that markdown.
 
 The repo's `.cursor/` is the Cursor port of the whole Hektor methodology (gitignored, local-only). The
 flaky kit is integrated:
-- **Rule:** `.cursor/rules/hektor.mdc` routes flaky-triage prompts to `SKILL.md` and documents the gate.
+- **Rule:** `.cursor/rules/hektor-flaky-triage.mdc` — what this kit's `install.sh --harness cursor`
+  lays down — routes flaky-triage prompts to `SKILL.md` and documents the gate. (In the Hektor
+  monorepo the broader `.cursor/rules/hektor.mdc` also names flaky triage among its skills; the two
+  coexist and converge on the same `SKILL.md`.)
 - **Gate:** `.cursor/hooks/flaky-kit-self-protection-gate.sh`, registered in `.cursor/hooks.json` on
   `beforeShellExecution` + `preToolUse` Write|Edit. It reuses the **same** `core/shell-guard.py` as the
   Claude gate (write-once logic) and Cursor's I/O shim (`.cursor/hooks/lib/cursor-compat.sh`), blocking
