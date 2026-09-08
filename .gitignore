@@ -8,3 +8,4 @@ repos.json
 forest-*.png
 .claude/worktrees/
 .worktrees/
+.achilles/
