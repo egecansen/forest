@@ -72,7 +72,7 @@
       <label class="row-inline">
         <input id="nw-newbranch" type="checkbox" checked /> Create a new branch
       </label>
-      <label>Base <span class="hint">— optional, defaults to the repo's current HEAD</span>
+      <label>Base <span class="hint">— what the new branch is cut from; defaults to the repo's base branch</span>
         <input id="nw-base" type="text" placeholder="master" autocomplete="off" spellcheck="false" />
       </label>
       <div class="modal-actions">
@@ -100,14 +100,64 @@
 
   <div id="picker" class="modal hidden">
     <div class="modal-card picker-card">
-      <h3>Start a Claude session</h3>
+      <h3>Start a session</h3>
       <p class="picker-sub" id="pk-sub"></p>
+      <div class="pk-agent-row">
+        <span class="tk-dim">Agent:</span>
+        <div class="pk-agent" role="group" aria-label="Agent">
+          <button id="pk-agent-claude" class="pk-agent-btn" type="button" data-agent="claude">Claude</button>
+          <button id="pk-agent-cursor" class="pk-agent-btn on" type="button" data-agent="cursor">Cursor CLI</button>
+        </div>
+        <p id="pk-agent-note" class="tk-dim pk-agent-note">Cursor CLI installs each selected pack whole under <code>.cursor/</code> (via its own install.sh) — the checkboxes below shape <code>.claude/</code> only, which cursor-agent does not read.</p>
+      </div>
       <div id="pk-body" class="pk-body"></div>
       <div class="modal-actions">
         <span id="pk-count" class="pk-count"></span>
         <span id="pk-scope" class="pk-scope"></span>
         <button id="pk-cancel" class="btn-ghost">Cancel</button>
-        <button id="pk-start" class="btn-accent">Start session</button>
+        <button id="pk-start" class="btn-accent">Start Cursor CLI</button>
+      </div>
+    </div>
+  </div>
+
+  <div id="tickets" class="modal hidden">
+    <div class="modal-card tickets-card">
+      <button id="tk-close" class="tk-close" type="button" title="Close" aria-label="Close">×</button>
+      <h3>Tickets</h3>
+      <p class="picker-sub" id="tk-sub"></p>
+      <div class="tk-head">
+        <button id="tk-person" class="tk-person" type="button" title="Change person">…</button>
+        <input id="tk-person-q" class="tk-person-q hidden" type="text" placeholder="search people…" autocomplete="off" spellcheck="false" />
+        <div id="tk-people" class="tk-people hidden"></div>
+        <button id="tk-refresh" class="btn-ghost tk-refresh" type="button" title="Refetch from Jira">↻</button>
+      </div>
+      <div class="tk-tabs">
+        <button id="tk-tab-sprint" class="tk-tab on" type="button" data-scope="sprint">Sprint</button>
+        <button id="tk-tab-backlog" class="tk-tab" type="button" data-scope="backlog">Backlog</button>
+        <input id="tk-filter" class="tk-filter" type="text" placeholder="filter…" autocomplete="off" spellcheck="false" />
+      </div>
+      <div id="tk-body" class="tk-body"></div>
+      <div id="tk-boxes" class="tk-boxes"></div>
+      <textarea id="tk-prompt" class="tk-prompt" rows="3" spellcheck="false"></textarea>
+      <div class="tk-target-row">
+        <div class="tk-target" role="group" aria-label="Launch target">
+          <button id="tk-target-terminal" class="tk-target-btn on" type="button" data-target="terminal">Terminal</button>
+          <button id="tk-target-cursor" class="tk-target-btn" type="button" data-target="cursor">Cursor app</button>
+        </div>
+        <div id="tk-agent" class="tk-agent" role="group" aria-label="Agent">
+          <button class="tk-agent-btn" type="button" data-agent="claude">Claude</button>
+          <button class="tk-agent-btn on" type="button" data-agent="cursor">Cursor CLI</button>
+        </div>
+        <p class="tk-dim tk-target-note">Terminal: one session in the primary checkout, seeded with the prompt — Claude reads the ticked skills under .claude/; Cursor CLI installs the selected packs under .cursor/ and reads those. Cursor app: one worktree + branch per ticket, then one Cursor window; Hektor skills + the PR-rules gate come across, multi-ticket fan-out and the Agent-matcher gates (reviewer-brief, dispatch-ordering, schema-preread, attestation, return-schema) do not — tickets run one at a time.</p>
+      </div>
+      <div class="modal-actions">
+        <div class="tk-foot">
+          <span id="tk-count" class="pk-count"></span>
+          <span id="tk-skills" class="tk-skills"></span>
+          <button id="tk-skills-edit" class="tk-link" type="button" title="Open the skill picker for this repo's primary checkout">change</button>
+        </div>
+        <button id="tk-cancel" class="btn-ghost">Cancel</button>
+        <button id="tk-start" class="btn-accent">Start session</button>
       </div>
     </div>
   </div>

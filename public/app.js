@@ -1,3 +1,6 @@
+import { initTickets, openTickets, closeTickets } from './tickets.js';
+import { loadAgent, saveAgent, agentLabel, scopeLine, startLabel, launchToast, repairToast } from './agent-choice.js';
+
 const $ = (s) => document.querySelector(s);
 function esc(s) { return String(s ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;'); }
 const state = { config: null, snapshot: { repos: [] }, filter: '', mode: 'guided', taskBuf: {}, packs: [] };
@@ -52,6 +55,23 @@ function gateBadge(w) {
     ? `<span class="badge b-stale" title="hook scripts registered but absent — the gates are not running">gates ${s.active} · missing ${s.missing}</span>`
     : `<span class="badge b-clean" title="every registered hook resolves to a file">gates ${s.active}</span>`;
 }
+// Maps the closed vocabulary a ticket brief's `Status:` line can carry (see
+// lib/ticket-status.mjs) to a badge color. The ticket key goes in the title
+// only — the branch already shows the number, so the badge itself stays just
+// the status word.
+const TICKET_STATUS_CLASS = {
+  'not started': 'b-tk-not-started',
+  'in progress': 'b-tk-in-progress',
+  blocked: 'b-tk-blocked',
+  'ready for review': 'b-tk-ready',
+};
+function ticketBadge(w) {
+  const t = w.ticketStatus;
+  if (!t || !t.status) return '';
+  const cls = TICKET_STATUS_CLASS[t.status];
+  if (!cls) return '';
+  return `<span class="badge ${cls}" title="${esc(t.key)}">${esc(t.status)}</span>`;
+}
 function agentCell(a) {
   const cls = a.state === 'running' ? 'run' : a.state === 'idle' ? 'idle' : 'unknown';
   const label = a.state === 'running' ? (a.kind || 'agent') : a.state;
@@ -80,15 +100,17 @@ function rowHtml(w, repo) {
   const pruneable = (w.stale || w.merged) && !w.isPrimary;
   return `<div class="row ${w.isPrimary ? '' : 'nested'}${w.priority ? ` prio-${w.priority}` : ''}" data-path="${enc}">
     <div class="col-branch branch">${branchCell(w)}</div>
-    <div class="col-status">${statusBadge(w)}${gateBadge(w)}</div>
+    <div class="col-status">${statusBadge(w)}${gateBadge(w)}${ticketBadge(w)}</div>
     <div class="col-owner">${esc(w.owner)}</div>
     <div class="col-agent">${agentCell(w.agent)}</div>
     <div class="col-age">${ageCell(w)}</div>
     <div class="col-size">${sizeCell(w)}</div>
     <div class="col-actions actions">
       <button title="Quick task" data-act="task" data-path="${enc}">⚡</button>
-      <button title="Launch Claude" data-act="launch" data-path="${enc}">▶</button>
-      ${w.scope && w.scope.missing ? `<button title="Repair ${w.scope.missing} missing hook script(s)" data-act="repair" data-path="${enc}">🩹</button>` : ''}
+      <button title="Launch a session" data-act="launch" data-path="${enc}">▶</button>
+      ${w.scope && w.scope.missing
+        ? `<button title="Repair ${w.scope.missing} missing hook script(s)" data-act="repair" data-path="${enc}">🩹</button>`
+        : `<button title="Refresh hooks: re-provision this worktree from the current pack/kit sources (stale registrations are cleaned up; a session already running here keeps its old hook config until restarted)" data-act="repair" data-path="${enc}">↻</button>`}
       <button title="Open in Cursor" data-act="open-cursor" data-path="${enc}">⤓</button>
       ${w.isPrimary ? '' : `<button data-act="finish" data-path="${enc}" title="Finish: land this worktree's branch in the main checkout">✓</button>`}
       ${pruneable ? `<button title="Prune" data-act="remove" data-path="${enc}" data-repo="${encodeURIComponent(w.repoPath)}" data-primary="${w.isPrimary}">🧹</button>` : ''}
@@ -132,7 +154,7 @@ function render() {
     const removeBtn = r.listed
       ? `<button class="repo-unlist" data-act="unlist-repo" data-path="${encodeURIComponent(r.repoPath)}" title="Remove ${esc(r.repo)} from the list (nothing on disk is deleted)">✕</button>`
       : '';
-    return `<div class="repo-group"><div class="repo-name"><span class="repo-name-label">${esc(r.repo)}<span class="repo-count">${shown.length}</span></span><button class="repo-add" data-repo="${esc(r.repoPath)}" title="New worktree in ${esc(r.repo)}">+ worktree</button><button class="repo-prune" data-act="prune-repo" data-path="${encodeURIComponent(r.repoPath)}" title="Delete worktrees in ${esc(r.repo)} that are merged, clean and older than ${esc(String(state.config?.staleDays ?? 14))} days, and their branches">prune</button>${removeBtn}</div>${rows}</div>`;
+    return `<div class="repo-group"><div class="repo-name"><span class="repo-name-label">${esc(r.repo)}<span class="repo-count">${shown.length}</span></span><button class="repo-add" data-repo="${esc(r.repoPath)}" title="New worktree in ${esc(r.repo)}">+ worktree</button><button class="repo-prune" data-act="prune-repo" data-path="${encodeURIComponent(r.repoPath)}" title="Delete worktrees in ${esc(r.repo)} that are merged, clean and older than ${esc(String(state.config?.staleDays ?? 14))} days, and their branches">prune</button><button class="repo-tickets" data-act="repo-tickets" data-path="${encodeURIComponent(r.repoPath)}" title="Start a session from Jira tickets in ${esc(r.repo)}">tickets</button>${removeBtn}</div>${rows}</div>`;
   }).join('');
   const skippedHtml = (state.snapshot.skippedRepos || []).map(skippedGroupHtml).join('');
   const html = groupsHtml + skippedHtml;
@@ -485,9 +507,9 @@ function renderTaskPanel(path) {
   const buf = state.taskBuf[path];
   if (!buf) { panel.innerHTML = ''; return; }
   panel.innerHTML = `<h4>Task output</h4><pre>${buf.text.replace(/</g, '&lt;')}</pre>
-    ${buf.done ? `<button id="continue-int">Continue interactively</button>` : '<em>running…</em>'}`;
+    ${buf.done ? `<button id="continue-int">Continue in ${agentLabel(loadAgent(localStorage, path))}</button>` : '<em>running…</em>'}`;
   const c = $('#continue-int');
-  if (c) c.onclick = () => api('/api/launch', { path });
+  if (c) c.onclick = () => api('/api/launch', { path, agent: loadAgent(localStorage, path) });
 }
 
 // Shows a button as working for the duration of `fn`, and blocks a second
@@ -512,20 +534,27 @@ async function doAction(act, ds, el) {
   if (act === 'launch') { openPicker(path); return; }
   if (act === 'open-cursor') { await api('/api/open', { path, target: 'cursor' }); return; }
   if (act === 'repair') {
-    const r = await api('/api/worktree/repair', { path });
-    // Pre-branch worktrees have no provision record to replay — repair can only
-    // guess, so hand the user to the picker instead of a dead-end toast.
-    if (r && r.error === 'no provision record') { openPicker(path); return; }
-    if (!r || r.error || !r.scope) { toast(`Repair failed: ${(r && r.error) || 'server unreachable'} — open the picker and re-provision`); return; }
-    toast(`Repaired · ${r.scope.active} hooks active, ${r.scope.missing} missing`);
-    reportConflicts(r.provisioned);
-    return;
+    // withPending: the button itself is the progress indicator — disabled and
+    // showing an hourglass while the replay runs, so a click visibly took.
+    return withPending(el, `repair:${path}`, '⏳', async () => {
+      const r = await api('/api/worktree/repair', { path });
+      // Pre-branch worktrees have no provision record to replay — repair can only
+      // guess, so hand the user to the picker instead of a dead-end toast.
+      if (r && r.error === 'no provision record') { openPicker(path); return; }
+      if (!r || r.error || !r.scope) { toast(`Repair failed: ${(r && r.error) || 'server unreachable'} — open the picker and re-provision`); return; }
+      // The restart reminder is part of the result, not decoration: hook config
+      // is snapshotted at session start, so a session already running in this
+      // worktree keeps exec'ing whatever it loaded — a refresh reaches disk,
+      // never a live snapshot.
+      toast(repairToast(r));
+      reportConflicts(r.provisioned);
+    });
   }
   if (act === 'task') {
     const prompt = state.mode === 'auto' ? window.prompt('Task for Claude (headless):') : null;
     if (state.mode === 'auto' && !prompt) return;
     state.taskBuf[path] = { text: '', done: false };
-    await api('/api/task', { path, prompt, mode: state.mode });
+    await api('/api/task', { path, prompt, mode: state.mode, agent: loadAgent(localStorage, path) });
     openDrawer(path);
     return;
   }
@@ -535,6 +564,19 @@ async function doAction(act, ds, el) {
     return;
   }
   if (act === 'finish') { openFinish(path); return; }
+  if (act === 'repo-tickets') {
+    const repo = state.snapshot.repos.find((r) => r.repoPath === path);
+    const primary = repo && repo.worktrees.find((w) => w.isPrimary);
+    if (!primary) { toast('no primary checkout for this repo'); return; }
+    // baseBranch rides along on `target` even though the seeded prompt no
+    // longer names a base branch at all (that wording was dropped) — kept
+    // here in case a future caller needs it again, cheap to carry, and
+    // removing it now would just be churn on a field nothing currently reads.
+    openTickets({
+      repoPath: repo.repoPath, repo: repo.repo, primaryPath: primary.path, baseBranch: primary.baseBranch,
+    });
+    return;
+  }
   if (act === 'prune-repo') {
     return withPending(el, `prune:${path}`, 'prune…', async () => {
     // `path` is the repo path here. The preview is read-only: nothing is
@@ -589,6 +631,17 @@ async function removeWorktree(w) {
   return r;
 }
 
+// Client-side echo of finish.mjs's dirtyMainRefusal: a Finish that switches the
+// main checkout while it still holds someone's uncommitted work carries that
+// work onto the landed branch. The server refuses too — this only saves the
+// round trip and says so in the dialog's own language.
+function dirtyMainToast(pv) {
+  const tb = pv.targetBranch ?? (pv.candidates || [])[0];
+  if (!pv.mainDirty || pv.mainBranch === tb) return false;
+  toast(`Main checkout has ${pv.mainDirtyCount} uncommitted file(s) — commit or stash them before landing ${tb}`);
+  return true;
+}
+
 let finishCtx = null; // { w, preview }
 
 async function openFinish(path) {
@@ -598,6 +651,7 @@ async function openFinish(path) {
   if (preview.error) { toast(`Error: ${preview.error}`); return; }
   if (preview.mergeInProgress) { toast('Main checkout has a merge in progress — resolve it first'); return; }
   if (!preview.targetBranch && !preview.nameMismatch) { toast('Cannot resolve a target branch for this worktree'); return; }
+  if (dirtyMainToast(preview)) return;
   finishCtx = { w, preview };
   $('#fw-summary').textContent =
     `${preview.worktreeName} → ${preview.relanding ? 'merge into' : 'land as'} ${preview.targetBranch ?? preview.candidates[0]}` +
@@ -618,6 +672,7 @@ async function submitFinish() {
   const fresh = await api('/api/worktree/finish-preview', { repoPath: w.repoPath, path: w.path });
   if (fresh.error) { toast(`Error: ${fresh.error}`); return; }
   if (fresh.mergeInProgress) { toast('Main checkout has a merge in progress — resolve it first'); $('#finishwt').classList.add('hidden'); finishCtx = null; return; }
+  if (dirtyMainToast(fresh)) { $('#finishwt').classList.add('hidden'); finishCtx = null; return; }
   if (fresh.targetBranch !== finishCtx.preview.targetBranch || fresh.nameMismatch !== finishCtx.preview.nameMismatch) {
     toast('Worktree state changed — review again');
     openFinish(w.path);
@@ -638,12 +693,26 @@ async function submitFinish() {
   toast(`Landed ${r.targetBranch}${r.removed ? ', worktree removed' : ''}${r.stashConflict ? ' — stash pop conflicted, stash kept' : ''}${r.removeError ? ` — worktree remove failed: ${r.removeError}` : ''}${r.removeSkipped ? ` — worktree kept: ${r.removeSkipped}` : ''}`);
 }
 
+// The base the new branch will actually be cut from, shown filled in rather
+// than left to a placeholder: the field used to look like it said "master"
+// while an empty value meant "the primary checkout's current HEAD" — two
+// different things every time the primary is not on its base branch. 'HEAD'
+// is never prefilled: it is baseBranch's last resort for a repo where nothing
+// resolves, and the server reaches the same answer from an empty field.
+function repoBaseBranch(repoPath) {
+  const repo = state.snapshot.repos.find((r) => r.repoPath === repoPath);
+  const primary = repo && repo.worktrees.find((w) => w.isPrimary);
+  const base = primary && primary.baseBranch;
+  return !base || base === 'HEAD' ? '' : base;
+}
+
 function openNewWorktree(repoPath) {
   const sel = $('#nw-repo');
   sel.innerHTML = state.snapshot.repos.map((r) => `<option value="${esc(r.repoPath)}">${esc(r.repo)}</option>`).join('');
   if (repoPath) sel.value = repoPath;
   $('#nw-branch').value = '';
-  $('#nw-base').value = '';
+  $('#nw-base').value = repoBaseBranch(sel.value);
+  sel.onchange = () => { $('#nw-base').value = repoBaseBranch(sel.value); };
   $('#nw-newbranch').checked = true;
   $('#newwt').classList.remove('hidden');
   $('#nw-branch').focus();
@@ -668,8 +737,18 @@ async function submitNewWorktree() {
   toast(state.mode === 'guided' ? 'Create sent to terminal' : 'Worktree created');
 }
 
-// ---- skill/kit picker (shown before launching a Claude session) ----
+// ---- skill/kit picker (shown before launching a session) ----
 let pickerPath = null;
+// Which agent Start launches. Restored per worktree on open from
+// forest-agent:<path> (Task 9's loadAgent), written on click.
+let pickerAgent = 'cursor';
+// refreshPickerScope is async and the toggle can be clicked (or the picker
+// re-opened on another row) while a fetch is in flight; the token lets the
+// stale response drop instead of painting the previous agent's line.
+let scopeToken = 0;
+// The last /api/worktree/scope response for pickerPath, so a checkbox click
+// can repaint the line without a refetch. Cleared on every refresh.
+let pickerScope = null;
 const skillKey = (path) => `forest-skills:${path}`;
 function loadSel(path) { try { return JSON.parse(localStorage.getItem(skillKey(path))) || {}; } catch { return {}; } }
 function saveSel(path, sel) { localStorage.setItem(skillKey(path), JSON.stringify(sel)); }
@@ -681,28 +760,70 @@ function skillRow(pack, kind, id, label, desc, checked) {
     <span class="pk-item-text"><span class="pk-item-label">${esc(label)}</span>${desc ? `<span class="pk-item-desc">${esc(desc)}</span>` : ''}</span>
   </label>`;
 }
+// One collapsible section: a master checkbox that takes the whole group in a
+// single click, plus a header that folds the rows away so 20+ skills across
+// five groups stay skimmable. Collapsed by default; a group that carries a
+// saved selection opens, so the picker never hides what it is about to launch.
+function pkGroup(title, rows, open) {
+  return `<section class="pk-group${open ? ' open' : ''}">
+    <div class="pk-group-h">
+      <input type="checkbox" class="pk-group-cb" aria-label="Select all ${esc(title)}" />
+      <button type="button" class="pk-group-toggle" aria-expanded="${open ? 'true' : 'false'}">
+        <span class="pk-chev" aria-hidden="true">▶</span>
+        <span class="pk-group-name">${esc(title)}</span>
+        <span class="pk-group-count"></span>
+      </button>
+    </div>
+    <div class="pk-group-body${open ? '' : ' hidden'}">${rows}</div>
+  </section>`;
+}
+function setGroupOpen(group, open) {
+  if (!group) return;
+  group.classList.toggle('open', open);
+  const btn = group.querySelector('.pk-group-toggle');
+  if (btn) btn.setAttribute('aria-expanded', open ? 'true' : 'false');
+  const body = group.querySelector('.pk-group-body');
+  if (body) body.classList.toggle('hidden', !open);
+}
 function renderPack(p, picked) {
   const skills = picked.skills || [], kits = picked.kits || [];
   const groups = (p.groups && p.groups.length) ? p.groups : [...new Set(p.skillsets.map((s) => s.group || 'other'))];
   const sections = groups.map((g) => {
     const items = p.skillsets.filter((s) => (s.group || 'other') === g);
     if (!items.length) return '';
-    return `<div class="pk-group"><div class="pk-group-h">${esc(groupLabel(g))}</div>${
-      items.map((s) => skillRow(p.pack, 'skill', s.id, s.label, s.description, skills.includes(s.id))).join('')}</div>`;
+    const rows = items.map((s) => skillRow(p.pack, 'skill', s.id, s.label, s.description, skills.includes(s.id))).join('');
+    return pkGroup(groupLabel(g), rows, items.some((s) => skills.includes(s.id)));
   }).join('');
   const kitSection = (p.kits && p.kits.length)
-    ? `<div class="pk-group"><div class="pk-group-h">Kits</div>${p.kits.map((k) => skillRow(p.pack, 'kit', k.id, k.label, '', kits.includes(k.id))).join('')}</div>`
+    ? pkGroup('Kits', p.kits.map((k) => skillRow(p.pack, 'kit', k.id, k.label, '', kits.includes(k.id))).join(''),
+      p.kits.some((k) => kits.includes(k.id)))
     : '';
   const hooksSection = p.hooks
-    ? `<div class="pk-group"><div class="pk-group-h">Gates</div>${skillRow(p.pack, 'hooks', p.hooks.id, p.hooks.label, p.hooks.description, !!picked.hooks)}</div>`
+    ? pkGroup('Gates', skillRow(p.pack, 'hooks', p.hooks.id, p.hooks.label, p.hooks.description, !!picked.hooks), !!picked.hooks)
     : '';
   const head = `<div class="pk-pack-h"><label class="pk-all-row"><input type="checkbox" class="pk-all" /> Select all ${esc(p.pack)}</label></div>`;
   return `<div class="pk-pack">${head}${sections}${kitSection}${hooksSection}</div>`;
 }
 
-// Reflect each pack's "Select all" master from its individual checkboxes
-// (checked when all are on, indeterminate when some are).
+// Reflect every master — per group and per pack — from the individual
+// checkboxes under it (checked when all are on, indeterminate when some are),
+// and stamp each group header with its own n/total, so a collapsed group still
+// says what it holds and what is picked inside it.
 function syncMasters() {
+  document.querySelectorAll('#pk-body .pk-group').forEach((g) => {
+    const boxes = g.querySelectorAll('.pk-cb');
+    const on = [...boxes].filter((b) => b.checked).length;
+    const master = g.querySelector('.pk-group-cb');
+    if (master) {
+      master.checked = boxes.length > 0 && on === boxes.length;
+      master.indeterminate = on > 0 && on < boxes.length;
+    }
+    const count = g.querySelector('.pk-group-count');
+    if (count) {
+      count.textContent = on ? `${on}/${boxes.length}` : `${boxes.length}`;
+      count.classList.toggle('on', on > 0);
+    }
+  });
   document.querySelectorAll('#pk-body .pk-pack').forEach((pk) => {
     const all = pk.querySelector('.pk-all');
     if (!all) return;
@@ -721,30 +842,52 @@ function openPicker(path) {
   const sel = loadSel(path);
   $('#pk-body').innerHTML = state.packs.length
     ? state.packs.map((p) => renderPack(p, sel[p.pack] || {})).join('')
-    : `<p class="pk-empty">No skill packs found in <code>SKLS/</code>. Claude will start with no extra skills.</p>`;
+    : `<p class="pk-empty">No skill packs found in <code>SKLS/</code>. The session will start with no extra skills.</p>`;
   $('#picker').classList.remove('hidden');
   syncMasters();
-  updatePickerCount();
-  refreshPickerScope(path);
+  // Restores the saved agent, relabels Start and fetches the scope line for
+  // that agent — the same three things a toggle click does. persist: false —
+  // reading what was last chosen must not immediately write it back.
+  setPickerAgent(loadAgent(localStorage, path), { persist: false });
 }
-function closePicker() { $('#picker').classList.add('hidden'); pickerPath = null; }
+function closePicker() { $('#picker').classList.add('hidden'); pickerPath = null; pickerScope = null; }
+function setPickerAgent(agent, { persist = true } = {}) {
+  pickerAgent = agent === 'claude' ? 'claude' : 'cursor';
+  document.querySelectorAll('.pk-agent-btn').forEach((b) => b.classList.toggle('on', b.dataset.agent === pickerAgent));
+  // The note only matters when the checkboxes will NOT be what the session
+  // reads — i.e. Cursor CLI.
+  $('#pk-agent-note').classList.toggle('hidden', pickerAgent !== 'cursor');
+  if (persist && pickerPath) saveAgent(localStorage, pickerPath, pickerAgent);
+  updatePickerCount();
+  if (pickerPath) refreshPickerScope(pickerPath);
+}
 function updatePickerCount() {
   const n = document.querySelectorAll('#pk-body .pk-cb:checked').length;
   $('#pk-count').textContent = n ? `${n} selected` : 'none selected';
-  $('#pk-start').textContent = n ? 'Provision & start' : 'Start session';
+  $('#pk-start').textContent = startLabel(pickerAgent, n);
+  // The Cursor wording depends on whether anything is ticked, so a checkbox
+  // click repaints the line from the last fetched scope — no refetch.
+  paintPickerScope(n);
+}
+function paintPickerScope(selectedCount) {
+  const el = $('#pk-scope');
+  if (!pickerScope) { el.textContent = ''; el.classList.remove('warn'); return; }
+  const line = scopeLine(pickerAgent, pickerScope, selectedCount);
+  el.textContent = line.text;
+  el.classList.toggle('warn', !!line.warn);
 }
 // What the session will load today — before provisioning anything. Makes the
-// remaining ~/.claude inheritance visible instead of implicit.
+// remaining ~/.claude inheritance visible instead of implicit; for Cursor CLI
+// it reads the .cursor/hooks.json block instead.
 async function refreshPickerScope(path) {
-  const el = $('#pk-scope');
-  el.textContent = '';
-  el.classList.remove('warn');
+  pickerScope = null;
+  paintPickerScope(0);
+  const token = ++scopeToken;
   const s = await api('/api/worktree/scope', { path });
+  if (token !== scopeToken || pickerPath !== path) return;
   if (!s || s.error || !s.sources) return;
-  el.textContent = s.missing.length
-    ? `${s.active} hooks active · ${s.missing.length} missing`
-    : `${s.active} hooks active · ${s.sources.length} settings source(s)`;
-  if (s.missing.length) el.classList.add('warn');
+  pickerScope = s;
+  paintPickerScope(document.querySelectorAll('#pk-body .pk-cb:checked').length);
 }
 function collectSel() {
   const sel = {};
@@ -761,29 +904,33 @@ function collectSel() {
 // the path and moves on. Until now that list reached the journal and nothing
 // else, so a launch that quietly kept a stale file looked identical to one
 // that refreshed everything.
+// A toast, deliberately not an alert(): conflicts arrive one per provisioned
+// worktree, and a modal per worktree walls the user off from their own app
+// (observed 2026-08-05 — "I cannot pass through this pop up"). Every conflict
+// is already journalled line-by-line by the server; the toast says how many
+// and where to read them.
 function reportConflicts(prov) {
   const c = (prov && prov.conflicts) || [];
   if (!c.length) return;
-  const shown = c.slice(0, 8).map((x) => `  • ${x.path}\n      kept ${x.existing}'s copy, skipped ${x.incoming}'s`);
-  alert(
-    `${c.length} file(s) already existed with different content and were left exactly as they were:\n\n`
-    + `${shown.join('\n')}${c.length > shown.length ? `\n  … and ${c.length - shown.length} more` : ''}\n\n`
-    + 'Provisioning never overwrites a file whose content differs — these are still at their old content, '
-    + 'not the pack\'s. Delete the ones you did not hand-edit and launch again to take the pack\'s version.',
+  const first = c[0].path.split('/').slice(-2).join('/');
+  toast(
+    `${c.length} file(s) kept at their existing content (${first}${c.length > 1 ? ', …' : ''}) — `
+    + 'hand-edited or colliding copies are never overwritten; details in the command journal',
   );
 }
 
 // Everything a launch response carries that is worth saying: what was
 // provisioned, what gates are still missing (a forced launch reports them and
 // used to drop them on the floor), and what provisioning refused to overwrite.
-function reportLaunched(r) {
-  const prov = r.provisioned;
-  const provMsg = prov && (prov.skills.length || prov.kits.length || prov.hooks)
-    ? `${prov.skills.length} skill(s)${prov.kits.length ? `, ${prov.kits.length} kit(s)` : ''}${prov.hooks ? ', gates' : ''} · ` : '';
-  const miss = r.scope && r.scope.missing ? r.scope.missing.length : 0;
-  if (miss) toast(`${provMsg}Launching Claude — ${miss} registered hook script(s) missing`);
-  else toast(r.action === 'focused' ? 'Claude already running — Terminal brought to front' : `${provMsg}Launching Claude…`);
-  reportConflicts(prov);
+//
+// `lead` is an optional prefix for callers that launched with more context
+// than the picker has — the Tickets modal names how many tickets went into the
+// prompt. It defaults to '' so every existing call site reads exactly as
+// before; a caller that wants its own sentence must still come through here,
+// because this is the only place scope.missing and conflicts are reported.
+function reportLaunched(r, lead = '') {
+  toast(launchToast(r, lead));
+  reportConflicts(r.provisioned);
 }
 
 async function startSession() {
@@ -794,68 +941,28 @@ async function startSession() {
   const selections = Object.entries(sel).map(([pack, v]) => ({ pack, skills: v.skills, kits: v.kits, hooks: v.hooks }));
   const btn = $('#pk-start');
   btn.disabled = true;
-  const r = await api('/api/launch', { path, selections, mode: state.mode });
+  const r = await api('/api/launch', { path, selections, mode: state.mode, agent: pickerAgent });
   btn.disabled = false;
   if (r && r.blocked === 'missing-hooks') {
     const names = r.missing
       .map((h) => (h.command.match(/([^/"']+\.sh)/) || [, h.command])[1])
       .filter((v, i, a) => a.indexOf(v) === i);
     const list = names.map((n) => `    ${n}`).join('\n');
-    // Step 1 — the abort. Cancel (and Escape, which maps to it) must NOT start
-    // a session: dismissing a dialog should never be what launches an ungated
-    // agent. Launching is only ever reached by an explicit OK.
-    const proceed = confirm(
+    // ONE dialog, launch-or-not. Repair is no longer offered here: the ↻
+    // button on the worktree row is the repair surface, and chaining two more
+    // confirms behind this one buried the launch under popups (observed
+    // 2026-08-05). Cancel (and Escape, which maps to it) must NOT start a
+    // session: dismissing a dialog should never be what launches an ungated
+    // agent — launching is only ever reached by an explicit OK.
+    if (!confirm(
       `Launch Claude with ${r.missing.length} hook script(s) missing?\n\n${list}\n\n`
-      + 'The gates are not running.\n\n'
-      + 'OK — continue.\n'
-      + 'Cancel — do not launch.',
-    );
-    if (!proceed) return;
-
-    // Step 2 — how to continue. The remedy is NOT gated on `repairable`, and
-    // that is the point: whatever the flag says, this is the thing that works,
-    // so the user hears it either way.
-    //
-    // `repairable` is honest in one direction only. `false` is provable —
-    // replaying the record cannot write any hook wiring, so a repair run
-    // changes nothing. `true` means "might": a kit that ships install.sh owns
-    // its own wiring and forest cannot know which files that installer
-    // touches. Gating this paragraph behind !repairable is how a user got
-    // "Repair before launching?" — definite, and sometimes false — and never
-    // learned the remedy that actually fixes it.
-    const remedy =
-      'The fix that works: re-select the unit that installed them in the launcher and launch. '
-      + 'That re-runs its own installer, which is what rewrites the registration. '
-      + 'If no pack offers it any more, edit .claude/settings.json by hand.\n\n';
-
-    if (!r.repairable) {
-      if (!confirm(
-        'Forest cannot repair this worktree. Repair only re-provisions what the '
-        + 'provision record still names, and nothing it names writes any hook wiring '
-        + '— the run would change nothing.\n\n'
-        + remedy
-        + 'OK — launch anyway, with the gates off.\n'
-        + 'Cancel — do not launch.',
-      )) return;
-    }
-    const repair = r.repairable && confirm(
-      'Repair before launching?\n\n'
-      + 'Repair re-provisions what the record still names. That MAY rewrite these '
-      + 'registrations — a kit\'s install.sh owns its own wiring, and forest cannot '
-      + 'know which files it writes — but it is not guaranteed.\n\n'
-      + remedy
-      + 'OK — re-provision, then launch.\n'
-      + 'Cancel — launch without repairing.',
-    );
-    if (repair) {
-      const rep = await api('/api/worktree/repair', { path, mode: state.mode });
-      if (!rep || rep.error) { toast(`Repair failed: ${(rep && rep.error) || 'server unreachable'}`); return; }
-      toast(`Repaired · ${rep.scope.active} hooks active, ${rep.scope.missing} missing`);
-      reportConflicts(rep.provisioned);
-    }
+      + 'These gates will not run in this session.\n\n'
+      + 'OK — launch anyway.\n'
+      + 'Cancel — do not launch. (To fix the gates first, use ↻ on this worktree\'s row, then launch again.)',
+    )) return;
     // selections: [] on purpose — provisioning already ran on the first call,
     // and re-sending them would provision twice.
-    const forced = await api('/api/launch', { path, selections: [], mode: state.mode, force: true });
+    const forced = await api('/api/launch', { path, selections: [], mode: state.mode, agent: pickerAgent, force: true });
     if (!forced || !forced.ok) { toast(`Launch failed: ${(forced && forced.error) || 'server unreachable'}`); return; }
     closePicker();
     reportLaunched(forced);
@@ -897,7 +1004,9 @@ async function startSession() {
       let unmatched = 0;
       for (const o of r.orphaned) {
         const cb = $(`.pk-cb[data-kind="${o.kind}"][data-id="${o.id}"]`);
-        if (cb) cb.checked = true; else unmatched++;
+        // Open the group too: a re-checked box inside a collapsed section is a
+        // selection the user never sees before it launches.
+        if (cb) { cb.checked = true; setGroupOpen(cb.closest('.pk-group'), true); } else unmatched++;
       }
       syncMasters();
       updatePickerCount();
@@ -914,7 +1023,7 @@ async function startSession() {
       // has been provisioned yet — the orphan check runs before
       // provisioning — so the real selections still need to go along on
       // this forced call.
-      const forced = await api('/api/launch', { path, selections, mode: state.mode, force: true });
+      const forced = await api('/api/launch', { path, selections, mode: state.mode, agent: pickerAgent, force: true });
       if (!forced || !forced.ok) { toast(`Launch failed: ${(forced && forced.error) || 'server unreachable'}`); return; }
       closePicker();
       // The response carries scope.missing and provisioned.conflicts. Toasting
@@ -1044,12 +1153,30 @@ function wireEvents() {
   $('#finishwt').addEventListener('click', (e) => { if (e.target.id === 'finishwt') $('#finishwt').classList.add('hidden'); });
   $('#pk-cancel').onclick = closePicker;
   $('#pk-start').onclick = startSession;
+  document.querySelectorAll('.pk-agent-btn').forEach((b) => { b.onclick = () => setPickerAgent(b.dataset.agent); });
+  // The seam stays one-way: tickets.js never imports back out of app.js, so
+  // everything it needs from here — the launch reporters that own the
+  // missing-gate and conflict wording, and the skill picker the footer links
+  // to — is handed over at init.
+  initTickets({ api, toast, esc, state, reportLaunched, reportConflicts, openPicker });
   $('#picker').addEventListener('click', (e) => { if (e.target.id === 'picker') closePicker(); });
   $('#pk-body').addEventListener('change', (e) => {
-    if (e.target.classList.contains('pk-all')) {
-      e.target.closest('.pk-pack').querySelectorAll('.pk-cb').forEach((cb) => { cb.checked = e.target.checked; });
+    const t = e.target;
+    if (t.classList.contains('pk-all')) {
+      t.closest('.pk-pack').querySelectorAll('.pk-cb').forEach((cb) => { cb.checked = t.checked; });
     }
-    if (e.target.classList.contains('pk-cb') || e.target.classList.contains('pk-all')) { syncMasters(); updatePickerCount(); }
+    if (t.classList.contains('pk-group-cb')) {
+      t.closest('.pk-group').querySelectorAll('.pk-cb').forEach((cb) => { cb.checked = t.checked; });
+    }
+    if (t.classList.contains('pk-cb') || t.classList.contains('pk-all') || t.classList.contains('pk-group-cb')) {
+      syncMasters();
+      updatePickerCount();
+    }
+  });
+  $('#pk-body').addEventListener('click', (e) => {
+    const btn = e.target.closest('.pk-group-toggle');
+    if (!btn) return;
+    setGroupOpen(btn.closest('.pk-group'), btn.getAttribute('aria-expanded') !== 'true');
   });
   $('#search').oninput = (e) => { state.filter = e.target.value; render(); };
   $('#fetch-all').onclick = async () => { const r = await api('/api/fetch-all', { mode: state.mode }); toast(state.mode === 'guided' ? 'Sent to terminal' : 'Fetched all'); };
@@ -1074,7 +1201,7 @@ function wireEvents() {
 
   document.addEventListener('keydown', (e) => {
     if ((e.metaKey || e.ctrlKey) && e.key === 'k') { e.preventDefault(); togglePalette(); }
-    if (e.key === 'Escape') { $('#palette').classList.add('hidden'); closeDrawer(); $('#newwt').classList.add('hidden'); $('#picker').classList.add('hidden'); $('#finishwt').classList.add('hidden'); }
+    if (e.key === 'Escape') { $('#palette').classList.add('hidden'); closeDrawer(); $('#newwt').classList.add('hidden'); $('#picker').classList.add('hidden'); $('#finishwt').classList.add('hidden'); closeTickets(); }
   });
 }
 

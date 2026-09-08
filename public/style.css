@@ -152,6 +152,14 @@ main { max-width: 1320px; margin: 0 auto; padding: 16px 18px 210px; }
   border-radius: 8px; cursor: pointer; transition: color .12s, border-color .12s, background .12s;
 }
 .repo-prune:hover { color: var(--danger); border-color: var(--danger); background: var(--danger-weak); }
+/* Sized like its neighbours; not destructive, so it hovers toward accent
+   rather than the warn colour .repo-prune/.repo-unlist use. */
+.repo-tickets {
+  margin-left: 6px; font: 12px var(--font-ui); color: var(--muted);
+  background: transparent; border: 1px solid transparent; padding: 4px 10px;
+  border-radius: 8px; cursor: pointer; transition: color .12s, border-color .12s, background .12s;
+}
+.repo-tickets:hover { color: var(--accent); border-color: var(--accent); background: var(--accent-weak); }
 .repo-count {
   font-family: var(--font-mono); font-size: 11px; font-weight: 500; color: var(--muted);
   border: 1px solid var(--line); border-radius: 999px; padding: 0 7px;
@@ -191,6 +199,12 @@ main { max-width: 1320px; margin: 0 auto; padding: 16px 18px 210px; }
 .b-clean { color: var(--green); background: var(--green-bg); }
 .b-changed { color: var(--amber); background: var(--amber-bg); }
 .b-stale { color: var(--muted); background: var(--stale-bg); }
+
+/* Ticket brief Status:, per lib/ticket-status.mjs's closed vocabulary. */
+.b-tk-not-started { color: var(--muted); background: var(--stale-bg); }
+.b-tk-in-progress { color: var(--run); background: var(--accent-weak); }
+.b-tk-blocked { color: var(--danger); background: var(--danger-weak); }
+.b-tk-ready { color: var(--green); background: var(--green-bg); }
 
 .col-agent span { display: inline-flex; align-items: center; color: var(--muted); font-size: 13px; }
 .dot { width: 8px; height: 8px; border-radius: 50%; display: inline-block; margin-right: 7px; flex: none; }
@@ -344,10 +358,26 @@ main { max-width: 1320px; margin: 0 auto; padding: 16px 18px 210px; }
 .pk-pack-h { margin: 8px 0 2px; }
 .pk-all-row { display: inline-flex; align-items: center; gap: 8px; cursor: pointer; font: 12px var(--font-mono); color: var(--accent); padding: 4px 2px; }
 .pk-all { accent-color: var(--accent); }
-.pk-group { margin-bottom: 10px; }
-.pk-group-h { font: 10px var(--font-ui); text-transform: uppercase; letter-spacing: .07em; color: var(--muted); margin: 12px 2px 4px; }
-.pk-item { display: flex; gap: 10px; align-items: flex-start; padding: 7px 8px; border-radius: 9px; cursor: pointer; }
-.pk-item:hover { background: var(--panel-2); }
+.pk-group { border-top: 1px solid var(--line); }
+.pk-group-h { display: flex; align-items: center; gap: 9px; padding: 0 2px; }
+.pk-group-cb { accent-color: var(--accent); flex: none; margin: 0; }
+.pk-group-toggle {
+  flex: 1; display: flex; align-items: center; gap: 8px; min-width: 0;
+  padding: 9px 8px; border: 0; border-radius: 8px; background: none; cursor: pointer;
+  font: 10px var(--font-ui); text-transform: uppercase; letter-spacing: .07em; color: var(--muted);
+}
+.pk-group-toggle:hover { background: var(--panel-2); color: var(--ink); }
+.pk-group-toggle:focus-visible { outline: 1px solid var(--accent); outline-offset: 1px; }
+.pk-chev { font-size: 8px; line-height: 1; transition: transform .12s ease; }
+.pk-group.open .pk-chev { transform: rotate(90deg); }
+.pk-group-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.pk-group-count { margin-left: auto; font-variant-numeric: tabular-nums; letter-spacing: 0; opacity: .7; }
+.pk-group-count.on { color: var(--accent); opacity: 1; }
+.pk-group-body { padding: 2px 0 8px 12px; }
+/* .modal-card label (display:block) outranks a bare .pk-item, which stacked
+   every row's checkbox above its own label; scope it to win that cascade. */
+.pk-body .pk-item { display: flex; gap: 10px; align-items: flex-start; padding: 7px 8px; margin: 0; border-radius: 9px; cursor: pointer; }
+.pk-body .pk-item:hover { background: var(--panel-2); }
 .pk-cb { margin-top: 3px; accent-color: var(--accent); flex: none; }
 .pk-item-text { display: flex; flex-direction: column; gap: 1px; min-width: 0; }
 .pk-item-label { font-size: 13.5px; color: var(--ink); }
@@ -444,3 +474,80 @@ main { max-width: 1320px; margin: 0 auto; padding: 16px 18px 210px; }
 
 /* the Branch → Jira button's "field is empty" nudge */
 .desc-flat.attn::after { content: ''; display: inline-block; width: 7px; height: 7px; border-radius: 50%; background: var(--amber); margin-left: 6px; }
+
+/* ---- tickets modal ---- */
+/* The card is a viewport-bounded flex column: the ticket list absorbs the
+   slack while the boxes, prompt and actions keep their natural height. Without
+   this the modal grew past the bottom of the screen — .modal itself does not
+   scroll — and the Start button became unreachable (observed 2026-08-18). */
+#tickets { padding-top: 8vh; }
+.tickets-card { position: relative; }
+.tk-close {
+  position: absolute; top: 10px; right: 12px; z-index: 1;
+  width: 28px; height: 28px; padding: 0; line-height: 1;
+  border: 1px solid transparent; border-radius: 8px;
+  background: none; color: var(--muted); font-size: 19px; cursor: pointer;
+}
+.tk-close:hover { color: var(--ink); background: var(--panel-2); border-color: var(--line); }
+.tk-close:focus-visible { outline: 1px solid var(--accent); outline-offset: 1px; }
+.tickets-card { width: 680px; max-width: 96vw; max-height: 84vh; display: flex; flex-direction: column;
+  /* last resort: on a short viewport even the shrunken list cannot make the
+     boxes + reserve form + prompt + actions fit, so the card scrolls rather
+     than hiding its own footer. */
+  overflow-y: auto; }
+.tickets-card > h3, .tickets-card > .picker-sub, .tickets-card > .tk-head,
+.tickets-card > .tk-tabs, .tickets-card > .tk-boxes, .tickets-card > .tk-prompt,
+.tickets-card > .modal-actions { flex: none; }
+.tk-head { display: flex; align-items: center; gap: 8px; margin-bottom: 10px; position: relative; }
+.tk-person { padding: 6px 12px; border: 1px solid var(--line); background: var(--bg); color: var(--ink); border-radius: 8px; cursor: pointer; font: 13px var(--font-ui); }
+.tk-person:hover { border-color: var(--accent); }
+.tk-person-q { flex: 1; padding: 6px 10px; font: 13px var(--font-mono); color: var(--ink); background: var(--bg); border: 1px solid var(--line); border-radius: 8px; }
+.tk-people { position: absolute; top: 36px; left: 0; z-index: 5; width: 320px; max-height: 220px; overflow: auto; background: var(--panel); border: 1px solid var(--line); border-radius: 9px; box-shadow: 0 8px 24px var(--shadow); }
+.tk-person-hit { display: block; width: 100%; text-align: left; padding: 7px 10px; border: 0; background: none; color: var(--ink); font: 13px var(--font-ui); cursor: pointer; }
+.tk-person-hit:hover { background: var(--panel-2); }
+.tk-dim { color: var(--muted); font-family: var(--font-mono); font-size: 11.5px; }
+.tk-refresh { margin-left: auto; padding: 5px 10px; }
+.tk-tabs { display: flex; align-items: center; gap: 8px; margin-bottom: 8px; }
+.tk-tab { padding: 6px 12px; border: 1px solid var(--line); background: var(--bg); color: var(--muted); border-radius: 8px; cursor: pointer; font: 12px var(--font-ui); }
+.tk-tab.on { border-color: var(--accent); color: var(--accent); background: var(--accent-weak); }
+.tk-filter { margin-left: auto; padding: 6px 10px; font: 12px var(--font-mono); color: var(--ink); background: var(--bg); border: 1px solid var(--line); border-radius: 8px; }
+.tk-body { flex: 1 1 auto; min-height: 60px; overflow: auto; margin: 0 -6px 10px; padding: 0 6px; }
+.tk-body .tk-item { display: flex; align-items: baseline; gap: 9px; margin: 0; padding: 6px 8px; border-radius: 8px; cursor: pointer; }
+.tk-body .tk-item:hover { background: var(--panel-2); }
+.tk-cb, .tk-box-cb { accent-color: var(--accent); flex: none; }
+.tk-key { font: 12px var(--font-mono); color: var(--accent); flex: none; }
+.tk-status { font-size: 11px; color: var(--muted); flex: none; min-width: 84px; }
+.tk-summary { font-size: 13px; color: var(--ink); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.tk-empty { color: var(--muted); font-size: 12.5px; padding: 8px 2px; }
+.tk-err { color: var(--danger); }
+/* No inner scroll cap here: the box row now holds the held-box list, the
+   connect panel AND a revealable reserve form, which a 22vh window turned
+   into a ~4x-overflowing keyhole. The card itself is a flex column that
+   scrolls (see .tickets-card), so this section can size to its content and
+   stay reachable without a scroll region nested inside a scroll region. */
+.tk-boxes { display: flex; align-items: center; flex-wrap: wrap; gap: 12px; padding: 8px 2px; border-top: 1px solid var(--line); flex: none; }
+.tk-boxes-h { font: 10px var(--font-ui); text-transform: uppercase; letter-spacing: .07em; color: var(--muted); width: 100%; }
+.tk-body .tk-box, .tk-boxes .tk-box { display: inline-flex; align-items: center; gap: 7px; margin: 0; font: 12px var(--font-mono); color: var(--ink); cursor: pointer; }
+.tk-prompt { width: 100%; margin: 8px 0 4px; padding: 8px 10px; font: 12px var(--font-mono); color: var(--ink); background: var(--panel-2); border: 1px solid var(--line); border-radius: 8px; resize: vertical; }
+.tk-target-row { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; margin: 2px 0 8px; }
+.tk-target { display: flex; gap: 6px; flex: none; }
+.tk-target-btn, .tk-agent-btn, .pk-agent-btn { padding: 5px 11px; border: 1px solid var(--line); background: var(--bg); color: var(--muted); border-radius: 8px; cursor: pointer; font: 12px var(--font-ui); }
+.tk-target-btn.on, .tk-agent-btn.on, .pk-agent-btn.on { border-color: var(--accent); color: var(--accent); background: var(--accent-weak); }
+.tk-target-note { margin: 0; flex: 1 1 260px; font-size: 11.5px; }
+.tk-agent { display: flex; gap: 6px; flex: none; }
+.pk-agent-row { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; margin: 0 0 12px; }
+.pk-agent { display: flex; gap: 6px; flex: none; }
+.pk-agent-note { margin: 0; flex: 1 1 260px; font-size: 11.5px; }
+.tk-srp-connect { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 10px; width: 100%; padding: 9px 10px; margin: 2px 0; background: var(--panel-2); border: 1px solid var(--line); border-radius: 8px; }
+.tk-srp-connect p { margin: 0; flex: 1 1 240px; font-size: 12px; color: var(--muted); }
+.tk-srp-connect a:not(.tk-bookmarklet) { color: var(--accent); }
+.tk-srp-login { width: 100%; display: flex; flex-wrap: wrap; gap: 8px; }
+.tk-srp-login input { flex: 1; min-width: 120px; padding: 6px 9px; font: 12px var(--font-mono); color: var(--ink); background: var(--bg); border: 1px solid var(--line); border-radius: 8px; }
+.tk-srp-login button { flex: none; }
+#tk-srp-login-err { width: 100%; }
+.tk-bookmarklet { padding: 6px 12px; border: 1px dashed var(--accent); border-radius: 8px; background: var(--accent-weak); color: var(--accent); font: 12px var(--font-mono); text-decoration: none; cursor: grab; }
+.tk-bookmarklet:hover { background: var(--accent); color: var(--panel); }
+.tk-foot { display: flex; align-items: center; flex-wrap: wrap; gap: 4px 10px; margin-right: auto; }
+.tk-skills { color: var(--muted); font-size: 12px; }
+.tk-skills.tk-warn { color: var(--danger); }
+.tk-link { padding: 0; border: 0; background: none; color: var(--accent); font: 12px var(--font-ui); text-decoration: underline; cursor: pointer; }

@@ -8,9 +8,15 @@
   "jiraToken": "",
   "jiraEmail": "",
   "jiraBranchFieldId": "",
+  "testboxes": ["x:161", "x:230"],
+  "srpBaseUrl": "https://srp.ngntest.sahibindenlocal.net/api",
+  "srpRefreshToken": "",
+  "srpUsername": "",
   "staleDays": 14,
   "defaultMode": "guided",
   "terminalApp": "Terminal",
+  "claudeCmd": "claude",
+  "cursorAgentCmd": "cursor-agent",
   "openEditorCmd": "open -a Cursor",
   "setupScript": ".forest-setup.sh"
 }

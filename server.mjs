@@ -8,7 +8,7 @@ import { createRegistry } from './lib/agents.mjs';
 import { createJournal } from './lib/journal.mjs';
 import { runGit } from './lib/git.mjs';
 import { listPacks } from './lib/packs.mjs';
-import { createActionHandler } from './lib/actions.mjs';
+import { createActionHandler, originOf } from './lib/actions.mjs';
 import { pruneLandings } from './lib/landed.mjs';
 import { readRepoState } from './lib/repos.mjs';
 
@@ -21,6 +21,11 @@ const clientConfig = publicConfig(config);
 const registry = createRegistry();
 const journal = createJournal({ max: 300 });
 const sizes = new Map();
+// Server-lifetime cache for ticket-status parses, keyed by brief path and
+// refreshed on mtime change (see lib/ticket-status.mjs). Unlike `sizes` this
+// one IS filled on the periodic loop below — stat+mtime-cached readFile is
+// cheap enough (no subprocess) to sit on the 4s snapshot tick.
+const ticketStatusCache = new Map();
 
 // Spec §1: "Malformed file → empty list plus one warning in the journal."
 // readRepoList alone can't tell "absent" from "unreadable" (both come back
@@ -46,7 +51,9 @@ journal.subscribe((entry) => broadcast('journal', entry));
 let lastSnapshot = null;
 
 async function snapshot() {
-  const snap = await buildSnapshot(config, { registry, nowMs: Date.now(), claudeProjectsDir: CLAUDE_PROJECTS, sizes, repoList });
+  const snap = await buildSnapshot(config, {
+    registry, nowMs: Date.now(), claudeProjectsDir: CLAUDE_PROJECTS, sizes, ticketStatusCache, repoList,
+  });
   for (const p of snap.skippedRepos) {
     if (warnedRepos.has(p)) continue;
     warnedRepos.add(p);
@@ -71,7 +78,11 @@ async function serveStatic(req, res) {
   if (path !== PUBLIC && !path.startsWith(PUBLIC + '/')) { res.writeHead(403).end(); return; }
   try {
     const body = await readFile(path);
-    res.writeHead(200, { 'content-type': MIME[extname(path)] || 'application/octet-stream' });
+    // no-cache (revalidate, not no-store): without any cache header the
+    // browser heuristically caches app.js, and a UI fix ships only to users
+    // who think to hard-reload — observed as "the popup keeps coming back"
+    // while the fixed file sat on disk.
+    res.writeHead(200, { 'content-type': MIME[extname(path)] || 'application/octet-stream', 'cache-control': 'no-cache' });
     res.end(body);
   } catch {
     res.writeHead(404).end('not found');
@@ -106,6 +117,32 @@ setActionHandler(createActionHandler());
 
 const server = http.createServer(async (req, res) => {
   const url = req.url.split('?')[0];
+
+  // Private Network Access preflight for the SRP bookmarklet's POST — the
+  // ONE path in forest a page on another origin may ever reach. Every other
+  // /api/* route below answers with no CORS headers at all and stays
+  // protected today by an unanswered preflight for its application/json
+  // content type; this must not spill onto any of them. The actual security
+  // boundary is the Origin check on the POST itself, in lib/actions.mjs's
+  // /api/srp/token handler — these headers only let a legitimate SRP tab's
+  // fetch() succeed, they do not gate anything by themselves.
+  if (url === '/api/srp/token' && req.method === 'OPTIONS') {
+    const expectedOrigin = originOf(config.srpBaseUrl);
+    const reqOrigin = req.headers.origin || '';
+    if (expectedOrigin && reqOrigin === expectedOrigin) {
+      res.writeHead(204, {
+        'Access-Control-Allow-Origin': expectedOrigin,
+        'Access-Control-Allow-Methods': 'POST',
+        'Access-Control-Allow-Headers': 'content-type',
+        'Access-Control-Allow-Private-Network': 'true',
+        'Access-Control-Max-Age': '600',
+      });
+      res.end();
+      return;
+    }
+    res.writeHead(403).end();
+    return;
+  }
 
   if (url === '/api/events') {
     res.writeHead(200, { 'content-type': 'text/event-stream', 'cache-control': 'no-cache', connection: 'keep-alive' });
