@@ -1,120 +1,129 @@
 # Hektor
 
-A shareable QA methodology pack for the sahibinden Selenium/JUnit suite, built for
-**Cursor** — skills + enforcement gates that help you author `*Page/*Layout/*Test.java`
-(web-test) and `*ResourceClient/AbName.java` (test-data-client) so code **passes the
-automated PR reviewer on the first try**, plus journey mapping, coverage expansion,
-flaky triage, EDR/VRT/security workflows.
+sahibinden Selenium/JUnit paketi için paylaşılabilir bir QA metodoloji paketi;
+**Cursor** için yapılmıştır. `*Page/*Layout/*Test.java` (web-test) ve
+`*ResourceClient/AbName.java` (test-data-client) dosyalarını **otomatik PR
+inceleyicisinden ilk seferde geçecek** şekilde yazmanıza yardım eden beceriler ve
+uygulama kapıları; ayrıca yolculuk haritalama, kapsam genişletme, flaky triage,
+EDR/VRT/güvenlik iş akışları.
 
-## Install (teammates: start here)
+## Kurulum (ekip arkadaşları: buradan başlayın)
 
-Add the `hektor/` directory to your repo (clone or copy it in), then run one
-command from the repo:
+> Forest kullanıyorsanız bu bölüme gerek yok: paket forest'ın içinde
+> (`packs/hektor`) yaşar ve `web-test` ile `test-data-client` worktree'lerine
+> oluşturulurken ve her başlatmada otomatik kurulur. Aşağısı forest olmadan,
+> elle kurulum içindir.
+
+`hektor/` dizinini deponuza ekleyin (klonlayın ya da kopyalayın), sonra depodan
+tek komut çalıştırın:
 
 ```bash
 ./hektor/hektor package install
 ```
 
-Then **reload the Cursor window** (`Cmd/Ctrl+Shift+P` → *Developer: Reload
-Window*) so the skills and hooks load. That's it — re-running is safe
-(idempotent). Requires `jq` on PATH.
+Ardından becerilerin ve hook'ların yüklenmesi için **Cursor penceresini yeniden
+yükleyin** (`Cmd/Ctrl+Shift+P` → *Developer: Reload Window*). Hepsi bu; yeniden
+çalıştırmak güvenlidir (idempotent). PATH'te `jq` gerekir.
 
-Want the bare `hektor` command instead of `./hektor/hektor`? Link it once:
+`./hektor/hektor` yerine yalın `hektor` komutunu mu istiyorsunuz? Bir kez
+bağlayın; ilk komut `hektor` komutunu `~/.local/bin` altına bağlar, ikincisi
+artık hangi depoda olursanız olun çalışır:
 
 ```bash
-./hektor/hektor package link           # symlinks `hektor` into ~/.local/bin
-hektor package install                 # now works from any repo you're in
+./hektor/hektor package link
+hektor package install
 ```
 
-### The `hektor` CLI
+### `hektor` CLI'ı
 
-| Command | Does |
+| Komut | Ne yapar |
 |---|---|
-| `hektor package install [--project DIR] [--no-kits]` | wire the pack into a repo (auto-detects the repo you run from) |
-| `hektor package status [--project DIR]` | show what's installed, and flag any registration pointing at a missing script |
-| `hektor doctor [--project DIR]` | self-audit the pack (no dead routes / valid frontmatter / real Cursor events / valid schemas) |
-| `hektor package uninstall [--project DIR]` | remove Hektor (leaves your other `.cursor` entries and your run state untouched) |
-| `hektor package link` / `unlink` | put `hektor` on / off your PATH |
+| `hektor package install [--project DIR] [--no-kits]` | paketi bir depoya bağlar (çalıştırdığınız depoyu otomatik bulur) |
+| `hektor package status [--project DIR]` | kurulu olanı gösterir ve eksik bir betiğe işaret eden kayıtları işaretler |
+| `hektor doctor [--project DIR]` | paketi denetler (ölü yönlendirme yok / geçerli frontmatter / gerçek Cursor olayları / geçerli şemalar) |
+| `hektor package uninstall [--project DIR]` | Hektor'u kaldırır (diğer `.cursor` girdilerinize ve çalışma durumunuza dokunmaz) |
+| `hektor package link` / `unlink` | `hektor` komutunu PATH'e ekler / PATH'ten çıkarır |
 | `hektor version` / `help` | — |
 
-`install` under the hood just runs `install.sh`, which you can also call directly
-(`./install.sh --project /path/to/repo`). Install into each repo you work in
-(`web-test`, `test-data-client`, …).
+`install` aslında `install.sh` betiğini çalıştırır; onu doğrudan da
+çağırabilirsiniz (`./install.sh --project /path/to/repo`). Çalıştığınız her
+depoya kurun (`web-test`, `test-data-client`, …).
 
-## What you get
+## Ne elde edersiniz
 
-Everything lands under the project's `.cursor/`, which is the only tree Cursor reads:
+Her şey projenin `.cursor/` dizinine iner; Cursor'ın okuduğu tek ağaç budur:
 
 ```
 .cursor/
-├── skills/<name>/SKILL.md    auto-invoked by description, or explicitly as /<name>
-├── agents/hektor-*.md        the subagent roles the skills dispatch
-├── rules/hektor-kernel.mdc   always applied — the router + the testbox contract
-├── hooks/ + hooks.json       the enforcement gates
-└── schemas/                  subagent return contracts
+├── skills/<name>/SKILL.md    açıklamasıyla otomatik ya da /<name> ile açıkça çağrılır
+├── agents/hektor-*.md        becerilerin gönderdiği alt ajan rolleri
+├── rules/hektor-kernel.mdc   her zaman uygulanır — yönlendirici + testbox sözleşmesi
+├── hooks/ + hooks.json       uygulama kapıları
+└── schemas/                  alt ajan dönüş sözleşmeleri
 ```
 
-- **Skills** — the authoring/triage playbooks. The two that make PRs pass are
-  glob-scoped, so they attach automatically when you open a file they govern:
-  - `hektor-conventions` — every **web-test** PR-reviewer rule (BLOCKER/WARNING)
-    with the correct pattern. Attaches on `web-ui-test/**/*.java`.
-  - `hektor-resource-client` — the **test-data-client** rules (`extends
-    AbstractService`, `@Component`, `clients.*` URL shape, `@Slf4j`, enum casing).
-    Attaches on `*ResourceClient.java` / `AbName.java`.
+- **Beceriler** — yazma/triage el kitapları. PR'ları geçiren iki tanesi glob
+  kapsamlıdır; yönettikleri bir dosyayı açtığınızda kendiliğinden bağlanır:
+  - `hektor-conventions` — her **web-test** PR-inceleyici kuralı
+    (BLOCKER/WARNING) doğru kalıbıyla. `web-ui-test/**/*.java` üzerinde bağlanır.
+  - `hektor-resource-client` — **test-data-client** kuralları (`extends
+    AbstractService`, `@Component`, `clients.*` URL biçimi, `@Slf4j`, enum
+    büyük/küçük harfi). `*ResourceClient.java` / `AbName.java` üzerinde bağlanır.
 
-  Start anywhere else with `/hektor-orchestrator`, or just describe the task.
+  Başka her yerde `/hektor-orchestrator` ile başlayın ya da görevi anlatın.
 
-- **Subagents** — `hektor-composer`, `-prober`, `-diagnoser`, `-reviewer`,
-  `-mapper`, `-distiller`. The skills dispatch these in parallel; the reviewer is
-  `readonly: true` because its whole job is to inspect, not to fix.
+- **Alt ajanlar** — `hektor-composer`, `-prober`, `-diagnoser`, `-reviewer`,
+  `-mapper`, `-distiller`. Beceriler bunları paralel gönderir; inceleyici
+  `readonly: true`'dur çünkü işi düzeltmek değil incelemektir.
 
-- **`pr-rules-gate`** — a local mirror of the reviewer's deterministic (Katman 1a)
-  checks that runs **at write-time**, so a violation is caught before you push
-  instead of on the PR. BLOCKERs veto the write; WARNINGs come back as a note.
+- **`pr-rules-gate`** — inceleyicinin belirlenimci (Katman 1a) denetimlerinin
+  **yazma anında** çalışan yerel bir aynası; ihlal PR'da değil push'tan önce
+  yakalanır. BLOCKER'lar yazmayı veto eder; WARNING'ler not olarak döner.
 
-- **The rest of the enforcement layer** — see [`hooks/README.md`](./hooks/README.md).
+- **Uygulama katmanının geri kalanı** — bkz. [`hooks/README.md`](./hooks/README.md).
 
-## Enforcement at a glance
+## Uygulama bir bakışta
 
-| Cursor event | Gates | Effect |
+| Cursor olayı | Kapılar | Etki |
 |---|---|---|
-| `sessionStart` | kernel-inject | injects the router once per session |
-| `beforeShellExecution` | commit, destructive-command | hard block |
-| `preToolUse` | pr-rules, invisible-unicode, journey-map-sentinel, run-status-write, enforcement-self-protection | hard block |
-| `subagentStart` | approver-registry, reviewer-brief, schema-preread, dispatch-ordering, first-pass-guard | deny |
-| `subagentStop` | reviewer-attestation, return-schema | follow-up turn |
-| `postToolUse` | pr-rules (advisory half), observe | note / silent capture |
-| `stop` | delivery-gate | follow-up turn |
+| `sessionStart` | kernel-inject | yönlendiriciyi oturum başına bir kez enjekte eder |
+| `beforeShellExecution` | commit, destructive-command | kesin engel |
+| `preToolUse` | pr-rules, invisible-unicode, journey-map-sentinel, run-status-write, enforcement-self-protection | kesin engel |
+| `subagentStart` | approver-registry, reviewer-brief, schema-preread, dispatch-ordering, first-pass-guard | reddeder |
+| `subagentStop` | reviewer-attestation, return-schema | takip turu |
+| `postToolUse` | pr-rules (tavsiye yarısı), observe | not / sessiz kayıt |
+| `stop` | delivery-gate | takip turu |
 
-## Kill switches
+## Kapatma anahtarları
 
-Each gate has its own env switch — `HEKTOR_PR_RULES_GATE=off`,
-`HEKTOR_COMMIT_GATE=off`, … — for a deliberate, documented exception. Coarser
-dials: `HEKTOR_HOOK_PROFILE=minimal|standard|strict` picks a tier,
-`HEKTOR_DISABLED_HOOKS=a,b` names gates, and `HEKTOR_CURSOR_HOOKS=off` disables
-the whole layer.
+Her kapının kendi ortam anahtarı vardır (`HEKTOR_PR_RULES_GATE=off`,
+`HEKTOR_COMMIT_GATE=off`, …); bilinçli ve belgelenmiş bir istisna içindir. Daha
+kaba ayarlar: `HEKTOR_HOOK_PROFILE=minimal|standard|strict` bir kademe seçer,
+`HEKTOR_DISABLED_HOOKS=a,b` kapıları adlandırır, `HEKTOR_CURSOR_HOOKS=off` tüm
+katmanı kapatır.
 
-These are friction, not a security boundary — the agent being gated can set every
-one of them. Their use is recorded to `docs/hektor/.hook-audit.log`. See
-[`hooks/README.md`](./hooks/README.md) §Vulnerabilities.
+Bunlar sürtünmedir, güvenlik sınırı değil: kapılanan ajan hepsini kendisi
+ayarlayabilir. Kullanımları `docs/hektor/.hook-audit.log` dosyasına kaydedilir.
+Bkz. [`hooks/README.md`](./hooks/README.md) §Vulnerabilities.
 
-## Layout
+## Yerleşim
 
 ```
-hektor                  the CLI — `hektor package install|status|doctor|uninstall|link`
-install.sh              the installer the CLI drives
-catalog.json            skill/kit index
-hooks.json              gate registrations (merged into .cursor/hooks.json)
-skills/<name>/          the skills
-agents/                 the subagent role definitions
-rules/                  the always-applied kernel rule
-hooks/                  the enforcement gates (+ hooks/README.md)
-schemas/                subagent return-shape contracts
-kits/flaky-triage-kit/  the standalone flaky-triage kit (own installer)
-docs/cursor-parity.md   what Cursor gives the pack, and the one thing it doesn't
+hektor                  CLI — `hektor package install|status|doctor|uninstall|link`
+install.sh              CLI'ın sürdüğü kurucu
+catalog.json            beceri/kit dizini
+hooks.json              kapı kayıtları (.cursor/hooks.json içine birleştirilir)
+skills/<name>/          beceriler
+agents/                 alt ajan rol tanımları
+rules/                  her zaman uygulanan çekirdek kural
+hooks/                  uygulama kapıları (+ hooks/README.md)
+schemas/                alt ajan dönüş biçimi sözleşmeleri
+kits/flaky-triage-kit/  bağımsız flaky-triage kiti (kendi kurucusu var)
+docs/cursor-parity.md   Cursor'ın pakete verdikleri ve vermediği tek şey
 ```
 
-## Note on commits
+## Commit'ler hakkında not
 
-The gates enforce a team rule: **the agent never commits or pushes** — you
-review the working tree and commit yourself. That's intentional, not a bug.
+Kapılar bir ekip kuralını uygular: **ajan asla commit ya da push yapmaz**;
+çalışma ağacını siz inceler ve kendiniz commit'lersiniz. Bu bir hata değil,
+kasıtlıdır.

@@ -1,0 +1,4 @@
+# Pack content (installer, gate scripts, kit installer) runs on every
+# teammate's machine at their next launch — see README, "Güven". Changes
+# under packs/ need review from the owners below. Add team handles here.
+/packs/ @egecansen
