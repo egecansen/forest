@@ -762,19 +762,20 @@ function skillRow(pack, kind, id, label, desc, checked) {
 }
 // One collapsible section: a master checkbox that takes the whole group in a
 // single click, plus a header that folds the rows away so 20+ skills across
-// five groups stay skimmable. Collapsed by default; a group that carries a
-// saved selection opens, so the picker never hides what it is about to launch.
-function pkGroup(title, rows, open) {
-  return `<section class="pk-group${open ? ' open' : ''}">
+// five groups stay skimmable. Every group renders collapsed — a "Select all"
+// would otherwise unfold all of them at once — and the n/total badge on the
+// header is what says what a folded group is about to launch.
+function pkGroup(title, rows) {
+  return `<section class="pk-group">
     <div class="pk-group-h">
       <input type="checkbox" class="pk-group-cb" aria-label="Select all ${esc(title)}" />
-      <button type="button" class="pk-group-toggle" aria-expanded="${open ? 'true' : 'false'}">
+      <button type="button" class="pk-group-toggle" aria-expanded="false">
         <span class="pk-chev" aria-hidden="true">▶</span>
         <span class="pk-group-name">${esc(title)}</span>
         <span class="pk-group-count"></span>
       </button>
     </div>
-    <div class="pk-group-body${open ? '' : ' hidden'}">${rows}</div>
+    <div class="pk-group-body hidden">${rows}</div>
   </section>`;
 }
 function setGroupOpen(group, open) {
@@ -792,14 +793,13 @@ function renderPack(p, picked) {
     const items = p.skillsets.filter((s) => (s.group || 'other') === g);
     if (!items.length) return '';
     const rows = items.map((s) => skillRow(p.pack, 'skill', s.id, s.label, s.description, skills.includes(s.id))).join('');
-    return pkGroup(groupLabel(g), rows, items.some((s) => skills.includes(s.id)));
+    return pkGroup(groupLabel(g), rows);
   }).join('');
   const kitSection = (p.kits && p.kits.length)
-    ? pkGroup('Kits', p.kits.map((k) => skillRow(p.pack, 'kit', k.id, k.label, '', kits.includes(k.id))).join(''),
-      p.kits.some((k) => kits.includes(k.id)))
+    ? pkGroup('Kits', p.kits.map((k) => skillRow(p.pack, 'kit', k.id, k.label, '', kits.includes(k.id))).join(''))
     : '';
   const hooksSection = p.hooks
-    ? pkGroup('Gates', skillRow(p.pack, 'hooks', p.hooks.id, p.hooks.label, p.hooks.description, !!picked.hooks), !!picked.hooks)
+    ? pkGroup('Gates', skillRow(p.pack, 'hooks', p.hooks.id, p.hooks.label, p.hooks.description, !!picked.hooks))
     : '';
   const head = `<div class="pk-pack-h"><label class="pk-all-row"><input type="checkbox" class="pk-all" /> Select all ${esc(p.pack)}</label></div>`;
   return `<div class="pk-pack">${head}${sections}${kitSection}${hooksSection}</div>`;
