@@ -1,13 +1,14 @@
 #!/bin/bash
-# delivery-gate.sh — Stop-hook that blocks a session from ENDING on a rationalization.
+# delivery-gate.sh — stop-hook that stops a session ENDING on a rationalization.
 #
-# Hook    : Stop
-# Mode    : block-once (default) — decision:block on the first stop that carries a
-#           rationalization; the re-triggered stop (stop_hook_active=true) is allowed,
-#           so a false positive costs one extra turn, never a loop.
+# Event   : stop
+# Mode    : follow-up-once (default) — emits a followup_message on the first stop
+#           that carries a rationalization. Cursor's own `loop_limit` in
+#           hooks.json caps the repeat, and the gate additionally stands down
+#           once `loop_count` is non-zero, so a false positive costs one extra
+#           turn, never a loop.
 # State   : none (reads the transcript's last assistant turn, read-only)
 # Env     : HEKTOR_DELIVERY_GATE=off    advisory bypass (document the authorisation)
-#           HEKTOR_DELIVERY_GATE=warn   surface as systemMessage instead of blocking
 #
 # Why
 # ---
@@ -23,27 +24,29 @@
 set -uo pipefail
 
 _DIR="$(dirname "${BASH_SOURCE[0]}")"
-if [ -f "$_DIR/lib/audit.sh" ]; then . "$_DIR/lib/audit.sh"; else hektor_audit() { :; }; fi
+[ -f "$_DIR/lib/audit.sh" ]        && . "$_DIR/lib/audit.sh"        || hektor_audit() { :; }
 [ -f "$_DIR/lib/hook_profile.sh" ] && . "$_DIR/lib/hook_profile.sh" || hektor_hook_enabled() { return 0; }
+[ -f "$_DIR/lib/cursor.sh" ]       && . "$_DIR/lib/cursor.sh"       || exit 0
 
-MODE="${HEKTOR_DELIVERY_GATE:-block}"
-[ "$MODE" = "off" ] && { hektor_audit "delivery-gate bypassed (HEKTOR_DELIVERY_GATE=off)"; exit 0; }
-hektor_hook_enabled delivery-gate "standard,strict" || exit 0   # human-nag gate: skipped under minimal/CI
+[ "${HEKTOR_DELIVERY_GATE:-on}" = "off" ] && { hektor_audit "delivery-gate bypassed (HEKTOR_DELIVERY_GATE=off)"; exit 0; }
+hektor_gate_init delivery-gate "standard,strict"   # human-nag gate: skipped under minimal/CI
 
-JQ="$(command -v jq || true)"; [ -n "$JQ" ] || exit 0   # jq absent -> fail-open
+# Only nag on a session that ran to completion — an aborted or errored stop has
+# its own explanation and does not need this one.
+STATUS="$(hektor_status)"
+case "$STATUS" in ""|completed) ;; *) exit 0 ;; esac
 
-INPUT=$(head -c 1048576)   # fail-open stdin hardening: cap at 1 MB
-[ -n "$INPUT" ] || exit 0
+# Loop guard: if this stop is already a re-trigger, let it through.
+LOOPS="$(hektor_loop_count)"
+case "$LOOPS" in ''|0) ;; *) exit 0 ;; esac
 
-# Loop guard: if we already nudged on this stop, let it through.
-ACTIVE=$(printf '%s' "$INPUT" | "$JQ" -r '.stop_hook_active // false' 2>/dev/null || echo false)
-[ "$ACTIVE" = "true" ] && exit 0
-
-TRANSCRIPT=$(printf '%s' "$INPUT" | "$JQ" -r '.transcript_path // empty' 2>/dev/null || echo "")
+TRANSCRIPT="$(hektor_json '.transcript_path // empty')"
 [ -n "$TRANSCRIPT" ] && [ -f "$TRANSCRIPT" ] || exit 0
 
-# Extract the LAST assistant turn's visible text (not thinking) — the "I'm done" message.
-LAST=$("$JQ" -rs '
+# Extract the LAST assistant turn's visible text (not thinking) — the "I'm done"
+# message. Try a JSONL transcript first; fall back to a raw tail, which is what
+# actually fires when the transcript is plain text.
+LAST=$("$CC_JQ" -rs '
   [ .[]
     | select(.type=="assistant" or (.message.role? // "")=="assistant")
     | ((.message.content? // .content? // []) )
@@ -51,7 +54,6 @@ LAST=$("$JQ" -rs '
        elif type=="string" then . else "" end) ]
   | map(select(. != "")) | (.[-1] // "")
 ' "$TRANSCRIPT" 2>/dev/null || echo "")
-# Fallback if the transcript schema didn't parse.
 [ -n "$LAST" ] || LAST="$(tail -c 8000 "$TRANSCRIPT" 2>/dev/null || echo "")"
 [ -n "$LAST" ] || exit 0
 
@@ -83,13 +85,9 @@ Before finishing, confirm you did NOT:
   · scope-reduce a required pass ('no third exit')
   · use @ScheduledDisable without a reason
 
-If the work is genuinely clean and this is a false positive, say so explicitly and finish again — this gate blocks only once per stop. If not, fix it first.
+If the work is genuinely clean and this is a false positive, say so explicitly and finish again — this gate fires only once per stop. If not, fix it first.
 
-Bypass (authorised): HEKTOR_DELIVERY_GATE=off. Soften to a warning: HEKTOR_DELIVERY_GATE=warn."
+Bypass (authorised): HEKTOR_DELIVERY_GATE=off."
 
-if [ "$MODE" = "warn" ]; then
-  "$JQ" -n --arg m "$REASON" '{ "systemMessage": $m, "suppressOutput": false }'
-else
-  "$JQ" -n --arg r "$REASON" '{ "decision": "block", "reason": $r }'
-fi
+hektor_followup "$REASON"
 exit 0

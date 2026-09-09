@@ -2,7 +2,7 @@
 # journey-map-sentinel-gate.sh — protects the journey map from hand-rolled /
 #                                sentinel-stripping writes.
 #
-# Hook    : PreToolUse:Write|Edit
+# Event   : preToolUse  (any write-shaped tool call)
 # Mode    : DENY
 # State   : none (shape-only, reads the proposed content)
 # Env     : HEKTOR_JOURNEYMAP_GATE=off   advisory bypass
@@ -22,54 +22,44 @@
 # run-status-write-gate (NOT awk sub(), which is ERE and can fail open).
 set -uo pipefail
 
-_LIB="$(dirname "${BASH_SOURCE[0]}")/lib/audit.sh"
-if [ -f "$_LIB" ]; then . "$_LIB"; else hektor_audit() { :; }; fi
+_DIR="$(dirname "${BASH_SOURCE[0]}")"
+[ -f "$_DIR/lib/audit.sh" ]        && . "$_DIR/lib/audit.sh"        || hektor_audit() { :; }
+[ -f "$_DIR/lib/hook_profile.sh" ] && . "$_DIR/lib/hook_profile.sh" || hektor_hook_enabled() { return 0; }
+[ -f "$_DIR/lib/cursor.sh" ]       && . "$_DIR/lib/cursor.sh"       || exit 0
 
-if [ "${HEKTOR_JOURNEYMAP_GATE:-on}" = "off" ]; then
-  hektor_audit "journey-map-sentinel-gate bypassed (HEKTOR_JOURNEYMAP_GATE=off)"
-  exit 0
-fi
-
-JQ="$(command -v jq || true)"
-[ -n "$JQ" ] || exit 0
+[ "${HEKTOR_JOURNEYMAP_GATE:-on}" = "off" ] && { hektor_audit "journey-map-sentinel-gate bypassed (HEKTOR_JOURNEYMAP_GATE=off)"; exit 0; }
+hektor_gate_init journey-map-sentinel-gate "standard,strict"
 
 SENTINEL="<!-- hektor:journey-mapping -->"
 
-INPUT=$(cat)
-TOOL_NAME=$(echo "$INPUT" | "$JQ" -r '.tool_name // empty' 2>/dev/null || echo "")
-case "$TOOL_NAME" in Write|Edit) ;; *) exit 0 ;; esac
-
-TARGET=$(echo "$INPUT" | "$JQ" -r '.tool_input.file_path // empty' 2>/dev/null || echo "")
+TARGET="$(hektor_file_path)"
 case "$TARGET" in
   */docs/hektor/journey-map.md) ;;
   *) exit 0 ;;
 esac
 
-# Reconstruct proposed content.
+# Reconstruct the proposed content. A whole-file write is already it; a partial
+# edit is replayed against disk with a literal index() replace (NOT awk sub(),
+# which is ERE and can fail open on a regex-special old_string).
 PROPOSED=""
-case "$TOOL_NAME" in
-  Write)
-    PROPOSED=$(echo "$INPUT" | "$JQ" -r '.tool_input.content // empty' 2>/dev/null || echo "")
-    ;;
-  Edit)
-    OLD=$(echo "$INPUT" | "$JQ" -r '.tool_input.old_string // empty' 2>/dev/null || echo "")
-    if [ -f "$TARGET" ] && [ -n "$OLD" ]; then
-      NEW=$(echo "$INPUT" | "$JQ" -r '.tool_input.new_string // empty' 2>/dev/null || echo "")
-      PROPOSED=$(awk -v o="$OLD" -v n="$NEW" '
-        BEGIN { RS="\0" }
-        {
-          rest=$0; out="";
-          if (o == "") { printf "%s", rest; next }
-          while ((p=index(rest,o)) > 0) {
-            out = out substr(rest,1,p-1) n;
-            rest = substr(rest, p+length(o));
-          }
-          printf "%s", out rest;
-        }
-      ' "$TARGET" 2>/dev/null || echo "")
-    fi
-    ;;
-esac
+OLD="$(hektor_old_string)"
+if [ -z "$OLD" ]; then
+  PROPOSED="$(hektor_added_text)"
+elif [ -f "$TARGET" ]; then
+  NEW="$(hektor_new_string)"
+  PROPOSED=$(_o="$OLD" _n="$NEW" awk '
+    BEGIN { RS="\0"; o=ENVIRON["_o"]; n=ENVIRON["_n"] }
+    {
+      rest=$0; out="";
+      if (o == "") { printf "%s", rest; next }
+      while ((p=index(rest,o)) > 0) {
+        out = out substr(rest,1,p-1) n;
+        rest = substr(rest, p+length(o));
+      }
+      printf "%s", out rest;
+    }
+  ' "$TARGET" 2>/dev/null || echo "")
+fi
 [ -n "$PROPOSED" ] || exit 0
 
 LINE1=$(printf '%s\n' "$PROPOSED" | head -1)
@@ -77,7 +67,7 @@ LINE1=$(printf '%s\n' "$PROPOSED" | head -1)
 LINE1="${LINE1%$'\r'}"
 [ "$LINE1" = "$SENTINEL" ] && exit 0
 
-"$JQ" -n --arg r "[BLOCKED — Hektor journey-map-sentinel-gate] journey-map.md line 1 must be the sentinel.
+hektor_deny "[BLOCKED — Hektor journey-map-sentinel-gate] journey-map.md line 1 must be the sentinel.
 
 Target:   ${TARGET}
 Line 1:   \"${LINE1}\"
@@ -91,11 +81,5 @@ This write would create or leave the map without that marker.
 Fix: produce the map via the hektor-journey-mapping skill (it writes the
 sentinel as line 1), or keep the sentinel intact when editing.
 
-Bypass (audit the use): HEKTOR_JOURNEYMAP_GATE=off." '{
-  "hookSpecificOutput": {
-    "hookEventName": "PreToolUse",
-    "permissionDecision": "deny",
-    "permissionDecisionReason": $r
-  }
-}'
+Bypass (audit the use): HEKTOR_JOURNEYMAP_GATE=off."
 exit 0

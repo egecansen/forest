@@ -11,6 +11,7 @@ description: >
   "test-data-client", "AbName enum", or any request to author/modify code in that
   repo. Sibling of hektor-conventions (which owns web-test); consult that for the
   test-side rules.
+paths: "test-data-client/**/*.java, **/*ResourceClient.java, **/AbName.java"
 ---
 
 # Hektor resource-client conventions — test-data-client rules
@@ -161,5 +162,5 @@ at write-time and enforces the same list.
 - `AbstractService` — the base class every `*ResourceClient` extends; source of
   the `clients` accessor.
 - `AbName.java` — the canonical A/B experiment-name enum.
-- `.claude/hooks/pr-rules-gate.sh` — the local diff-scanner (kill switch
+- `.cursor/hooks/pr-rules-gate.sh` — the local diff-scanner (kill switch
   `HEKTOR_PR_RULES_GATE=off`).

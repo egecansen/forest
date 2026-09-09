@@ -1,0 +1,38 @@
+{
+  "version": 1,
+  "_comment": "Hektor gate registrations. Merged into a project's .cursor/hooks.json by install.sh (idempotent — keyed on the command string). Order within an event is execution order: reviewer-approver-registry runs before the gates that read its registry. Kill switches: HEKTOR_CURSOR_HOOKS=off (all), HEKTOR_DISABLED_HOOKS=a,b (named), HEKTOR_HOOK_PROFILE=minimal|standard|strict (tier), or each gate's own HEKTOR_<GATE>=off.",
+  "hooks": {
+    "sessionStart": [
+      { "command": "./.cursor/hooks/kernel-inject.sh", "timeout": 10 }
+    ],
+    "beforeShellExecution": [
+      { "command": "./.cursor/hooks/commit-gate.sh", "timeout": 10 },
+      { "command": "./.cursor/hooks/destructive-command-gate.sh", "timeout": 10 }
+    ],
+    "preToolUse": [
+      { "command": "./.cursor/hooks/enforcement-self-protection-gate.sh", "timeout": 10 },
+      { "command": "./.cursor/hooks/invisible-unicode-gate.sh", "timeout": 10 },
+      { "command": "./.cursor/hooks/pr-rules-gate.sh", "timeout": 15 },
+      { "command": "./.cursor/hooks/journey-map-sentinel-gate.sh", "timeout": 10 },
+      { "command": "./.cursor/hooks/run-status-write-gate.sh", "timeout": 10 }
+    ],
+    "postToolUse": [
+      { "command": "./.cursor/hooks/pr-rules-gate.sh", "timeout": 15 },
+      { "command": "./.cursor/hooks/observe.sh", "timeout": 10 }
+    ],
+    "subagentStart": [
+      { "command": "./.cursor/hooks/reviewer-approver-registry.sh", "timeout": 10 },
+      { "command": "./.cursor/hooks/reviewer-brief-gate.sh", "timeout": 10 },
+      { "command": "./.cursor/hooks/subagent-schema-preread-gate.sh", "timeout": 10 },
+      { "command": "./.cursor/hooks/dispatch-ordering-gate.sh", "timeout": 10 },
+      { "command": "./.cursor/hooks/standard-mode-first-pass-guard.sh", "timeout": 10 }
+    ],
+    "subagentStop": [
+      { "command": "./.cursor/hooks/reviewer-attestation-gate.sh", "timeout": 10, "loop_limit": 1 },
+      { "command": "./.cursor/hooks/subagent-return-schema-guard.sh", "timeout": 10, "loop_limit": 1 }
+    ],
+    "stop": [
+      { "command": "./.cursor/hooks/delivery-gate.sh", "timeout": 10, "loop_limit": 1 }
+    ]
+  }
+}

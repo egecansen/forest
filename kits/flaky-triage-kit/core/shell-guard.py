@@ -42,7 +42,7 @@
 #   a `cd` inside one never escapes back out — both match real Bash semantics). Recursion is bounded
 #   (MAX_SUBSHELL_DEPTH) so a pathological input can't blow the stack. Also folded in here: the gate
 #   scripts (+ their vendored libs) themselves are now part of SURF (see below) — a prior re-review
-#   found `.cursor/hooks/` and `.claude/hooks/lib/` sat outside the protected surface entirely, so
+#   found `.cursor/hooks/` and `.cursor/hooks/lib/` sat outside the protected surface entirely, so
 #   editing one gate/lib was invisible to the OTHER harness's own self-protection gate.
 #
 # Round 3 (LAST Bash-gate round — see honest framing below) — the Round2-rereview REWRITE ITSELF
@@ -73,7 +73,7 @@
 #   compiled writer, or any construct that doesn't reduce to a literal, parseable Bash command string
 #   all bypass by construction, no matter how much more string-analysis is layered on. Nor did it take
 #   construction: until 2026-07-30 every alternative in SURF ended in `/`, so the pattern matched no
-#   DIRECTORY operand at all and `mv <kit> /tmp/x` / `rm -rf .claude/hooks` were plain ALLOWs. That is
+#   DIRECTORY operand at all and `mv <kit> /tmp/x` / `rm -rf .cursor/hooks` were plain ALLOWs. That is
 #   fixed below, and recorded here because it is the standing argument against reading this module as a
 #   boundary: patterns have gaps, and this one had a three-command gap for the whole life of the file.
 #   Past this round, further hardening does NOT mean chasing more shell constructs here — the wall, at
@@ -84,31 +84,31 @@
 import sys, re, os
 
 # Protected surface = the kit's own files, PLUS the self-protection gate scripts (both harnesses)
-# and their vendored libs — the audit found `.cursor/hooks/*` and `.claude/hooks/lib/*` sat outside
+# and their vendored libs — the audit found `.cursor/hooks/*` and `.cursor/hooks/lib/*` sat outside
 # the surface entirely, so a session in one harness could freely disable the OTHER harness's gate
 # (or its own gate's audit lib).
 #
 # DIRECTORY OPERANDS. Every alternative used to end in `/`, which means the directory itself never
 # matched: `<kit>/core/config.json` was DENY, but `mv <kit> /tmp/x`, `rm -rf <kit>`,
-# `mv <kit>/core /tmp/x` and `rm -rf .claude/hooks` were all ALLOW — an unflagged, unaudited
+# `mv <kit>/core /tmp/x` and `rm -rf .cursor/hooks` were all ALLOW — an unflagged, unaudited
 # three-command bypass at every tier below hardened, i.e. on every existing install and every machine
-# without sudo. `_END` is a zero-width shell-token boundary, so `\.claude/hooks` matches the directory
-# as an operand without swallowing `.claude/hooks/observe.sh`; the kit-tree alternative matches the
-# tree AND everything under it. `.claude/hooks/.flaky-kit-expect` is named explicitly because the
+# without sudo. `_END` is a zero-width shell-token boundary, so `\.cursor/hooks` matches the directory
+# as an operand without swallowing `.cursor/hooks/observe.sh`; the kit-tree alternative matches the
+# tree AND everything under it. `.cursor/hooks/.flaky-kit-expect` is named explicitly because the
 # gates' shadow check reads it — editing the gate was DENY+audited while erasing the record the gate
 # depends on was ALLOW+silent. Reads still pass: the Bash branch also requires a mutation verb, a
 # redirect target, or an inline interpreter, so `cat <kit>/core/x` is untouched.
 #
-# Still precise where precision is right: an ordinary file inside `.claude/hooks/` (this pack's other
+# Still precise where precision is right: an ordinary file inside `.cursor/hooks/` (this pack's other
 # hooks) is deliberately NOT surface — only the gate, its lib/, the record, and the directory as an
 # operand. Blanket-matching that tree would contradict core/tests/self-protection-test.sh's assertion
 # that an unrelated pack hook stays editable.
 #
 # HARNESS SETTINGS FILES. Every fix above protects the gate and what it reads — none of it protected
-# the registration that makes the gate RUN in the first place. `sed -i '' .claude/settings.json` (or
+# the registration that makes the gate RUN in the first place. `sed -i '' .cursor/hooks.json` (or
 # `rm -f` it, or `printf '{}' >` it) was a verified ALLOW: deleting the PreToolUse entry is cheaper
 # than editing the gate it points at, and every other protection in this file is downstream of that
-# one registration existing. `.claude/settings.local.json` is included because Claude Code merges hook
+# one registration existing. `.cursor/hooks.json` is included because Claude Code merges hook
 # config from both project settings files, so the registration can live in either. Cursor's real
 # analogue is `.cursor/hooks.json` — its own project settings model was checked, not assumed: Cursor
 # has no project-level `settings.json` of ANY kind (not merely no `.local` variant — user settings are
@@ -119,23 +119,21 @@ import sys, re, os
 # that branch decides by OUTCOME (does the registration survive the edit), which needs the payload,
 # not a path match; see Task 4.
 #
-# THE DELIVERY GATE (`.claude/hooks/flaky-kit-delivery-gate.sh`). It shipped onto `harden_targets`
+# THE DELIVERY GATE (`.cursor/hooks/flaky-kit-delivery-gate.sh`). It shipped onto `harden_targets`
 # in core/lock-kit.sh and onto no self-protection surface at all — and chown-list membership is not
 # protection: below the hardened tier it buys nothing, and the wiring axis that would notice the file
 # missing only runs when a kit entrypoint next runs, which a session whose whole goal is to STOP
 # never does. Measured on a real `install.sh --harness claude` fixture before this alternative
-# existed, `rm -f .claude/hooks/flaky-kit-delivery-gate.sh` was an ALLOW with no audit line while the
+# existed, `rm -f .cursor/hooks/flaky-kit-delivery-gate.sh` was an ALLOW with no audit line while the
 # same command against the sibling gate DENIED. It also leaves `wiring=dangling`, which at the
 # hardened tier is rc 76 from all thirteen entrypoints with a password-priced remedy — an
 # agent-reachable brick behind an action nothing denied. Same alternative as its sibling (same
 # directory, same rules); no `.cursor/hooks/` arm, because Cursor has no stop event and the file
 # never exists there.
 _END = r'(?=[\s"\'`;)&|]|$)'          # zero-width end-of-shell-token boundary
-_DEFAULT_SURF = (r'\.claude/skills/hektor-flaky-triage(?:/|' + _END + r')'
-                 r'|\.claude/hooks/(?:flaky-kit-self-protection-gate\.sh|flaky-kit-delivery-gate\.sh|\.flaky-kit-expect|lib/)'
-                 r'|\.cursor/hooks/(?:flaky-kit-self-protection-gate\.sh|lib/)'
-                 r'|\.(?:claude|cursor)/hooks(?:' + _END + r')'
-                 r'|\.claude/settings(\.local)?\.json'
+_DEFAULT_SURF = (r'\.cursor/skills/hektor-flaky-triage(?:/|' + _END + r')'
+                 r'|\.cursor/hooks/(?:flaky-kit-self-protection-gate\.sh|flaky-kit-delivery-gate\.sh|\.flaky-kit-expect|lib/)'
+                 r'|\.cursor/hooks(?:' + _END + r')'
                  r'|\.cursor/hooks\.json')
 # PATH-INDEPENDENT: set HEKTOR_FK_SURFACE to the kit's install root and a kit installed ANYWHERE
 # protects itself (the standalone gates do this).

@@ -9,7 +9,7 @@
 # LIMIT, stated up front: this check lives INSIDE the tree it validates, so it cannot detect
 # SHADOWING (`mv` the kit dir aside and put a fake one in its place) — a shadowed tree carries its
 # own state file and is indistinguishable from a fresh un-hardened install. That case is the
-# relocated gate's job (.claude/hooks/, outside the shadowable tree), and the gate does it by asking
+# relocated gate's job (.cursor/hooks/, outside the shadowable tree), and the gate does it by asking
 # whether the tree is still ROOT-OWNED rather than whether it still exists — an ownership check is the
 # one question a replacement tree cannot answer in its own favour without the password. This check
 # catches ACCIDENTS: an upgrade that dropped ownership, a kit installed but never hardened, a
@@ -72,7 +72,7 @@ integrity_owner_uid() {
 
 # integrity_project_root <kit_root> -> the project root, or empty when this is not an installed kit.
 #
-# Verifies the SHAPE of the installed layout — <proj>/.claude/skills/hektor-flaky-triage — rather
+# Verifies the SHAPE of the installed layout — <proj>/.cursor/skills/hektor-flaky-triage — rather
 # than counting three levels up. Counting is a proxy that happens to be right for one layout; the
 # shape is the property being asked about. It also means running the suite from the source tree
 # (kits/flaky-triage-kit) yields nothing and the wiring check stays silent there, instead of
@@ -84,31 +84,29 @@ integrity_project_root() {
   [ -n "$k" ] || return 0
   [ "$(basename "$k")" = "hektor-flaky-triage" ] || return 0
   s="$(dirname "$k")"; [ "$(basename "$s")" = "skills" ] || return 0
-  c="$(dirname "$s")"; [ "$(basename "$c")" = ".claude" ] || return 0
+  c="$(dirname "$s")"; [ "$(basename "$c")" = ".cursor" ] || return 0
   dirname "$c"
   return 0
 }
 
-# _wiring_want <kit_root> <project_root> -> "<claude> <cursor> <stop>", each 1 if required.
+# _wiring_want <kit_root> <project_root> -> "<gate> <stop>", each 1 if required.
 #
-# The install-time record decides. `--harness` was previously a flag that vanished after the run, so
-# the check had to infer a requirement from "a settings file exists" — which flags a project that
-# carries a .cursor/hooks.json from some unrelated tool while the kit was only ever installed for
-# Claude. The record is written into core/, which harden_targets already chowns, so at the hardened
-# tier an agent cannot rewrite it to require nothing.
+# The install-time record decides. Without it the check would have to infer a requirement from "a
+# hooks file exists" — which flags a project carrying a .cursor/hooks.json from some unrelated tool
+# even though this kit was never installed there. The record is written into core/, which
+# harden_targets already chowns, so at the hardened tier an agent cannot rewrite it to require
+# nothing.
 #
 # No record means the kit predates this file: fall back to the old inference rather than silently
 # requiring nothing, which would turn every existing install into a green "wired".
 #
-# `core/.harness` is now "<harness> [capability...]" (install.sh appends `stop` when it ships the
-# delivery gate) — so only the FIRST token is the harness selection; the rest are capabilities a
-# later check reads separately. Matching the WHOLE file content, as this used to, made a
-# `claude stop` record fall through every arm below to the file-existence inference — reopening the
-# exact false-negative this function's header describes: a project whose ONLY reason to look
-# cursor-wired was an unrelated tool's .cursor/hooks.json now got graded on that file again, on
-# every FRESH claude-only install, not just ones written before this format existed.
+# `core/.harness` is "<target> [capability...]" (install.sh appends `stop` when it ships the
+# delivery gate) — so only the FIRST token is the target; the rest are capabilities read separately.
+# Matching the WHOLE file content, as this used to, made a `cursor stop` record fall through every
+# arm below to the file-existence inference — reopening the exact false-negative this function's
+# header describes.
 #
-# The THIRD field is the `stop` capability: the delivery gate is a second control on the wiring axis
+# The SECOND field is the `stop` capability: the delivery gate is a second control on the wiring axis
 # (a control that can be silently unregistered is not a control), and whether it is REQUIRED is a
 # fact about the record, exactly like the harness selection — a record without `stop` is an install
 # that predates the delivery gate, and must go on requiring exactly what it required before. That is
@@ -116,19 +114,10 @@ integrity_project_root() {
 # install starts failing an axis it was never asked to satisfy. Scanned from the WHOLE record (not
 # just tokens after the first) because it is independent of which harness was selected.
 #
-# Two arms below OVERRIDE the parsed `$s` value rather than trust it, for two different reasons:
-#   - `agents` forces it to 0 unconditionally: an AGENTS.md-only install has no Claude Stop hook to
-#     register at all, so the capability cannot apply regardless of what the record says.
-#   - `cursor` forces it to 0 unconditionally too (fix round 1, Minor 2): the delivery gate is a
-#     CLAUDE control — it runs at Claude Code's `Stop` event, which Cursor has no equivalent of — so
-#     a `cursor stop` record names a capability that harness can never satisfy. Before this fix that
-#     record required the Stop slot anyway (the Claude settings files, examined regardless of which
-#     harness the record selects), and no code path can ever register it — an unrepairable wedge that
-#     refuses every entrypoint at the hardened tier forever, with no remedy the reader can carry out.
-#     `install.sh` itself never writes this combination (`stop` is appended only in the `do_claude=1`
-#     branch), so `s` being computed-but-discarded here, same as `agents`, is what keeps a
-#     hand-edited or future record from reopening that wedge.
-#   Tokens after the first genuinely matter (the `stop` capability lives there), which is why an
+# A `none` record forces the stop capability to 0: an engine used standalone registers no hooks at
+# all, so the capability cannot apply regardless of what the record says.
+#
+# Tokens after the first genuinely matter (the `stop` capability lives there), which is why an
 # EXACT token match is required, not a substring one: a bare `case "$h" in *" stop"*)` reads
 # `claude stopwatch` as carrying the `stop` capability too, the same proxy-standing-in-for-a-property
 # shape this kit has retracted repeatedly (see `_wiring_slots`'s header, four counted instances
@@ -155,24 +144,24 @@ integrity_project_root() {
 # gap — `install.sh:89` writes `printf '%s stop\n'` with a literal space, and the record format is
 # space-separated by definition (see this function's own header above).
 _wiring_want() {
-  local kit="${1:-}" root="${2:-}" h first c=0 u=0 s=0
+  local kit="${1:-}" root="${2:-}" h u=0 s=0
   h="$(cat "$kit/core/.harness" 2>/dev/null)"
-  first="${h%% *}"
   case " $h " in *" stop "*) s=1 ;; esac
-  case "$first" in
-    all|both) echo "1 1 $s"; return 0 ;;
-    claude)   echo "1 0 $s"; return 0 ;;
-    cursor)   echo "0 1 0"; return 0 ;;   # Cursor has no Stop event; the capability cannot apply here
-    agents)   echo "0 0 0"; return 0 ;;
+  case "${h%% *}" in
+    cursor) echo "1 $s"; return 0 ;;
+    none)   echo "0 0";  return 0 ;;
   esac
-  { [ -r "$root/.claude/settings.json" ] || [ -r "$root/.claude/settings.local.json" ]; } && c=1
+  # No record (an install predating it, or the engine used standalone): infer from what is on disk.
+  # A record without `stop` is an install that predates the delivery gate and must go on requiring
+  # exactly the slots it already required — that is what keeps this axis from refusing every
+  # entrypoint on every existing project the moment a new capability ships.
   [ -r "$root/.cursor/hooks.json" ] && u=1
-  echo "$c $u 0"
+  echo "$u 0"
   return 0
 }
 
-# _wiring_slots <settings-file> -> one "<event>:<tool><TAB><command>" line per TOOL that a registered
-# slot covers, e.g. "PreToolUse:Bash", "preToolUse:Write", "beforeShellExecution:*". Silent and empty
+# _wiring_slots <hooks-file> -> one "<event>:<tool><TAB><command>" line per TOOL that a registered
+# slot covers, e.g. "preToolUse:Write", "beforeShellExecution:*". Silent and empty
 # for an unreadable or unparseable file.
 #
 # ONE slot model, shared with the gate's own `_reg_slots`
@@ -192,36 +181,34 @@ _wiring_want() {
 # stat-ing the path this kit would have installed are two different questions, and a settings.json
 # copied between machines answers the first yes while the gate never runs.
 #
-# Cursor's `preToolUse` entries carry a `matcher` exactly as Claude's `PreToolUse` ones do, and are
-# keyed the same way here. Keying them by event alone — which this file used to do — would let a
-# Cursor matcher be retargeted to an inert tool and read as a survival while the identical Claude-side
-# change is caught, and the gate DENIES the edit that produces it, so one branch of one feature was
-# enforcing a rule the other silently waived. `beforeShellExecution` is the one event with no matcher
+# `preToolUse` entries carry a `matcher`, so they are keyed by event AND tool here. Keying them by
+# event alone — which this file used to do — would let a matcher be retargeted to an inert tool and
+# read as a survival, while the gate DENIES the edit that produces it: one axis enforcing a rule the
+# other silently waived. `beforeShellExecution` is the event with no matcher
 # concept in either harness: it fires for every shell execution, so it covers `*` by construction
 # rather than by omission — the same reasoning the gate's `_reg_slots` records, not a new rule.
 _wiring_slots() {
   jq -r '
     def gate: select((.command // "") | test("flaky-kit-self-protection-gate\\.sh"));
     def tools($m): (if ($m // "") == "" then "*" else $m end) | split("|") | .[];
-    [ (.hooks.PreToolUse // [])[]? | .matcher as $m | (.hooks // [])[]? | gate | "PreToolUse:\(tools($m))\t\(.command)" ]
-    + [ (.hooks.preToolUse // [])[]? | .matcher as $m | gate | "preToolUse:\(tools($m))\t\(.command)" ]
+    [ (.hooks.preToolUse // [])[]? | .matcher as $m | gate | "preToolUse:\(tools($m))\t\(.command)" ]
     + [ (.hooks.beforeShellExecution // [])[]? | gate | "beforeShellExecution:*\t\(.command)" ]
     | unique | .[]
   ' "$1" 2>/dev/null
 }
 
-# _wiring_slots_stop <settings-file> -> "Stop:*\t<command>" lines for the delivery gate.
+# _wiring_slots_stop <hooks-file> -> "stop:*\t<command>" lines for the delivery gate.
 #
 # Its OWN function, deliberately not a second filename folded into _wiring_slots above. That
-# function's `gate` predicate is consulted for the PreToolUse tools too, so teaching it the delivery
-# gate's name would let a PreToolUse registration of the DELIVERY gate count as covering Write, Edit
-# or Bash — a different gate satisfying a slot it does not guard. The Stop slot gets its own emitter
+# function's `gate` predicate is consulted for the preToolUse tools too, so teaching it the delivery
+# gate's name would let a preToolUse registration of the DELIVERY gate count as covering a write
+# tool — a different gate satisfying a slot it does not guard. The stop slot gets its own emitter
 # instead, matched against `flaky-kit-delivery-gate.sh` and nothing else.
 _wiring_slots_stop() {
   jq -r '
-    [ (.hooks.Stop // [])[]? | (.hooks // [])[]?
+    [ (.hooks.stop // [])[]?
       | select((.command // "") | test("flaky-kit-delivery-gate\\.sh"))
-      | "Stop:*\t\(.command)" ] | unique | .[]
+      | "stop:*\t\(.command)" ] | unique | .[]
   ' "$1" 2>/dev/null
 }
 
@@ -268,8 +255,10 @@ _wiring_resolve() {
   [ -n "$cmd" ] || return 0
   p="$(printf '%s' "$cmd" | tr -d '"'\''')"
   p="${p%%[[:space:]]*}"
-  p="${p//\$\{CLAUDE_PROJECT_DIR\}/$root}"
-  p="${p//\$CLAUDE_PROJECT_DIR/$root}"
+  # Cursor's commands are plain paths relative to the project root, usually written `./x/y.sh`.
+  # Strip the leading `./` so the resolved path is the one a reader would recognise; `[ -f ]` would
+  # accept either, but a diagnostic naming `<root>/./.cursor/...` reads like a bug.
+  p="${p#./}"
   case "$p" in
     '') : ;;
     /*) printf '%s' "$p" ;;
@@ -370,39 +359,12 @@ _wiring_compute() {
   # are already globals in core/apply.sh, core/_lock.sh, core/compile.sh and core/cluster.sh, so an
   # undeclared one is a collision waiting for someone to reorder two lines.
   set -- $(_wiring_want "$kit" "$root")
-  wc="${1:-0}"; wu="${2:-0}"; ws="${3:-0}"
+  wu="${1:-0}"; ws="${2:-0}"
 
-  # Claude: slots from EITHER settings file count — Claude Code merges hook config from both, and
-  # requiring both would fail every project that uses only one. All three tools must be covered by
-  # some registered slot, because a tool the gate is not registered for is a tool the gate cannot see:
-  # Write and Edit are the payload branch, Bash is the branch that closed the settings/shell vector.
-  if [ "$wc" = 1 ]; then
-    slots=''
-    for f in "$root/.claude/settings.json" "$root/.claude/settings.local.json"; do
-      if [ -r "$f" ]; then
-        s="$(_wiring_slots "$f")"
-        if [ -n "$s" ]; then slots="$slots$s
-"; fi
-      fi
-    done
-    got=0; want=3; gate=''
-    for t in Write Edit Bash; do
-      cmd="$(_wiring_cover "$slots" PreToolUse "$t")"
-      [ -n "$cmd" ] || continue
-      got=$((got+1))
-      g="$(_wiring_resolve "$cmd" "$root")"
-      # Prefer a path that is missing. If any covered tool points somewhere that does not exist, the
-      # gate does not run for that tool call, and `dangling` is the honest answer for the set.
-      if [ ! -f "$g" ] || [ -z "$gate" ]; then gate="$g"; fi
-    done
-    one="$(_wiring_one "$gate" "$tier" "$got" "$want")"
-    _wiring_which "$out" "$one" && which="the self-protection gate (Claude, PreToolUse)"
-    out="$(_wiring_worse "$out" "$one")"
-  fi
-
-  # Cursor: one file, the same three slots in that harness's spelling. `beforeShellExecution` is where
-  # the shell vector lands (no matcher concept, so it covers `*`), and `preToolUse` carries a matcher
-  # exactly as Claude's `PreToolUse` does — so it is asked about Write and Edit by name, not by event.
+  # One file, three slots. `beforeShellExecution` is where the shell vector lands (no matcher
+  # concept, so it covers `*`); `preToolUse` carries a matcher, so it is asked about the write tools
+  # by name rather than by event. All three must be covered by some registered slot, because a tool
+  # the gate is not registered for is a tool the gate cannot see.
   if [ "$wu" = 1 ]; then
     slots=''
     f="$root/.cursor/hooks.json"
@@ -416,29 +378,23 @@ _wiring_compute() {
       if [ ! -f "$g" ] || [ -z "$gate" ]; then gate="$g"; fi
     done
     one="$(_wiring_one "$gate" "$tier" "$got" "$want")"
-    _wiring_which "$out" "$one" && which="the self-protection gate (Cursor)"
+    _wiring_which "$out" "$one" && which="the self-protection gate"
     out="$(_wiring_worse "$out" "$one")"
   fi
 
-  # The delivery gate is a second, independent slot: its own file, its own event (Stop, not
-  # PreToolUse), its own verdict, merged into the overall answer by the same worse-wins rule as the
-  # two harness blocks above. Deliberately NOT folded into the Claude block: _wiring_one stats ONE
-  # gate path, so two gates sharing that one block would make `dangling` unable to say which gate is
-  # missing when only one of the pair is.
+  # The delivery gate is a second, independent slot: its own event (`stop`, not `preToolUse`), its
+  # own verdict, merged into the overall answer by the same worse-wins rule as the block above.
+  # Deliberately NOT folded into that block: _wiring_one stats ONE gate path, so two gates sharing
+  # one block would make `dangling` unable to say which of the pair is missing.
   if [ "$ws" = 1 ]; then
     slots=''
-    for f in "$root/.claude/settings.json" "$root/.claude/settings.local.json"; do
-      if [ -r "$f" ]; then
-        s="$(_wiring_slots_stop "$f")"
-        if [ -n "$s" ]; then slots="$slots$s
-"; fi
-      fi
-    done
+    f="$root/.cursor/hooks.json"
+    if [ -r "$f" ]; then slots="$(_wiring_slots_stop "$f")"; fi
     got=0; want=1; gate=''
-    cmd="$(_wiring_cover "$slots" Stop '*')"
+    cmd="$(_wiring_cover "$slots" stop '*')"
     if [ -n "$cmd" ]; then got=1; gate="$(_wiring_resolve "$cmd" "$root")"; fi
     one="$(_wiring_one "$gate" "$tier" "$got" "$want")"
-    _wiring_which "$out" "$one" && which="the delivery gate (Claude, Stop)"
+    _wiring_which "$out" "$one" && which="the delivery gate (stop)"
     out="$(_wiring_worse "$out" "$one")"
   fi
 
@@ -569,7 +525,7 @@ integrity_report() {
       # The refusing paragraph carries `$which` for the same reason the four detail lines above do,
       # and it is the LAST sentence here to get it. It used to say "the gate also carries the
       # out-of-tree shadow record, so losing it means losing the only detector for a replaced kit
-      # tree" — which is a property of the SELF-PROTECTION gate (`.claude/hooks/.flaky-kit-expect`,
+      # tree" — which is a property of the SELF-PROTECTION gate (`.cursor/hooks/.flaky-kit-expect`,
       # read by both harnesses' copies of it) and simply false of the delivery gate, which carries no
       # such record. Verified: `integrity_report hardened dangling "the delivery gate (Claude, Stop)"`
       # printed a header and two details naming the delivery gate and then that sentence about a

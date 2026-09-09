@@ -69,57 +69,6 @@ _wr_lock() {
   return 0
 }
 
-# _wr_register <settings-file> <command> <matcher>... -> 0 when EVERY matcher merged and at least one
-# of them CHANGED the document, 2 when they all merged and none changed anything (already
-# registered), 1 when any one of them failed to land (mktemp, jq, or the mv). The caller uses this to
-# decide whether to say REPAIRED — a merge that never actually landed must never be reported as one
-# that did, and neither must a merge that landed on a document it had nothing to add to. Idempotent
-# and additive: adds the matcher block if absent and the command inside it if absent, and touches
-# nothing else in the document. Same merge install.sh performs, so an install and a repair cannot
-# disagree about the shape.
-#
-# THREE outcomes, decided the same way and for the same reason as `_wr_register_stop` below: a merge
-# succeeding is not a repair happening. This returned 0 for an idempotent no-op until the residual
-# wave, so `did_c` was set on every call that reached it and `wiring_repair` announced "REPAIRED —
-# the Claude gate registration has been rewritten." over a PreToolUse registration that was already
-# complete. Reachable on any mixed state, because `wiring_repair` re-merges EVERY slot whenever the
-# axis reports any failure at all: measured on a fully healthy install driven at `unregistered`, both
-# this line and the Cursor one printed while both settings files were semantically unchanged, and in
-# the delivery-gate restore's own convergence run the false line printed beside the true one with
-# nothing to tell a reader which was which.
-#
-# FAILURE DOMINATES a change: if one matcher's merge lands and another's does not, the answer is 1.
-# The caller's message for 1 is a diagnostic naming the file, and a half-merged document is exactly
-# the state that needs it — reporting the half that worked would be the misattribution again.
-#
-# "Changed" is `. == $a[0]` — semantic equality against the source, per matcher, before the mv — not
-# a second copy of the merge's own "is it registered?" predicate and not a byte comparison. jq
-# reformats, so bytes would call a hand-indented settings file repaired; and two spellings of one
-# rule is the shape this file keeps retracting. The merge only ever APPENDS (every `//=` here can
-# only fire when its key is absent, in which case the append fires too), so document-changed and
-# registration-added are the same fact.
-_wr_register() {
-  local s="$1" c="$2" m t rc=0 changed=0
-  shift 2
-  for m in "$@"; do
-    t="$(mktemp)" || { rc=1; continue; }
-    if jq --arg m "$m" --arg c "$c" '
-      .hooks //= {} | .hooks.PreToolUse //= [] |
-      (if any(.hooks.PreToolUse[]?; .matcher==$m) then . else .hooks.PreToolUse += [{matcher:$m, hooks:[]}] end) |
-      .hooks.PreToolUse |= map(if .matcher==$m then (.hooks //= []) |
-        (if any(.hooks[]?; .command==$c) then . else .hooks += [{type:"command", command:$c, timeout:10}] end)
-        else . end)' "$s" > "$t" 2>/dev/null && [ -s "$t" ]; then
-      jq -e --slurpfile a "$s" '. == $a[0]' "$t" >/dev/null 2>&1 || changed=1
-      mv "$t" "$s" || rc=1
-    else
-      rm -f "$t"
-      rc=1
-    fi
-  done
-  [ "$rc" = 0 ] && [ "$changed" = 0 ] && rc=2
-  return "$rc"
-}
-
 # _wr_register_cursor <hooks-file> <command> -> 0 when the merge landed AND changed the document,
 # 2 when it landed and changed nothing (already registered), 1 when it did not land. Cursor's
 # spelling of the same three slots; the SAME three-outcome contract as `_wr_register` above and
@@ -136,7 +85,7 @@ _wr_register_cursor() {
     .hooks.beforeShellExecution //= [] |
     (if any(.hooks.beforeShellExecution[]?; .command==$c) then . else .hooks.beforeShellExecution += [{command:$c, timeout:10}] end) |
     .hooks.preToolUse //= [] |
-    (if any(.hooks.preToolUse[]?; .command==$c) then . else .hooks.preToolUse += [{command:$c, matcher:"Write|Edit", timeout:10}] end)
+    (if any(.hooks.preToolUse[]?; .command==$c) then . else .hooks.preToolUse += [{command:$c, timeout:10}] end)
   ' "$s" > "$t" 2>/dev/null && [ -s "$t" ]; then
     jq -e --slurpfile a "$s" '. == $a[0]' "$t" >/dev/null 2>&1 && rc=2
     mv "$t" "$s" || rc=1
@@ -160,7 +109,7 @@ _wr_register_cursor() {
 # fixture whose Stop registration was untouched and correct. Measured at the `unprotected` tier with
 # the gate FILE deleted and the registration intact: `dangling` before, that line printed, `dangling`
 # after — a repair announced over a state that never converged, on every entrypoint, forever. It is
-# the same misattribution class the `did_c`/`did_u` split closed one function over, arriving through
+# the same misattribution class the per-control flag split closed one function over, arriving through
 # a different door. This function was the first of the three to be given the test; the residual wave
 # gave the same one to `_wr_register` and `_wr_register_cursor`, so all three now answer the same
 # question and the flags they feed all mean the same thing.
@@ -176,9 +125,9 @@ _wr_register_stop() {
   local s="$1" c="$2" t rc=0
   t="$(mktemp)" || return 1
   if jq --arg c "$c" '
-    .hooks //= {} | .hooks.Stop //= [] |
-    (if any(.hooks.Stop[]?; (.hooks // []) | any(.command==$c)) then .
-     else .hooks.Stop += [{hooks:[{type:"command", command:$c, timeout:20}]}] end)' "$s" > "$t" 2>/dev/null && [ -s "$t" ]; then
+    .hooks //= {} | .hooks.stop //= [] |
+    (if any(.hooks.stop[]?; .command==$c) then .
+     else .hooks.stop += [{command:$c, timeout:20, loop_limit:1}] end)' "$s" > "$t" 2>/dev/null && [ -s "$t" ]; then
     jq -e --slurpfile a "$s" '. == $a[0]' "$t" >/dev/null 2>&1 && rc=2
     mv "$t" "$s" || rc=1
   else
@@ -187,7 +136,7 @@ _wr_register_stop() {
   return "$rc"
 }
 
-# _wr_restore_gate <kit_root> <harness> <dest-dir> <want_stop> -> 0. Narrates; never fails.
+# _wr_restore_gate <kit_root> <dest-dir> <want_stop> -> 0. Narrates; never fails.
 #
 # TWO gate files, not one. `install.sh` has always vendored a restore source for the delivery gate
 # (`core/gate-src/claude/flaky-kit-delivery-gate.sh`) and `install-guard-test.sh` has always asserted
@@ -219,19 +168,19 @@ _wr_register_stop() {
 # `$root` went with it: it was never referenced at all. A five-parameter signature with two dead
 # slots is an invitation to a mis-ordered call, and the caller already computes `$dest` from `$root`.
 _wr_restore_gate() {
-  local kit="$1" harness="$2" dest="$3" want_stop="${4:-0}" src did=0
+  local kit="$1" dest="$2" want_stop="${3:-0}" src did=0
   # SEPARATE statement, not a sixth word on the `local` above. Bash declares every name in a `local`
   # list as unset BEFORE assigning any of them, so `local kit="$1" src="$kit/..."` reads `$kit` while
   # it is still unset and dies under `set -u` — "kit: unbound variable". The previous five-parameter
   # version had exactly that shape and never showed it, because its only caller is `wiring_repair`,
   # whose own `kit` local was visible here through dynamic scoping. The first direct call this file
   # has ever had (added with the signature above) is what surfaced it.
-  src="$kit/core/gate-src/$harness"
+  src="$kit/core/gate-src"
   # --- the self-protection gate ---------------------------------------------------------------
-  # This harness's gate is already there. `dangling` is a verdict over the whole project, so a
+  # The gate is already there. `dangling` is a verdict over the whole project, so a
   # project whose Claude gate is missing and whose Cursor gate is fine reaches this function twice;
   # without this line the healthy one is overwritten and announced as "restored", which is a repair
-  # claimed for a harness that was never broken — the same misattribution the per-harness `did_c`
+  # claimed for a control that was never broken — the same misattribution the per-control `did_s`
   # and `did_u` split exists to prevent, one function over. It is an `elif` chain rather than the
   # early `return` it used to be, because the delivery-gate arm below has to be reached whether or
   # not this file was missing — that early return IS the defect I1 names.
@@ -244,15 +193,15 @@ _wr_restore_gate() {
   if [ -e "$dest/flaky-kit-self-protection-gate.sh" ]; then
     :
   elif [ ! -s "$src/flaky-kit-self-protection-gate.sh" ]; then
-    echo "integrity: cannot restore the $harness gate — no usable restore source at $src." >&2
+    echo "integrity: cannot restore the self-protection gate — no usable restore source at $src." >&2
   elif ! mkdir -p "$dest/lib" 2>/dev/null; then
-    echo "integrity: cannot restore the $harness gate — $dest is not creatable." >&2
+    echo "integrity: cannot restore the self-protection gate — $dest is not creatable." >&2
   elif ! cp "$src/flaky-kit-self-protection-gate.sh" "$dest/flaky-kit-self-protection-gate.sh" 2>/dev/null; then
-    echo "integrity: cannot restore the $harness gate — writing $dest failed." >&2
+    echo "integrity: cannot restore the self-protection gate — writing $dest failed." >&2
   else
     chmod +x "$dest/flaky-kit-self-protection-gate.sh" 2>/dev/null || true
     did=1
-    echo "integrity: restored the $harness gate from the engine's copy." >&2
+    echo "integrity: restored the self-protection gate from the engine's copy." >&2
   fi
 
   # --- the delivery gate, where the install recorded the capability ------------------------------
@@ -261,25 +210,25 @@ _wr_restore_gate() {
   # could not see. `-s` for the same reason as above, with a sharper edge — a zero-byte delivery gate
   # exits 0 on every Stop, so I11 stops being enforced while `_wiring_one`'s `[ -f ]` reads `wired`.
   #
-  # ONE condition, `$want_stop`, and NOT `$want_stop` alongside a `[ "$harness" = claude ]` test. The
+  # ONE condition, `$want_stop`, and nothing else. The
   # delivery gate is a Claude control, but the caller's Cursor arm passes a literal 0 for exactly that
-  # reason, so a harness test here would be a second condition expressing the same rule — the shape
+  # reason, so a second test here would express the same rule twice — the shape
   # this file has already retracted twice, and the shape that leaves one of the two conditions dead
-  # and untestable. The harness stays in the MESSAGES rather than in the decision, so a call made with
+  # and untestable. The decision stays on the capability alone, so a call made with
   # the wrong one says what it did instead of quietly saying "claude".
   if [ "$want_stop" = 1 ]; then
     if [ -e "$dest/flaky-kit-delivery-gate.sh" ]; then
       :
     elif [ ! -s "$src/flaky-kit-delivery-gate.sh" ]; then
-      echo "integrity: cannot restore the $harness delivery gate — no usable restore source at $src." >&2
+      echo "integrity: cannot restore the delivery gate — no usable restore source at $src." >&2
     elif ! mkdir -p "$dest/lib" 2>/dev/null; then
-      echo "integrity: cannot restore the $harness delivery gate — $dest is not creatable." >&2
+      echo "integrity: cannot restore the delivery gate — $dest is not creatable." >&2
     elif ! cp "$src/flaky-kit-delivery-gate.sh" "$dest/flaky-kit-delivery-gate.sh" 2>/dev/null; then
-      echo "integrity: cannot restore the $harness delivery gate — writing $dest failed." >&2
+      echo "integrity: cannot restore the delivery gate — writing $dest failed." >&2
     else
       chmod +x "$dest/flaky-kit-delivery-gate.sh" 2>/dev/null || true
       did=1
-      echo "integrity: restored the $harness delivery gate from the engine's copy." >&2
+      echo "integrity: restored the delivery gate from the engine's copy." >&2
     fi
   fi
 
@@ -288,7 +237,7 @@ _wr_restore_gate() {
   # is not per-gate work. Running it only on a real restore is what keeps a project whose gates are
   # both present from being told about its audit lib on every entrypoint.
   #
-  # The messages say "the restored $harness hook", not "the $harness gate": when only the DELIVERY
+  # The messages say "the restored $harness hook", not "the self-protection gate": when only the DELIVERY
   # gate was restored, naming the self-protection gate here would be the same misattribution I2 fixed
   # one file over. The phrase "still runs, unaudited" is what the assertions match, and it is true of
   # whichever hook was restored.
@@ -312,7 +261,7 @@ _wr_restore_gate() {
 
 # wiring_repair <kit_root> <tier> <wiring> -> narrates to stderr, always returns 0.
 wiring_repair() {
-  local kit="${1:-}" tier="${2:-}" wiring="${3:-}" root wc wu ws s rcc rcu rcs did_c=0 did_u=0 did_s=0
+  local kit="${1:-}" tier="${2:-}" wiring="${3:-}" root wu ws s rcu rcs did_u=0 did_s=0
   case "$wiring" in
     unregistered|partial|dangling) : ;;
     *) return 0 ;;                      # wired, absent, foreign: nothing to do or nothing that is ours
@@ -332,7 +281,7 @@ wiring_repair() {
   # ("this is not the tree that was hardened … nothing it produces should be trusted") into the path
   # that is the kit's own protection hook, and flipped the axis from `dangling` to `wired`. The run is
   # refused anyway, so the write bought nothing. What it cost is real: `harden_targets`
-  # (core/lock-kit.sh) picks up .claude/hooks/flaky-kit-self-protection-gate.sh only when that file
+  # (core/lock-kit.sh) picks up .cursor/hooks/flaky-kit-self-protection-gate.sh only when that file
   # already exists, so a re-lock used to leave the path empty and the kit went on refusing until
   # someone reinstalled — with the file planted, the re-lock chowns it to root and `_wiring_one`'s
   # ownership identity test accepts it. A signal that used to survive the printed remedy no longer
@@ -355,66 +304,40 @@ wiring_repair() {
   command -v jq >/dev/null 2>&1 || return 0
 
   set -- $(_wiring_want "$kit" "$root")
-  wc="${1:-0}"; wu="${2:-0}"; ws="${3:-0}"
+  wu="${1:-0}"; ws="${2:-0}"
 
-  if [ "$wc" = 1 ]; then
-    [ "$wiring" = dangling ] && _wr_restore_gate "$kit" claude "$root/.claude/hooks" "$ws"
-    s="$root/.claude/settings.json"
+  if [ "$wu" = 1 ]; then
+    [ "$wiring" = dangling ] && _wr_restore_gate "$kit" "$root/.cursor/hooks" "$ws"
+    s="$root/.cursor/hooks.json"
     mkdir -p "$(dirname "$s")" 2>/dev/null
-    [ -e "$s" ] || echo '{}' > "$s" 2>/dev/null
+    [ -e "$s" ] || echo '{"version":1,"hooks":{}}' > "$s" 2>/dev/null
     if [ -w "$s" ] && jq -e . "$s" >/dev/null 2>&1; then
       if _wr_lock "$s"; then
-        # THREE outcomes here too, since the residual wave. `did_c` is set on exactly one of them —
-        # the merge landed AND the document changed — because the line it prints ("the registration
-        # has been rewritten") is a claim about a state change, and on an idempotent no-op no state
-        # changed. See `_wr_register`'s header for the measurement.
-        _wr_register "$s" '"$CLAUDE_PROJECT_DIR/.claude/hooks/flaky-kit-self-protection-gate.sh"' 'Write|Edit' 'Bash' && rcc=0 || rcc=$?
-        case "$rcc" in
-          0) did_c=1 ;;
+        # THREE outcomes, and `did_u` is set on exactly one of them — the merge landed AND the
+        # document changed — because the line it prints ("the registration has been rewritten") is a
+        # claim about a state change, and on an idempotent no-op no state changed.
+        _wr_register_cursor "$s" '.cursor/hooks/flaky-kit-self-protection-gate.sh' && rcu=0 || rcu=$?
+        case "$rcu" in
+          0) did_u=1 ;;
           2) : ;;   # already registered: nothing was repaired, so nothing is announced
-          *) echo "integrity: the Claude gate registration merge failed — $s was not repaired." >&2 ;;
+          *) echo "integrity: the self-protection gate registration merge failed — $s was not repaired." >&2 ;;
         esac
-        # The delivery gate (Stop) rides the SAME lock already held on this file, but tracks its OWN
-        # per-harness `did_s` flag rather than reusing `did_c`. `did_c` means specifically "the Claude
-        # SELF-PROTECTION gate registration was rewritten" — that is what its printed message says —
-        # and this is a second, independent control on the same harness, not a rename of the first.
-        # Reusing `did_c` re-opens exactly the defect Task 2's review split the original OR'd `did`
-        # into `did_c`/`did_u` to close: a failed self-protection merge alongside a SUCCEEDING Stop
-        # merge (a genuinely reachable combination — the two merges touch different keys, `.hooks.
-        # PreToolUse` vs `.hooks.Stop`, so one can error while the other lands) would set `did_c=1`
-        # from the Stop merge alone and announce "the Claude gate registration has been rewritten"
-        # while the self-protection gate — the thing that sentence is actually about — stays
-        # unregistered. Measured directly against the brief's own failing-PreToolUse fixture, with
-        # only the record changed to `claude stop`: `_wr_register` failed (PreToolUse stayed the
-        # string it was mutated to), `_wr_register_stop` succeeded (it never touches PreToolUse), and
-        # the shared-flag version printed "REPAIRED — the Claude gate registration has been
-        # rewritten." over a still-broken self-protection gate. `did_s` and its own message line below
-        # keep the two controls' success/failure reporting as independent as the merges themselves.
+        # The delivery gate rides the SAME lock already held on this file, but tracks its OWN `did_s`
+        # flag rather than reusing `did_u`. They are two independent controls on one file: the two
+        # merges touch different keys (`.hooks.preToolUse`/`.hooks.beforeShellExecution` vs
+        # `.hooks.stop`), so one can error while the other lands. Sharing a flag would let a
+        # succeeding stop merge announce "the gate registration has been rewritten" over a
+        # self-protection gate that is still unregistered.
+        #
         # Gated on `ws`, the capability the record actually requires — an install that predates the
-        # delivery gate (no `stop` token in core/.harness) must not gain a Stop registration it never
+        # delivery gate (no `stop` token in core/.harness) must not gain a stop registration it never
         # asked for; that is the same no-brick rule `_wiring_want` encodes.
-        #
-        # THREE outcomes from the merge, and `did_s` is set on exactly one of them: the merge landed
-        # AND the document changed. A merge succeeding is not a repair happening. Returning 0 for an
-        # idempotent no-op made this flag unconditional, so the line below printed on every entrypoint
-        # of a project whose Stop registration was already correct — including, before the restore
-        # above learned the delivery gate, over a `dangling` state that never converged.
-        #
-        # All THREE flags now mean the same thing. `did_s` had this test first and its two siblings
-        # kept the older "the merge landed" contract for one wave, which shipped two flags meaning
-        # different things under one name and a suite that pinned both rules at once. The older
-        # contract lost, for the reason this file has applied three times now: "the registration has
-        # been rewritten" is a claim about a state change, and there is no state change in an
-        # idempotent no-op. The assertion that pinned the old rule (a no-op Cursor merge beside a
-        # failing Claude one) has been inverted, and the property it actually existed to protect —
-        # per-harness attribution, never one shared REPAIRED — is now pinned on a fixture whose
-        # Cursor registration is genuinely ABSENT, so the announcement it requires is a true one.
         if [ "$ws" = 1 ]; then
-          _wr_register_stop "$s" '"$CLAUDE_PROJECT_DIR/.claude/hooks/flaky-kit-delivery-gate.sh"' && rcs=0 || rcs=$?
+          _wr_register_stop "$s" '.cursor/hooks/flaky-kit-delivery-gate.sh' && rcs=0 || rcs=$?
           case "$rcs" in
             0) did_s=1 ;;
-            2) : ;;   # already registered: nothing was repaired, so nothing is announced
-            *) echo "integrity: the Claude delivery gate registration merge failed — $s was not repaired." >&2 ;;
+            2) : ;;
+            *) echo "integrity: the delivery gate registration merge failed — $s was not repaired." >&2 ;;
           esac
         fi
         _wr_unlock
@@ -426,35 +349,7 @@ wiring_repair() {
     fi
   fi
 
-  if [ "$wu" = 1 ]; then
-    # A LITERAL 0, not "$ws", and this is where that decision lives — `_wr_restore_gate` tests the
-    # capability and nothing else. The delivery gate is a Claude control (Cursor has no stop event)
-    # and `core/gate-src/cursor` holds no copy of it, so passing the capability through here would
-    # ask for a restore that can only ever print "no usable restore source" about a file that cannot
-    # exist in this harness. Pinned by assertion in core/tests/integrity-test.sh, not by this comment.
-    [ "$wiring" = dangling ] && _wr_restore_gate "$kit" cursor "$root/.cursor/hooks" 0
-    s="$root/.cursor/hooks.json"
-    mkdir -p "$(dirname "$s")" 2>/dev/null
-    [ -e "$s" ] || echo '{"version":1,"hooks":{}}' > "$s" 2>/dev/null
-    if [ -w "$s" ] && jq -e . "$s" >/dev/null 2>&1; then
-      if _wr_lock "$s"; then
-        _wr_register_cursor "$s" '.cursor/hooks/flaky-kit-self-protection-gate.sh' && rcu=0 || rcu=$?
-        case "$rcu" in
-          0) did_u=1 ;;
-          2) : ;;   # already registered: nothing was repaired, so nothing is announced
-          *) echo "integrity: the Cursor gate registration merge failed — $s was not repaired." >&2 ;;
-        esac
-        _wr_unlock
-      else
-        echo "integrity: could not lock $s to repair the registration; the next entrypoint will retry." >&2
-      fi
-    else
-      echo "integrity: cannot repair the registration — $s is unwritable or not parseable JSON." >&2
-    fi
-  fi
-
-  [ "$did_c" = 1 ] && echo "integrity: REPAIRED — the Claude gate registration has been rewritten." >&2
-  [ "$did_s" = 1 ] && echo "integrity: REPAIRED — the Claude delivery gate registration has been rewritten." >&2
-  [ "$did_u" = 1 ] && echo "integrity: REPAIRED — the Cursor gate registration has been rewritten." >&2
+  [ "$did_u" = 1 ] && echo "integrity: REPAIRED — the self-protection gate registration has been rewritten." >&2
+  [ "$did_s" = 1 ] && echo "integrity: REPAIRED — the delivery gate registration has been rewritten." >&2
   return 0
 }

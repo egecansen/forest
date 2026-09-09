@@ -9,6 +9,7 @@ description: >
   on "generate the QA report", "summary deck", "export the work
   summary", or "show what we've shipped". Opt-in only — never
   auto-activates.
+disable-model-invocation: true
 ---
 
 # Hektor work summary deck

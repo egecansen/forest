@@ -2,12 +2,13 @@
 name: hektor-distill
 description: >
   Turn a session's captured tool log into PROPOSED memory. Reads
-  docs/hektor/observations.jsonl (written by the observe.sh PostToolUse hook) plus
-  the recent git diff, runs one cheap Haiku pass, and proposes new MEMORY.md
-  entries for the maintainer to accept or reject — it never writes memory itself.
+  docs/hektor/observations.jsonl (written by the observe.sh postToolUse hook) plus
+  the recent git diff, hands them to one cheap read-only subagent, and proposes new
+  MEMORY.md entries for the maintainer to accept or reject — it never writes memory itself.
   On-demand only. Triggers on "distill this session", "what did we learn",
   "propose memory from the log", "run distill". Adapted from ECC
   continuous-learning-v2, minus the daemon / confidence-scoring (see docs/ecc-backlog.md).
+disable-model-invocation: true
 ---
 
 # Hektor distill
@@ -21,6 +22,11 @@ allowed tools — is what makes this safe to run.)
 
 ## Run it
 
+Two steps: gather the raw material with shell, then hand it to a **read-only
+subagent** to distil.
+
+**1. Gather.**
+
 ```bash
 ROOT=$(git rev-parse --show-toplevel)
 OBS="$ROOT/docs/hektor/observations.jsonl"
@@ -28,17 +34,25 @@ OBS="$ROOT/docs/hektor/observations.jsonl"
 
 { echo "## Observations (last 500 tool calls)"; tail -n 500 "$OBS"
   echo; echo "## Recent changes"; git -C "$ROOT" diff --stat 2>/dev/null | tail -40
-  git -C "$ROOT" log --oneline -10 2>/dev/null; } \
-| claude --model haiku --print --allowedTools Read \
-    -p "$(cat "$ROOT/.claude/skills/hektor-distill/distill-prompt.txt")" \
-> "$ROOT/docs/hektor/memory-proposals.md"
-
-echo "proposals written to docs/hektor/memory-proposals.md — review, then hand-copy the good ones into MEMORY.md"
+  git -C "$ROOT" log --oneline -10 2>/dev/null; } > "$ROOT/docs/hektor/.distill-input.md"
 ```
 
-(`claude --print` runs one non-interactive Haiku turn. `--allowedTools Read`
-deliberately omits Write/Edit — the pass can read to verify a pattern but cannot
-persist anything.)
+**2. Distil.** Dispatch the `hektor-distiller` subagent with the contents of
+`scripts/distill-prompt.txt` as its brief, pointing it at
+`docs/hektor/.distill-input.md`. Ask it to write its proposals to
+`docs/hektor/memory-proposals.md`.
+
+That subagent is defined `readonly: true` (`.cursor/agents/hektor-distiller.md`),
+so it can read the log and verify a pattern in the repo but **cannot persist
+anything** — you paste its output into `memory-proposals.md` yourself, or let it
+return the block and write it in the main session. That single constraint is what
+makes this safe to run unattended.
+
+Why a subagent and not a CLI call: this used to shell out to a one-shot
+`claude --model haiku --print`. That coupled the skill to a specific vendor CLI
+being installed and authenticated. A subagent gets the same isolated cheap pass
+using the harness that is already running, with the read-only restriction
+declared in one place instead of re-argued per invocation.
 
 ## What the distiller looks for
 
@@ -56,7 +70,7 @@ Each proposal is one MEMORY.md-shaped block (frontmatter `name` / `description` 
 `type`, then the fact + **Why:** / **How to apply:** for feedback/project). No
 code snippets — patterns only. If nothing recurs 3+ times, it proposes nothing.
 
-The prompt lives in `distill-prompt.txt` beside this file.
+The prompt lives in `scripts/distill-prompt.txt` beside this file.
 
 ## Review
 
@@ -65,5 +79,5 @@ memory file and add its `MEMORY.md` pointer line yourself (or ask the agent to,
 which then goes through the normal review). Discard the rest. Then optionally
 truncate `observations.jsonl` so the next distill starts fresh.
 
-Both `observations.jsonl` and `memory-proposals.md` are gitignored — they never
-reach a PR.
+`observations.jsonl`, `.distill-input.md` and `memory-proposals.md` are all
+gitignored — they never reach a PR.

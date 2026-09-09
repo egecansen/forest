@@ -1,199 +1,177 @@
-# Hektor harness hooks
+# Hektor gates
 
-Project-scoped Claude Code hooks that make Hektor's methodology rules
-*binding* rather than advisory prose. Registered in `.claude/settings.json`
-(project settings) and resolved via `$CLAUDE_PROJECT_DIR`.
+The enforcement layer. Each gate is one bash script that reads Cursor's hook JSON
+on stdin and prints a verdict — so a rule that would otherwise be prose the agent
+is trusted to honour becomes **binding**.
 
-This is the Hektor port of [Achilles](https://www.npmjs.com/package/@civitas-cerebrum/achilles)'
-`hooks/` enforcement layer. Achilles' hooks live globally in `~/.claude/`
-and are installed by its `postinstall.js`; Hektor's are checked into the
-repo so the whole team gets the same gates and can review them in a diff.
+Registered in `.cursor/hooks.json` (merged from the pack's [`hooks.json`](../hooks.json)
+by `install.sh`, idempotently).
 
 ## Harness contract
 
-Each hook reads the tool-call JSON on **stdin** (`tool_name`, `tool_input`,
-`cwd`, …) and, to block a call, prints to **stdout**:
+Everything harness-specific lives in one file: [`lib/cursor.sh`](./lib/cursor.sh).
+It provides the accessors (`hektor_command`, `hektor_file_path`,
+`hektor_added_text`, `hektor_role`, `hektor_summary`, …) and the emitters
+(`hektor_deny`, `hektor_context`, `hektor_followup`). No gate parses Cursor's
+JSON itself, and no gate knows what Cursor is.
 
-```json
-{ "hookSpecificOutput": {
-    "hookEventName": "PreToolUse",
-    "permissionDecision": "deny",
-    "permissionDecisionReason": "…shown to the agent…" } }
-```
+Two consequences worth stating, because both are deliberate:
 
-Silent-allow = exit 0 with no output. All hooks are input-tolerant: missing
-state, malformed stdin, or absent `jq` → fail-open (allow), never crash the
-pipeline. Requires `jq` on PATH.
+- **Gates never match on `tool_name`.** Cursor's edit-tool naming has moved
+  across versions (`file_path` / `path` / `target_file`; `content` /
+  `new_string` / `code_edit`). The file gates key on the *shape* of
+  `tool_input` instead, so a rename upstream degrades them to fail-open rather
+  than silently to allow-everything.
+- **Every gate fails OPEN.** Missing `jq`, an unrecognised payload, a `python3`
+  that isn't there → `exit 0`. A gate that wedges the agent because its own
+  dependency is absent is a worse bug than the rule it was enforcing going
+  unchecked for one call.
 
-## Installed hooks
+Verdict shapes, per event:
 
-### Commit + dispatch discipline
+| Event | Output | Can it stop the action? |
+|---|---|---|
+| `beforeShellExecution` | `{permission:"deny"}` | yes — the command never runs |
+| `preToolUse` | `{permission:"deny"}` | yes — the write never lands |
+| `subagentStart` | `{permission:"deny"}` | yes — the subagent never starts |
+| `postToolUse` | `{additional_context}` | no — advisory, after the fact |
+| `subagentStop` / `stop` | `{followup_message}` | no — forces another turn |
+| `sessionStart` | `{additional_context}` | no — injects context |
 
-| Hook | Event | Matcher | Purpose | Bypass |
-|---|---|---|---|---|
-| [`commit-gate.sh`](./commit-gate.sh) | PreToolUse | Bash | Denies agent `git commit` / `git push` (enforces the manual-commit rule) and `--no-verify` / `--no-gpg-sign` bypass flags. | `HEKTOR_COMMIT_GATE=off` |
-| [`standard-mode-first-pass-guard.sh`](./standard-mode-first-pass-guard.sh) | PreToolUse | Agent | Denies `[group]` / `[P3-batch]` coverage-expansion dispatches on Pass 1 (standard) or any pass (depth). | `HEKTOR_FIRSTPASS_GUARD=off` |
+Exit code `2` also blocks. Any other non-zero is read as "the hook broke" and the
+action is allowed through.
+
+## Installed gates
+
+### Commit + destructive discipline
+
+| Gate | Event | Does | Kill switch |
+|---|---|---|---|
+| [`commit-gate.sh`](./commit-gate.sh) | `beforeShellExecution` | Denies agent `git commit` / `git push` (enforces the manual-commit rule) and `--no-verify` / `--no-gpg-sign` bypass flags. | `HEKTOR_COMMIT_GATE=off` |
+| [`destructive-command-gate.sh`](./destructive-command-gate.sh) | `beforeShellExecution` | Denies irreversible commands that wipe in-progress work — `rm -rf`, `git reset --hard`, `git clean -f`, whole-tree `git checkout/restore .`, `git stash clear/drop`. | `HEKTOR_DESTRUCTIVE_GATE=off` |
+
+Scope note: these fire on commands the **agent** runs. A command you type in
+Cursor's own terminal is not routed through the agent and is not gated — so this
+blocks the agent, not you.
 
 ### PR-reviewer mirror (catch it before the PR)
 
-The team's PR bot runs a deterministic regex pass (Katman 1a) over newly added
-lines and marks the PR "Needs Work" on any BLOCKER. This hook runs the same
-checks locally at write-time, so a violation is caught while authoring instead
-of on the PR. Line-based (Katman 1a) checks scan only the content the call adds
-(`Write.content` / `Edit.new_string`), mirroring the diff-based pass. Two
-file-wide Katman 1b checks (unused import, magic-number-3×) run against the full
-proposed file — the `content` on `Write`, or the on-disk file reconstructed with
-the `Edit`'s `old_string`/`new_string` — but only report a trigger that is part
-of the added lines. Class-context checks (class-name suffix, `extends`,
-`@Component`) fire only when the class declaration is itself in the added text.
-The remaining Katman 1b rules and all Katman 2 (Gemini semantic) rules stay as
-skill guidance (`hektor-conventions`, `hektor-resource-client`).
+Every PR is scanned by a bot that marks it **Needs Work** on a BLOCKER.
+`pr-rules-gate` runs the same deterministic checks at write-time.
 
-| Hook | Event | Matcher | Purpose | Bypass |
-|---|---|---|---|---|
-| [`pr-rules-gate.sh`](./pr-rules-gate.sh) | PreToolUse | Write\|Edit | On `*.java` under `web-ui-test/` (`*Page`/`*Layout`/`*Test`) or `test-data-client/` (`*ResourceClient`/`AbName.java`): **DENY** on reviewer BLOCKERs (`new …Page()`, XPath-in-`@FindBy`, `getRemoteWebDriver()`/`getShadowRoot()`/`findElement(By.)`, `@ScheduledDisable` w/o `reason`, `@PageLayout` name suffix, `*ResourceClient` `extends AbstractService`/`@Component`, `clients.*` URL `/`+`//`, `AbName` SCREAMING_SNAKE); **WARN** (systemMessage) on WARNINGs (Layout-var-in-test, `@FindBy` URL, `stream().map(getText)`, `checkVisualRegression*`-in-`assertx`, commented-out code, non-camelCase, `log` `+`-concat, `log` w/o `@Slf4j`, unused import, magic-number-3×). | `HEKTOR_PR_RULES_GATE=off` |
+| Gate | Event | Does | Kill switch |
+|---|---|---|---|
+| [`pr-rules-gate.sh`](./pr-rules-gate.sh) | `preToolUse` + `postToolUse` | On `*.java` under `web-ui-test/` (`*Page`/`*Layout`/`*Test`) or `test-data-client/` (`*ResourceClient`/`AbName.java`): **DENY** on reviewer BLOCKERs (`new …Page()`, XPath-in-`@FindBy`, `getRemoteWebDriver()`/`getShadowRoot()`/`findElement(By.)`, `@ScheduledDisable` w/o `reason`, `@PageLayout` name suffix, `*ResourceClient` `extends AbstractService`/`@Component`, `clients.*` URL `/`+`//`, `AbName` SCREAMING_SNAKE); advisory note on WARNINGs (Layout-var-in-test, `@FindBy` URL, `stream().map(getText)`, `checkVisualRegression*`-in-`assertx`, commented-out code, non-camelCase, `log` `+`-concat, `log` w/o `@Slf4j`, unused import, magic-number-3×). | `HEKTOR_PR_RULES_GATE=off` |
+
+It is registered on **both** events on purpose. `preToolUse` can veto a write but
+carries no channel for advisory text; `postToolUse` carries `additional_context`
+but runs after the write landed. So BLOCKERs veto up front and WARNINGs come back
+as a note once the file is on disk — one script, no duplicated rule logic. A
+WARNING-only file is never blocked, matching the reviewer, which leaves those as
+inline comments.
 
 ### Reviewer-attestation cluster (anti-self-grading)
 
-The orchestrator must not grade its own work. These four interlock: a phase
-can only reach `reviewerVerdict: "approved"` in `run-status.json` if a
-*registered reviewer subagent* writes it, that reviewer was *briefed properly*,
-and its approval *cited real files*.
+The orchestrator must not grade its own work.
 
-| Hook | Event | Matcher | Purpose | Bypass |
-|---|---|---|---|---|
-| [`reviewer-approver-registry.sh`](./reviewer-approver-registry.sh) | PreToolUse | Agent | Silent-allow registration. Records `workflow-reviewer-*` / `phase-validator-*` dispatches by `tool_use_id` into `docs/hektor/.workflow-approvers.json` (TTL 30m). | — (never blocks) |
-| [`reviewer-brief-gate.sh`](./reviewer-brief-gate.sh) | PreToolUse | Agent | Denies a `workflow-reviewer-*` brief that omits a `run-status.json` reference, a verification verb (Read/verify/inspect), or is < 400 chars ("just approve" patterns). | `HEKTOR_REVIEWER_BRIEF_GATE=off` |
-| [`run-status-write-gate.sh`](./run-status-write-gate.sh) | PreToolUse | Write\|Edit | Gates writes to `docs/hektor/run-status.json`: denies a phase→`reviewerVerdict:"approved"` from orchestrator context or an unregistered/expired approver; denies a phase→`status:"skipped"` lacking an `approvedDeviations[]` entry with a verbatim `authorizer` or structural reason prefix; denies unparseable JSON. | `HEKTOR_RUN_STATUS_GATE=off` |
-| [`reviewer-attestation-gate.sh`](./reviewer-attestation-gate.sh) | PostToolUse | Agent | WARN (can't reverse a finished return) when a reviewer's `verdict: approve` cites no project file path, or cites one that doesn't exist on disk. | — |
-| [`dispatch-ordering-gate.sh`](./dispatch-ordering-gate.sh) | PreToolUse | Agent | Denies a non-reviewer dispatch when a finished phase carries `reviewerVerdict != "approved"` (forces the reviewer first), and out-of-order `phase-<N>-` dispatches ahead of an unapproved prior phase. **Opt-in: only fires on phases that carry a `reviewerVerdict` field** — runs not using reviews are never blocked. The write-gate gates the *approval*; this gates the *sequence*. | `HEKTOR_ORDERING_GATE=off` |
+| Gate | Event | Does | Kill switch |
+|---|---|---|---|
+| [`reviewer-approver-registry.sh`](./reviewer-approver-registry.sh) | `subagentStart` | Silent-allow registration. Opens a 30-minute approval lease keyed by `subagent_id` when a `workflow-reviewer-*` / `phase-validator-*` role starts. | — (never blocks) |
+| [`reviewer-brief-gate.sh`](./reviewer-brief-gate.sh) | `subagentStart` | Denies a `workflow-reviewer-*` brief that omits a `run-status.json` reference, a verification verb (Read/verify/inspect), or is < 400 chars ("just approve" patterns). | `HEKTOR_REVIEWER_BRIEF_GATE=off` |
+| [`run-status-write-gate.sh`](./run-status-write-gate.sh) | `preToolUse` | Gates writes to `docs/hektor/run-status.json`: denies a phase→`reviewerVerdict:"approved"` with no open approver lease; denies a phase→`status:"skipped"` lacking an `approvedDeviations[]` entry with a verbatim `authorizer` or structural reason prefix; denies unparseable JSON. | `HEKTOR_RUN_STATUS_GATE=off` |
+| [`dispatch-ordering-gate.sh`](./dispatch-ordering-gate.sh) | `subagentStart` | Denies a non-reviewer dispatch when a finished phase carries `reviewerVerdict != "approved"` (forces the reviewer first), and out-of-order `phase-<N>-` dispatches ahead of an unapproved prior phase. **Opt-in: only fires on phases carrying a `reviewerVerdict` field** — runs not using reviews are never blocked. The write-gate gates the *approval*; this gates the *sequence*. | `HEKTOR_ORDERING_GATE=off` |
+| [`reviewer-attestation-gate.sh`](./reviewer-attestation-gate.sh) | `subagentStop` | Follow-up (can't reverse a finished return) when a reviewer's `verdict: approve` cites no project file path, or cites one that doesn't exist on disk. | — |
 
-**Convention this cluster introduces.** The slim `run-status.json` in
-METHODOLOGY.md gains an optional per-phase `reviewerVerdict: "approved"` field
-(the workflow-reviewer pattern the orchestrator SKILL references but never had
-a field for) and `approvedDeviations[].phase` keys. Reviewer subagents are
-dispatched with a `workflow-reviewer-<phase|pass>-<N>` description; the
-approval write must come from that subagent's context (`parent_tool_use_id`).
+**Known degradation, stated rather than papered over.** On Claude Code the
+write-gate matched a proposed approval's `parent_tool_use_id` against the
+registry, which proved the approval was written from *inside* the reviewer
+subagent. Cursor exposes no parent-call link on an ordinary tool call, so that
+attribution is not reconstructible. The lease keeps the half that matters — an
+approval cannot land unless an approver subagent actually ran, recently — and
+loses the other: it cannot prove the write came from within that subagent rather
+than from the orchestrator while one happened to be open.
 
 ### Subagent return-shape discipline
 
-Validate that subagents return the shape the orchestrator relies on. Contracts
-live in [`.claude/schemas/subagent-returns/`](../schemas/subagent-returns/README.md)
-(JSON Schema). Dispatches opt in via a role-prefix description; unrecognised
-prefixes are silent-allowed (gradual adoption).
+| Gate | Event | Does | Kill switch |
+|---|---|---|---|
+| [`subagent-schema-preread-gate.sh`](./subagent-schema-preread-gate.sh) | `subagentStart` | Denies a `composer-` / `probe-` / `workflow-reviewer-` / `phase-validator-` / `diagnosis-` dispatch whose brief doesn't cite its `*.schema.json`. | `HEKTOR_SCHEMA_PREREAD_GATE=off` |
+| [`subagent-return-schema-guard.sh`](./subagent-return-schema-guard.sh) | `subagentStop` | Follow-up when a return is missing a schema-`required` top-level field, violates a top-level `enum`, or breaks a conditional `if`/`then` rule (e.g. `status: skipped` ⇒ `skip-authorisation`; `confirmed-bugs ≥ 1` ⇒ `findings-ledger`; `classification: app-bug` ⇒ `bug-ticket`). jq-driven, dependency-free. | — |
+| [`standard-mode-first-pass-guard.sh`](./standard-mode-first-pass-guard.sh) | `subagentStart` | Denies `[group]` / `[P3-batch]` coverage-expansion dispatches on Pass 1 (standard) or any pass (depth). | `HEKTOR_FIRSTPASS_GUARD=off` |
 
-| Hook | Event | Matcher | Purpose | Bypass |
-|---|---|---|---|---|
-| [`subagent-schema-preread-gate.sh`](./subagent-schema-preread-gate.sh) | PreToolUse | Agent | Denies a `composer-` / `probe-` / `workflow-reviewer-` / `phase-validator-` / `diagnosis-` dispatch whose brief doesn't cite its `*.schema.json`. | `HEKTOR_SCHEMA_PREREAD_GATE=off` |
-| [`subagent-return-schema-guard.sh`](./subagent-return-schema-guard.sh) | PostToolUse | Agent | WARNs when a return is missing a schema-`required` top-level field, violates a top-level `enum`, or breaks a conditional `if`/`then` rule (e.g. `status: skipped` ⇒ `skip-authorisation`; `confirmed-bugs ≥ 1` ⇒ `findings-ledger`; `classification: app-bug` ⇒ `bug-ticket`). jq-driven, dependency-free. | — |
-| [`journey-map-sentinel-gate.sh`](./journey-map-sentinel-gate.sh) | PreToolUse | Write\|Edit | Denies writes to `docs/hektor/journey-map.md` whose line 1 isn't the `<!-- hektor:journey-mapping -->` sentinel — so the blueprint can't be hand-rolled or have its sentinel stripped. Edits that keep the sentinel pass. | `HEKTOR_JOURNEYMAP_GATE=off` |
+These key on a **role label**, which Hektor dispatches put on the first line of
+the task (`role: composer-j-hybrid-search`). See
+[`../agents/README.md`](../agents/README.md) for the full table.
 
-### Safety & memory (adopted from ECC)
+### Blueprint + safety
 
-New gates ported from the ECC audit (see `docs/ecc-backlog.md`). All fail-open,
-all with an env kill switch, and all profile-tagged (see below).
+| Gate | Event | Does | Kill switch |
+|---|---|---|---|
+| [`journey-map-sentinel-gate.sh`](./journey-map-sentinel-gate.sh) | `preToolUse` | Denies writes to `docs/hektor/journey-map.md` whose line 1 isn't the `<!-- hektor:journey-mapping -->` sentinel — so the blueprint can't be hand-rolled or have its sentinel stripped. Edits that keep the sentinel pass. | `HEKTOR_JOURNEYMAP_GATE=off` |
+| [`invisible-unicode-gate.sh`](./invisible-unicode-gate.sh) | `preToolUse` | Denies written `.md`/`.java`/frontmatter carrying invisible/bidi/Unicode-Tag codepoints (the ASCII-smuggling prompt-injection vector a human reviewer can't see). python3-based. | `HEKTOR_UNICODE_GATE=off` |
+| [`delivery-gate.sh`](./delivery-gate.sh) | `stop` | Follow-up when the session's final message rationalises away a red/flaky test ("skipping for now", "4/5 is fine", "should work", `Thread.sleep`, scope-reduce). Stands down once `loop_count` is non-zero, and `hooks.json` caps it with `loop_limit: 1` — a false positive costs one turn, never a loop. | `HEKTOR_DELIVERY_GATE=off` |
+| [`observe.sh`](./observe.sh) | `postToolUse` | Non-blocking capture: appends a secret-scrubbed one-line record per tool call to `docs/hektor/observations.jsonl` for the `hektor-distill` memory loop. Registered with no matcher, so it sees shell **and** edits. | `HEKTOR_OBSERVE=off` |
+| [`kernel-inject.sh`](./kernel-inject.sh) | `sessionStart` | Injects the router and the two non-negotiables once per session via `additional_context`. Only advertises skills actually installed. | `HEKTOR_KERNEL_INJECT=off` |
 
-| Hook | Event | Matcher | Purpose | Bypass |
-|---|---|---|---|---|
-| [`invisible-unicode-gate.sh`](./invisible-unicode-gate.sh) | PreToolUse | Write\|Edit | DENY when written `.md`/`.java`/frontmatter carries invisible/bidi/Unicode-Tag codepoints (the ASCII-smuggling prompt-injection vector a human reviewer can't see). python3-based. | `HEKTOR_UNICODE_GATE=off` |
-| [`destructive-command-gate.sh`](./destructive-command-gate.sh) | PreToolUse | Bash | DENY irreversible commands that wipe in-progress work — `rm -rf`, `git reset --hard`, `git clean -f`, whole-tree `git checkout/restore .`, `git stash clear/drop`. | `HEKTOR_DESTRUCTIVE_GATE=off` |
-| [`delivery-gate.sh`](./delivery-gate.sh) | Stop | — | Block-once when the session's final message rationalises away a red/flaky test ("skipping for now", "4/5 is fine", "should work", Thread.sleep, scope-reduce). `stop_hook_active` loop-guard → a false positive costs one turn, never a loop. `=warn` softens to advisory. | `HEKTOR_DELIVERY_GATE=off\|warn` |
-| [`observe.sh`](./observe.sh) | PostToolUse | Edit\|Write\|Bash | Non-blocking capture: append a secret-scrubbed one-line record per tool call to `docs/hektor/observations.jsonl` for the `hektor-distill` memory loop. | `HEKTOR_OBSERVE=off` |
-
-**Hook-profile dial** ([`lib/hook_profile.sh`](./lib/hook_profile.sh), ECC
-`hook-flags.js`): `HEKTOR_HOOK_PROFILE=minimal|standard|strict` selects which
-gates run — `minimal` = hard blockers only (commit, destructive, unicode,
-pr-rules) for CI; `standard` (default) = + capture + schema/journey gates;
-`strict` = + the reviewer-attestation nag cluster + the delivery Stop-gate.
-`HEKTOR_DISABLED_HOOKS=a,b` force-offs named gates. Currently the four gates
-above + `delivery`/`observe` are profile-tagged; the legacy gates run in all
-profiles (tagging them is a mechanical follow-up).
-
-**Shared lib additions:** `lib/audit.sh` now ships `hektor_redact` (linear-time
-secret scrub, reused by the audit log + `observe.sh`) and
-`hektor_additional_context` (emit a model-visible steering payload).
+`beforeSubmitPrompt` is deliberately unused: its output schema is only
+`{continue, user_message}` — it can veto a prompt, not add context. `sessionStart`
+is the injection point Cursor actually provides.
 
 ### Self-protection
 
-| Hook | Event | Matcher | Purpose | Bypass |
-|---|---|---|---|---|
-| [`enforcement-self-protection-gate.sh`](./enforcement-self-protection-gate.sh) | PreToolUse | Write\|Edit | Denies agent edits to the enforcement surface — `.claude/settings.json`, `.claude/hooks/**/*.sh` + `lib/`, `.claude/schemas/subagent-returns/*.schema.json` — so the layer can't be silently unregistered or neutered. `.md` docs are excluded. Legitimate maintenance sets the unlock flag; the unlock is logged. | `HEKTOR_HOOKS_UNLOCK=1` |
+| Gate | Event | Does | Kill switch |
+|---|---|---|---|
+| [`enforcement-self-protection-gate.sh`](./enforcement-self-protection-gate.sh) | `preToolUse` | Denies agent edits to the enforcement surface — `.cursor/hooks.json`, `.cursor/hooks/**/*.sh` + `lib/`, `.cursor/schemas/subagent-returns/*.schema.json` — so the layer can't be silently unregistered or neutered. `.md` docs are excluded, and skills/agents/rules are deliberately **not** on the surface: they are meant to be edited. Legitimate maintenance sets the unlock flag; the unlock is logged. | `HEKTOR_HOOKS_UNLOCK=1` |
+
+## Profiles
+
+One dial instead of N switches ([`lib/hook_profile.sh`](./lib/hook_profile.sh)):
+
+- `HEKTOR_HOOK_PROFILE=minimal` — hard blockers only (commit, destructive,
+  invisible-unicode, pr-rules). Good for CI / batch runs where the nag gates are noise.
+- `standard` (default) — the above plus capture and the schema/journey gates.
+- `strict` — plus the full reviewer-attestation cluster.
+
+`HEKTOR_DISABLED_HOOKS=commit-gate,observe` force-disables named gates.
+`HEKTOR_CURSOR_HOOKS=off` disables the whole layer.
 
 ## Vulnerabilities & threat model
 
-**This layer is effective against drift and accidental violation — it is not a
-security boundary against an agent that wants out.** The gated party controls
-its own shell, the state files, the environment, and (before the self-protection
-gate) the hook definitions. Read this before relying on any gate as a guarantee.
+**These gates are friction, not a security boundary.** Stated plainly because the
+distinction keeps getting lost:
 
-- **Trust model is inverted.** Most gates read state the agent itself authors
-  (`run-status.json`, `coverage-expansion-state.json`, dispatch descriptions,
-  reviewer briefs, `authorizer` quotes, attestations). Those checks are
-  *friction*, not walls. The **only** non-forgeable signal is the harness-set
-  `parent_tool_use_id` — which is why `run-status-write-gate`'s actor-identity
-  check is the one genuinely robust gate (it blocks the cheap self-grade: the
-  orchestrator's own writes carry no parent id and are denied).
-- **Forgeable-content checks (by design).** `authorizer` / `skip-authorisation`
-  are presence-only (a fabricated quote passes); the reviewer brief-gate checks
-  three paddable tokens; the attestation-gate checks file *existence*, not that
-  the file was read, and is WARN-only; `[group]` markers, `phase-<N>-` prefixes,
-  and schema citations are self-declared. A determined agent clears all of these.
-- **commit-gate is a string match on a shell.** Bypassable by `git -C . commit`,
-  `git --no-pager commit`, aliases, or write-then-`bash`. It stops the direct,
-  obvious commit only. A real guarantee needs server-side branch protection.
-- **Fail-open.** Missing `jq`, malformed input, or absent state silent-allows
-  (availability over enforcement, so the pipeline never wedges).
+- They fire on tool calls the agent makes. They do not see a write performed by a
+  compiled helper, or by anything that doesn't route through the harness.
+- Every hook script in a project is plainly writable by the user the agent runs
+  as. `enforcement-self-protection-gate` raises that from "one edit" to "one edit
+  plus an env var, logged" — that is the whole claim.
+- Every kill switch is settable by the agent being gated. They exist for
+  *documented human exceptions*, and their use is recorded to
+  `docs/hektor/.hook-audit.log`. That log lives inside the agent's own write
+  scope, so it is an audit trail, not a tamper-proof one.
 
-### What the self-protection hardening fixed
+The genuine wall, where one exists, is OS-level: see the flaky-triage kit's
+`core/lock-kit.sh` hardened tier (root ownership, password-gated reopen).
 
-- **Self-disable hole (closed to friction).** `enforcement-self-protection-gate`
-  denies Write/Edit to the enforcement surface unless `HEKTOR_HOOKS_UNLOCK=1`
-  is set — converting silent self-modification into a deliberate, audited act.
-- **One fail-OPEN bug (fixed).** `run-status-write-gate`'s `Edit` reconstruction
-  used `awk sub()` (ERE) — a regex metachar in `old_string` mis-reconstructed the
-  file and could drop an approval transition the gate then never saw. Now a
-  literal `index()`-based replace.
-- **Bypass visibility.** Every `HEKTOR_*=off` / `HEKTOR_HOOKS_UNLOCK=1` use is
-  appended to `docs/hektor/.hook-audit.log` (gitignored, best-effort) via
-  [`lib/audit.sh`](./lib/audit.sh).
+## Testing a gate by hand
 
-### Residual (inherent, not fixed)
-The env bypasses and the self-protection gate are themselves bypassable by a
-determined agent (e.g. a Bash file-write isn't a Write/Edit tool call); the audit
-log is agent-deletable; the forgeable-content and commit-gate limits above are
-structural. Put hard guarantees where they belong: server-side branch protection
-for commits, and a human reading `run-status.json` approvals rather than trusting
-them.
-
-## Not ported (no Selenium/Hektor analogue)
-
-`selector-development-*`, `playwright-cli-*` — bound to Playwright/the
-frontend-source editing pipeline Hektor structurally lacks.
-
-## Optional follow-ups — both now BUILT
-
-- **Journey-map sentinel gate** — built (`journey-map-sentinel-gate.sh`, see table
-  above). Enforces the `<!-- hektor:journey-mapping -->` line-1 sentinel on
-  `docs/hektor/journey-map.md`. Inert until a map exists, which is fine.
-- **Conditional schema enforcement** — built into `subagent-return-schema-guard.sh`
-  as a **dependency-free jq+grep** evaluator of the schemas' `allOf`/`if`/`then`
-  rules (handover.status const, top-level const, numeric minimum). The `node`+`ajv`
-  route was declined by the sandbox (won't run `npm install` of agent-chosen
-  packages unprompted) and isn't needed — the jq evaluator covers every
-  conditional our schemas use. If you later want a *generic* JSON-Schema engine
-  (arbitrary future schemas), authorise `npm install ajv yaml` under
-  `.claude/hooks/lib/` and add a node branch that falls back to the jq evaluator.
-
-### Not on the radar (no analogue)
-- `app-wide-scan-sentinel-gate` — needs an `app-wide-patterns.md` catalogue
-  concept Hektor doesn't have.
-- `standard-mode-first-pass-guard` Rules 2 & 3 — journey-mapping cycle-walkthrough
-  checks; no Hektor cycle-state ledger to read them against.
-
-## Testing a hook by hand
+Every gate is `bash` + `jq` reading stdin, so drive one directly:
 
 ```bash
-echo '{"tool_name":"Bash","tool_input":{"command":"git commit -m x"}}' \
-  | .claude/hooks/commit-gate.sh
-# -> emits the deny JSON
+# a shell gate
+printf '{"hook_event_name":"beforeShellExecution","command":"git commit -m x"}' \
+  | bash hooks/commit-gate.sh
+# -> {"permission":"deny", ...}
+
+# a file gate
+printf '{"hook_event_name":"preToolUse","tool_input":{"file_path":"/r/web-ui-test/FooTest.java","content":"new SearchPage();"}}' \
+  | bash hooks/pr-rules-gate.sh
+
+# a subagent gate (role comes from the task's first line)
+printf '{"hook_event_name":"subagentStart","subagent_id":"s1","task":"role: composer-j-x\\nGo."}' \
+  | bash hooks/subagent-schema-preread-gate.sh
 ```
+
+Silence means allow. `HEKTOR_HOOK_DEBUG=1` tees every raw payload to
+`docs/hektor/.cursor-hook-payload.log`, which is the fastest way to tune an
+accessor against what Cursor actually sends on your version.

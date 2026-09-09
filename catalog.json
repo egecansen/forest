@@ -1,7 +1,7 @@
 {
   "version": 1,
   "pack": "hektor",
-  "description": "Hektor QA skill set — pick skills + kits to load into a Claude session.",
+  "description": "Hektor QA skill set for Cursor — skills, subagent roles, and enforcement gates.",
   "groups": [
     "core",
     "discovery",
@@ -32,7 +32,7 @@
       "id": "hektor-distill",
       "label": "Distill",
       "group": "specialized",
-      "description": "Mine docs/hektor/observations.jsonl (from the observe.sh hook) + the recent diff via one Haiku pass to PROPOSE MEMORY.md entries — never auto-writes. On-demand memory loop."
+      "description": "Mine docs/hektor/observations.jsonl (from the observe.sh hook) + the recent diff via one cheap read-only subagent to PROPOSE MEMORY.md entries — never auto-writes. On-demand memory loop."
     },
     {
       "id": "hektor-edr-contract",
@@ -57,6 +57,12 @@
       "label": "Journey Mapping",
       "group": "discovery",
       "description": "Map user journeys for a sahibinden domain (search / classified posting / classified detail / myaccount / yepy / london / shopping / etc.) BEFORE…"
+    },
+    {
+      "id": "hektor-multi-ticket",
+      "label": "Multi Ticket",
+      "group": "core",
+      "description": "Parallel multi-ticket execution: one fully Hektor-active worktree per ticket (forest-managed), hektor-from-jira per ticket in waves of 2–3, every gradle run serialised through a lease over the reserved testbox pool, and one report table back to the primary session."
     },
     {
       "id": "hektor-orchestrator",
@@ -129,6 +135,18 @@
       "label": "Work Summary Deck",
       "group": "specialized",
       "description": "Generate a branded HTML deck (optionally rendered to PDF) summarising Hektor's QA output — new test classes, methods added, coverage growth…"
+    },
+    {
+      "id": "hektor-write-language-test",
+      "label": "Write Language Test",
+      "group": "authoring",
+      "description": "Author a language test — ONE method that passes in both the default TR run and the -Dtest.lang=en run. Binds language-dependent values via LanguageText.pick layout/page constants and tags the method @Tag(CommonTag.LANGUAGE); the test never sets the language itself."
+    },
+    {
+      "id": "turkce-imla-anlatim",
+      "label": "Türkçe İmla & Anlatım",
+      "group": "specialized",
+      "description": "Türkçe metinlerde imla hatalarını ve anlatım bozukluklarını TDK Sözlük API ile kontrol edip düzeltir. Yazım kuralları ve anlatım bozuklukları referansları + tdk_kontrol.py script'i ile gelir."
     }
   ],
   "kits": [
@@ -141,9 +159,19 @@
   "hooks": {
     "id": "hektor-gates",
     "label": "Gate hooks (enforcement)",
-    "description": "Advisory commit / dispatch-ordering / reviewer / schema gates, merged into .claude/settings.local.json. Kill-switch: HEKTOR_HOOKS=off.",
+    "description": "Cursor gates — commit/destructive blocks, PR-rule vetoes, subagent brief+return checks, session-end delivery check. Registered in .cursor/hooks.json. Kill switch: HEKTOR_CURSOR_HOOKS=off.",
     "dir": "hooks",
     "schemas": "schemas",
-    "settings": "settings.hooks.json"
+    "registrations": "hooks.json"
+  },
+  "agents": {
+    "id": "hektor-agents",
+    "label": "Subagent roles",
+    "dir": "agents"
+  },
+  "rules": {
+    "id": "hektor-kernel",
+    "label": "Always-applied router rule",
+    "path": "rules/hektor-kernel.mdc"
   }
 }

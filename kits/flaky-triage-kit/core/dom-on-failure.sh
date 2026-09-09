@@ -18,7 +18,8 @@ for t in jq git; do command -v "$t" >/dev/null || { echo "dom-on-failure: $t req
 
 FQCN="${1:-}"; TB="${2:-}"
 [ -n "$FQCN" ] && [ -n "$TB" ] || { echo "usage: dom-on-failure.sh <test-fqcn[.method]> <tb>" >&2; exit 64; }
-TBN="$(normalize_tb "$TB")" || { echo "I1: tb must be a testbox id (161 or tb161): $TB" >&2; exit 77; }
+TB_RAW="$TB"   # kept for assert_tb_dc below: the data centre lives in the SPELLING, not in $TB
+TBN="$(normalize_tb "$TB")" || { echo "I1: tb must be a testbox id (161, tb161, tbx161 or xtbx161): $TB" >&2; exit 77; }
 TB="$TBN"
 # Round3: strict_match is WHOLE-STRING — an embedded-newline fqcn that a line-oriented `grep -qE
 # '^...$'` would have let through on its first line is correctly rejected here.
@@ -28,7 +29,12 @@ REPO="$(git -C "$HERE" rev-parse --show-toplevel)"
 WD="$(jq -r '.run.workdir' "$CFG")"
 JH="${HEKTOR_FK_JAVA_HOME:-$(jq -r '.run.java_home // empty' "$CFG")}"; JH="${JH:-${JAVA_HOME:-}}"
 PROF="$(jq -r '.run.profile' "$CFG")"; LP="$(jq -r '.run.launchpad' "$CFG")"
-DC="$(jq -r '.run.data_center' "$CFG")"; BR="$(jq -r '.run.browser' "$CFG")"
+# HEKTOR_FK_DATA_CENTER honoured here as config.json's `_portability` note already promises and
+# rerun.sh already did — without it, assert_tb_dc below would accept a box in rerun.sh and refuse
+# the same box here the moment an operator used the documented override.
+DC="${HEKTOR_FK_DATA_CENTER:-$(jq -r '.run.data_center' "$CFG")}"; BR="$(jq -r '.run.browser' "$CFG")"
+# -Dapi.url is composed from $DC, never from the spelling — refuse a disagreement, never re-aim.
+assert_tb_dc "$TB_RAW" "$DC" || exit 77
 INIT="$HERE/capture.init.gradle"; SRC="$HERE/capture-src"; RES="$HERE/capture-res"
 { [ -f "$INIT" ] && [ -d "$SRC" ] && [ -d "$RES" ]; } || { echo "dom-on-failure: kit capture sources missing" >&2; exit 78; }
 

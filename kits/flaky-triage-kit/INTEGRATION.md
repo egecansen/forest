@@ -1,6 +1,6 @@
 # Integrating the flaky-triage kit
 
-The contract between the kit and anything that drives it — Claude Code, Cursor, Hektor
+The contract between the kit and anything that drives it — Cursor, Hektor
 Console, a terminal session, a future CI stage. If you are writing a driver, this file is
 what you need; `kernel.md` is why the rules are what they are, and `core/README.md` is how
 each module implements them.
@@ -56,12 +56,20 @@ runtime. Notable keys:
 
 ## 4. The testbox
 
-**Either spelling works everywhere: `161` and `tb161` are the same box.** The engine
-normalises to the bare numeric id internally (`normalize_tb` in `core/_strict.sh`), because
-ES holds the prefixed form and gradle wants the bare one. A driver should pass through
-whatever the operator typed and not translate.
+**Every spelling works everywhere. `161`, `tb161`, `tbx161` and `xtbx161` are the same box.**
+The engine normalises to the bare numeric id internally (`normalize_tb` in `core/_strict.sh`),
+because ES holds the prefixed form and gradle wants the bare one. A driver should pass through
+whatever the operator typed and not translate. `tbx161` is what `hektor-orchestrator` asks the
+operator to type; `xtbx161` is the URL host form, `${dc}tb${dc}${id}`.
 
-Anything else is rejected with **exit 77** — including a value whose first line is numeric
+**A spelling that names a data centre must name this kit's data centre.** `run.data_center`
+(overridable by `HEKTOR_FK_DATA_CENTER`) is what composes `-Dapi.url`, never the spelling — so
+`ytby161` against an `x` kit is refused with **exit 77** rather than quietly re-aimed at
+`xtbx161`. Export the override or pass the box that matches. `assert_tb_dc` owns this rule for
+`rerun.sh`, `dom-capture.sh` and `dom-on-failure.sh` alike.
+
+Anything else is rejected with **exit 77** — a mismatched pair (`xtby161`), a letter with no
+`tb` to prefix (`x161`), an unknown data-centre letter, and a value whose first line is numeric
 and whose second line is not.
 
 ## 5. The loop
@@ -214,12 +222,14 @@ instead of 67, so an open cluster reads as a corrupt file.
 Exit 67 means the run is **not** done: something is still `selected` or `applied`. Collect
 the verdicts. Never background a green-proof and quit.
 
-On Claude Code a Stop hook re-runs this same check at every stop, with no
-`stop_hook_active` escape and no environment bypass. Note that **a settled turn is a Stop**:
+The delivery gate re-runs this same check at every stop, with no
+loop-count escape and no environment bypass. Note that **a settled turn is a stop**:
 if your driver keeps one session open across turns, park each cluster in a terminal status
-(`deferred` is designed for this) before standing by, or the gate blocks a turn boundary it
-cannot distinguish from a session end. Cursor has no Stop event, so there this is the
-agent's own discipline — make `validate --final` an explicit step in your instructions.
+(`deferred` is designed for this) before standing by, or the gate fires on a turn boundary it
+cannot distinguish from a session end.
+
+If your driver is not Cursor, the gate is not installed and this row is the agent's own
+discipline — make `validate --final` an explicit step in your instructions.
 
 ## 10. Long-running jobs
 

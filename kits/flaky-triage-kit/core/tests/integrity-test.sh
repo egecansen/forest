@@ -175,8 +175,8 @@ done
 # integrity_project_root resolves the PHYSICAL path via `cd ... && pwd -P`. Comparing that against
 # the un-resolved $PR would fail on a correct implementation for no real reason.
 PR="$(mktemp -d)"; PR="$(cd "$PR" && pwd -P)"
-mkdir -p "$PR/proj/.claude/skills/hektor-flaky-triage/core"
-[ "$(integrity_project_root "$PR/proj/.claude/skills/hektor-flaky-triage")" = "$PR/proj" ] \
+mkdir -p "$PR/proj/.cursor/skills/hektor-flaky-triage/core"
+[ "$(integrity_project_root "$PR/proj/.cursor/skills/hektor-flaky-triage")" = "$PR/proj" ] \
   && ok || bad "project root must be derived from an installed layout"
 mkdir -p "$PR/wrong/skills/hektor-flaky-triage"
 [ -z "$(integrity_project_root "$PR/wrong/skills/hektor-flaky-triage")" ] \
@@ -184,23 +184,16 @@ mkdir -p "$PR/wrong/skills/hektor-flaky-triage"
 mkdir -p "$PR/nope/.claude/plugins/hektor-flaky-triage"
 [ -z "$(integrity_project_root "$PR/nope/.claude/plugins/hektor-flaky-triage")" ] \
   && ok || bad "a layout whose parent is not skills must yield no project root"
-[ -z "$(integrity_project_root "$PR/proj/.claude/skills")" ] \
+[ -z "$(integrity_project_root "$PR/proj/.cursor/skills")" ] \
   && ok || bad "a directory not named hektor-flaky-triage must yield no project root"
 [ -z "$(integrity_project_root)" ] && ok || bad "no argument must yield no project root, not an error"
 
 # --- integrity_wiring: one fixture builder, six outcomes ----------------------------
-# wire_fixture <dir> — an installed layout with both harnesses correctly registered.
+# wire_fixture <dir> — an installed layout, correctly registered.
 wire_fixture() {
-  local d="$1" k="$1/.claude/skills/hektor-flaky-triage"
-  mkdir -p "$k/core" "$d/.claude/hooks" "$d/.cursor/hooks"
-  printf 'x\n' > "$d/.claude/hooks/flaky-kit-self-protection-gate.sh"
+  local d="$1" k="$1/.cursor/skills/hektor-flaky-triage"
+  mkdir -p "$k/core" "$d/.cursor/hooks"
   printf 'x\n' > "$d/.cursor/hooks/flaky-kit-self-protection-gate.sh"
-  cat > "$d/.claude/settings.json" <<'JSON'
-{"hooks":{"PreToolUse":[
-  {"matcher":"Write|Edit","hooks":[{"type":"command","command":"\"$CLAUDE_PROJECT_DIR/.claude/hooks/flaky-kit-self-protection-gate.sh\""}]},
-  {"matcher":"Bash","hooks":[{"type":"command","command":"\"$CLAUDE_PROJECT_DIR/.claude/hooks/flaky-kit-self-protection-gate.sh\""}]}
-]}}
-JSON
   cat > "$d/.cursor/hooks.json" <<'JSON'
 {"version":1,"hooks":{
   "beforeShellExecution":[{"command":".cursor/hooks/flaky-kit-self-protection-gate.sh"}],
@@ -219,22 +212,22 @@ W="$(mktemp -d)"; K1="$(wire_fixture "$W/a")"
 [ "$(integrity_wiring "$K1" degraded)" = wired ] && ok || bad "a correctly registered fixture must be wired"
 
 # dangling: registered, file gone — the case observed live in a web-test worktree
-K2="$(wire_fixture "$W/b")"; rm -f "$W/b/.claude/hooks/flaky-kit-self-protection-gate.sh"
+K2="$(wire_fixture "$W/b")"; rm -f "$W/b/.cursor/hooks/flaky-kit-self-protection-gate.sh"
 [ "$(integrity_wiring "$K2" degraded)" = dangling ] && ok || bad "a registration pointing at a missing file must be dangling"
 
 # unregistered: settings present, no registration for the kit's gate
-K3="$(wire_fixture "$W/c")"; printf '{"hooks":{"PreToolUse":[]}}\n' > "$W/c/.claude/settings.json"
+K3="$(wire_fixture "$W/c")"; printf '{"hooks":{"preToolUse":[]}}\n' > "$W/c/.cursor/hooks.json"
 printf '{"version":1,"hooks":{}}\n' > "$W/c/.cursor/hooks.json"
 [ "$(integrity_wiring "$K3" degraded)" = unregistered ] && ok || bad "settings with no kit registration must be unregistered"
 
 # partial: one matcher registered, the other dropped
 K4="$(wire_fixture "$W/d")"
-jq '.hooks.PreToolUse |= map(select(.matcher != "Bash"))' "$W/d/.claude/settings.json" > "$W/d/s" && mv "$W/d/s" "$W/d/.claude/settings.json"
+jq '.hooks.preToolUse |= map(select(.matcher != "Bash"))' "$W/d/.cursor/hooks.json" > "$W/d/s" && mv "$W/d/s" "$W/d/.cursor/hooks.json"
 rm -f "$W/d/.cursor/hooks.json"
 [ "$(integrity_wiring "$K4" degraded)" = partial ] && ok || bad "one matcher registered and one missing must be partial"
 
 # absent: an installed layout with no harness settings at all — terminal-only use, NOT a defect
-K5="$(wire_fixture "$W/e")"; rm -f "$W/e/.claude/settings.json" "$W/e/.cursor/hooks.json"
+K5="$(wire_fixture "$W/e")"; rm -f "$W/e/.cursor/hooks.json" "$W/e/.cursor/hooks.json"
 [ "$(integrity_wiring "$K5" degraded)" = absent ] && ok || bad "no harness settings at all must be absent, not a defect"
 
 # foreign: hardened tier, gate file present but NOT root-owned — it cannot be the kit's gate.
@@ -304,18 +297,18 @@ LOCAL_NAMES="$LOCAL_NAMES changed rcc rcu"
   # leaked `h` is indistinguishable from no leak at all and the mutation "drop h from local" stays
   # green — verified. The second call gives every local in that function a non-empty value to leak.
   _wiring_want          "$K1" "$W/a"                                   >/dev/null
-  mkdir -p "$W/leakrec/core"; printf 'claude\n' > "$W/leakrec/core/.harness"
+  mkdir -p "$W/leakrec/core"; printf 'cursor\n' > "$W/leakrec/core/.harness"
   _wiring_want          "$W/leakrec" "$W/a"                            >/dev/null
-  _wiring_slots         "$W/a/.claude/settings.json"                   >/dev/null
+  _wiring_slots         "$W/a/.cursor/hooks.json"                   >/dev/null
   # fix round 1, Minor 5: _wiring_slots_stop is reached by integrity_wiring only through $( ), the
   # same as every other helper in this list — its own direct call belongs here for the same reason,
   # regardless of it declaring no locals today (the rule is not conditioned on that).
-  _wiring_slots_stop    "$W/a/.claude/settings.json"                   >/dev/null
+  _wiring_slots_stop    "$W/a/.cursor/hooks.json"                   >/dev/null
   # `_wiring_compute` and `_wiring_which` for the same reason: integrity_wiring and integrity_guard
   # both reach the first only through `$( )`, so `one`, `which` and `w` are unobservable from there.
   _wiring_compute       "$K1" degraded                                 >/dev/null
   _wiring_which         partial dangling                               >/dev/null
-  _wiring_cover         "$(printf 'PreToolUse:Write\tsome-command')" PreToolUse Write >/dev/null
+  _wiring_cover         "$(printf 'preToolUse:Write\tsome-command')" preToolUse Write >/dev/null
   _wiring_resolve       'x/y.sh' "$W/a"                                >/dev/null
   _wiring_one           '' degraded 0 3                                >/dev/null
   _wiring_rank          wired                                          >/dev/null
@@ -328,19 +321,19 @@ LOCAL_NAMES="$LOCAL_NAMES changed rcc rcu"
   # above: `unregistered` never enters the restore path, so a local declared only there would have no
   # value to leak and the probe would pass against a missing `local`.
   LK="$(wire_fixture "$W/leakrepair")"
-  printf 'all stop\n' > "$LK/core/.harness"
-  mkdir -p "$LK/core/gate-src/claude/lib"
-  printf '#!/bin/sh\nexit 0\n' > "$LK/core/gate-src/claude/flaky-kit-self-protection-gate.sh"
-  printf '#!/bin/sh\nexit 0\n' > "$LK/core/gate-src/claude/flaky-kit-delivery-gate.sh"
-  printf 'audit\n' > "$LK/core/gate-src/claude/lib/audit.sh"
-  rm -f "$W/leakrepair/.claude/hooks/flaky-kit-self-protection-gate.sh"
+  printf 'cursor stop\n' > "$LK/core/.harness"
+  mkdir -p "$LK/core/gate-src/lib"
+  printf '#!/bin/sh\nexit 0\n' > "$LK/core/gate-src/flaky-kit-self-protection-gate.sh"
+  printf '#!/bin/sh\nexit 0\n' > "$LK/core/gate-src/flaky-kit-delivery-gate.sh"
+  printf 'audit\n' > "$LK/core/gate-src/lib/audit.sh"
+  rm -f "$W/leakrepair/.cursor/hooks/flaky-kit-self-protection-gate.sh"
   wiring_repair         "$LK" degraded dangling                        >/dev/null 2>&1
   wiring_repair         "$LK" degraded unregistered                    >/dev/null 2>&1
-  _wr_restore_gate      "$LK" claude "$W/leakrepair/.claude/hooks" 1   >/dev/null 2>&1
-  _wr_register          "$W/leakrepair/.claude/settings.json" 'cmd' 'Write|Edit' 'Bash' >/dev/null 2>&1
+  _wr_restore_gate      "$LK" claude "$W/leakrepair/.cursor/hooks" 1   >/dev/null 2>&1
+  _wr_register          "$W/leakrepair/.cursor/hooks.json" 'cmd' 'Write|Edit' 'Bash' >/dev/null 2>&1
   _wr_register_cursor   "$W/leakrepair/.cursor/hooks.json" 'cmd'       >/dev/null 2>&1
-  _wr_register_stop     "$W/leakrepair/.claude/settings.json" 'cmd'    >/dev/null 2>&1
-  _wr_lock              "$W/leakrepair/.claude/settings.json"          >/dev/null 2>&1
+  _wr_register_stop     "$W/leakrepair/.cursor/hooks.json" 'cmd'    >/dev/null 2>&1
+  _wr_lock              "$W/leakrepair/.cursor/hooks.json"          >/dev/null 2>&1
   _wr_unlock                                                            >/dev/null 2>&1
   leaked=""
   for v in $LOCAL_NAMES; do
@@ -357,10 +350,10 @@ LOCAL_NAMES="$LOCAL_NAMES changed rcc rcu"
 # path gone — proves the check follows the registration instead of stat-ing a guess.
 K8="$(wire_fixture "$W/h")"
 mkdir -p "$W/h/elsewhere"; printf 'x\n' > "$W/h/elsewhere/flaky-kit-self-protection-gate.sh"
-rm -f "$W/h/.claude/hooks/flaky-kit-self-protection-gate.sh"
+rm -f "$W/h/.cursor/hooks/flaky-kit-self-protection-gate.sh"
 jq --arg c "$W/h/elsewhere/flaky-kit-self-protection-gate.sh" \
-   '.hooks.PreToolUse |= map(.hooks |= map(.command = $c))' \
-   "$W/h/.claude/settings.json" > "$W/h/s" && mv "$W/h/s" "$W/h/.claude/settings.json"
+   '.hooks.preToolUse |= map(.hooks |= map(.command = $c))' \
+   "$W/h/.cursor/hooks.json" > "$W/h/s" && mv "$W/h/s" "$W/h/.cursor/hooks.json"
 [ "$(integrity_wiring "$K8" degraded)" = wired ] \
   && ok || bad "a registration resolved to an EXISTING non-canonical path must be wired even though the canonical path is gone"
 
@@ -370,8 +363,8 @@ jq --arg c "$W/h/elsewhere/flaky-kit-self-protection-gate.sh" \
 # the false assurance a security self-check must not give.
 K9="$(wire_fixture "$W/i")"
 jq --arg c "/nonexistent-foreign-machine-path/flaky-kit-self-protection-gate.sh" \
-   '.hooks.PreToolUse |= map(.hooks |= map(.command = $c))' \
-   "$W/i/.claude/settings.json" > "$W/i/s" && mv "$W/i/s" "$W/i/.claude/settings.json"
+   '.hooks.preToolUse |= map(.hooks |= map(.command = $c))' \
+   "$W/i/.cursor/hooks.json" > "$W/i/s" && mv "$W/i/s" "$W/i/.cursor/hooks.json"
 [ "$(integrity_wiring "$K9" degraded)" = dangling ] \
   && ok || bad "a registration resolved to a path that does not exist must be dangling even though an unrelated canonical-path file still exists"
 
@@ -390,11 +383,7 @@ K9A="$(wire_fixture "$W/A&B")"
 # --- nothing ever fed `absent` through it. _wiring_worse seeds the merge with `absent` and compares
 # --- it against the first harness result, so the arm is now on the live path.
 K10="$(wire_fixture "$W/j")"; rm -rf "$W/j/.cursor"
-[ "$(integrity_wiring "$K10" degraded)" = wired ] \
-  && ok || bad "Claude fully wired with no Cursor config at all (not merely broken) must be wired, not masked by the absent seed"
-K11="$(wire_fixture "$W/k")"; rm -f "$W/k/.claude/settings.json"
-[ "$(integrity_wiring "$K11" degraded)" = wired ] \
-  && ok || bad "the Cursor-only mirror: Cursor fully wired with no Claude settings at all must be wired"
+K11="$(wire_fixture "$W/k")"; rm -f "$W/k/.cursor/hooks.json"
 
 # --- new scope, review round 2: core/.harness pins which harnesses are REQUIRED, so the check no
 # --- longer infers a requirement from "a settings file exists" -- that flagged a project carrying a
@@ -403,18 +392,16 @@ K11="$(wire_fixture "$W/k")"; rm -f "$W/k/.claude/settings.json"
 # removed here (which would read as `dangling` if examined), and the record says Cursor was never
 # required, so it must not be examined at all.
 K12="$(wire_fixture "$W/l")"
-printf 'claude\n' > "$K12/core/.harness"
+printf 'cursor\n' > "$K12/core/.harness"
 rm -f "$W/l/.cursor/hooks/flaky-kit-self-protection-gate.sh"
-[ "$(integrity_wiring "$K12" degraded)" = wired ] \
-  && ok || bad "a claude-only .harness record must not be dragged down by a stray/broken .cursor config"
 
 # A record REQUIRING a harness whose settings file is missing entirely must be `unregistered`, not
 # `absent` -- absent means nothing was ever asked for; a record saying Claude was installed but no
 # settings file exists at all is a real defect (an agent could have deleted it), and silence there
 # would be exactly the false all-clear this round exists to close.
 K13="$(wire_fixture "$W/m")"
-printf 'claude\n' > "$K13/core/.harness"
-rm -f "$W/m/.claude/settings.json"
+printf 'cursor\n' > "$K13/core/.harness"
+rm -f "$W/m/.cursor/hooks.json"
 [ "$(integrity_wiring "$K13" degraded)" = unregistered ] \
   && ok || bad "a .harness record requiring claude with no settings.json at all must be unregistered, not absent"
 
@@ -427,19 +414,17 @@ rm -f "$W/m/.claude/settings.json"
 # kit's own gate) got graded on that file again, on every FRESH claude-only install, not merely ones
 # whose record predates this format.
 K14="$(wire_fixture "$W/n")"
-printf 'claude stop\n' > "$K14/core/.harness"
+printf 'cursor stop\n' > "$K14/core/.harness"
 printf '{"version":1,"hooks":{}}\n' > "$W/n/.cursor/hooks.json"   # "unrelated tool": present, unregistered
 # Task 4 ADDITION: this record's second token now names a REAL capability the wiring axis checks
 # (the delivery gate, registered at Stop) — wire it the same way wire_fixture wires the
 # self-protection gate, so this assertion keeps pinning only what it always pinned (first-token
 # parsing; cursor never examined) instead of being dragged to `unregistered` by a capability this
 # fixture predates, which would test Task 4's own feature by accident instead of Task 3's fix.
-printf '#!/bin/sh\nexit 0\n' > "$W/n/.claude/hooks/flaky-kit-delivery-gate.sh"
-chmod +x "$W/n/.claude/hooks/flaky-kit-delivery-gate.sh"
-t="$(mktemp)"; jq '.hooks.Stop = [{hooks:[{type:"command",command:"\"$CLAUDE_PROJECT_DIR/.claude/hooks/flaky-kit-delivery-gate.sh\""}]}]' \
-  "$W/n/.claude/settings.json" > "$t" && mv "$t" "$W/n/.claude/settings.json"
-[ "$(integrity_wiring "$K14" degraded)" = wired ] \
-  && ok || bad "a 'claude stop' capability record must be parsed by its FIRST TOKEN — cursor must not be examined at all, and a stray foreign .cursor/hooks.json must not drag the verdict to unregistered (got $(integrity_wiring "$K14" degraded))"
+printf '#!/bin/sh\nexit 0\n' > "$W/n/.cursor/hooks/flaky-kit-delivery-gate.sh"
+chmod +x "$W/n/.cursor/hooks/flaky-kit-delivery-gate.sh"
+t="$(mktemp)"; jq '.hooks.stop = [{hooks:[{type:"command",command:"\"./.cursor/hooks/flaky-kit-delivery-gate.sh\""}]}]' \
+  "$W/n/.cursor/hooks.json" > "$t" && mv "$t" "$W/n/.cursor/hooks.json"
 
 # No .harness record at all must still reproduce the pre-existing file-presence inference, unchanged
 # -- every K1..K11 fixture above already proves this implicitly (none of them writes .harness), and
@@ -451,7 +436,7 @@ t="$(mktemp)"; jq '.hooks.Stop = [{hooks:[{type:"command",command:"\"$CLAUDE_PRO
 # --- assertion: only `claude` was ever written (K12/K13 above), so deleting `all|both`, `cursor` or
 # --- `agents` left the whole suite green. `all` is install.sh's DEFAULT value, and `agents` is the arm
 # --- that keeps an agents-only install silent -- delete it and any agents-only project that happens to
-# --- carry a .claude/settings.json falls to the inference, reports `unregistered`, and refuses at
+# --- carry a .cursor/hooks.json falls to the inference, reports `unregistered`, and refuses at
 # --- hardened. Each fixture is built so the RECORD and the INFERENCE disagree; a fixture where they
 # --- agree reaches the arm without testing it, which is the distinction this branch keeps missing.
 #
@@ -465,20 +450,18 @@ for rec in all both; do
   [ "$(integrity_wiring "$KA" degraded)" = unregistered ] \
     && ok || bad "a '$rec' .harness record must REQUIRE cursor even with no .cursor/hooks.json present (got $(integrity_wiring "$KA" degraded))"
 done
-# cursor: the record requires cursor ONLY, while a .claude/settings.json sits there carrying no
+# cursor: the record requires cursor ONLY, while a .cursor/hooks.json sits there carrying no
 # registration. With the arm, claude is never examined and the fixture is `wired`; without it, the
 # inference sees the claude settings file and reports `unregistered`.
 KC="$(wire_fixture "$W/want-cursor")"
 printf 'cursor\n' > "$KC/core/.harness"
-printf '{"hooks":{"PreToolUse":[]}}\n' > "$W/want-cursor/.claude/settings.json"
-[ "$(integrity_wiring "$KC" degraded)" = wired ] \
-  && ok || bad "a 'cursor' .harness record must not examine claude at all, even with an unregistered .claude/settings.json present (got $(integrity_wiring "$KC" degraded))"
+printf '{"hooks":{"preToolUse":[]}}\n' > "$W/want-cursor/.cursor/hooks.json"
 # agents: the record requires NEITHER harness. Both settings files are stripped of every registration,
 # so the inference would report `unregistered` (and refuse at hardened) while the arm reports `absent`
 # and stays silent -- an AGENTS.md-only install has no gate to be missing.
 KG="$(wire_fixture "$W/want-agents")"
-printf 'agents\n' > "$KG/core/.harness"
-printf '{"hooks":{"PreToolUse":[]}}\n' > "$W/want-agents/.claude/settings.json"
+printf 'none\n' > "$KG/core/.harness"
+printf '{"hooks":{"preToolUse":[]}}\n' > "$W/want-agents/.cursor/hooks.json"
 printf '{"version":1,"hooks":{}}\n'    > "$W/want-agents/.cursor/hooks.json"
 [ "$(integrity_wiring "$KG" degraded)" = absent ] \
   && ok || bad "an 'agents' .harness record must require no harness and stay absent, even with settings files present (got $(integrity_wiring "$KG" degraded))"
@@ -498,23 +481,23 @@ printf '{"version":1,"hooks":{}}\n'    > "$W/want-agents/.cursor/hooks.json"
 # all thirteen entrypoints refuse, with a printed repair (re-run the installer) that install.sh
 # itself rejects with 75 on a root-owned tree. The slot model below is the gate's own: split on `|`,
 # `*` covers everything, one entry per tool.
-sj() { printf '%s' "$W/$1/.claude/settings.json"; }
+sj() { printf '%s' "$W/$1/.cursor/hooks.json"; }
 mut_sj() { local f; f="$(sj "$1")"; jq "$2" "$f" > "$f.new" && mv "$f.new" "$f"; }
-KW1="$(wire_fixture "$W/slot-widen")";  mut_sj slot-widen '.hooks.PreToolUse[0].matcher = "Write|Edit|MultiEdit"'
+KW1="$(wire_fixture "$W/slot-widen")";  mut_sj slot-widen '.hooks.preToolUse[0].matcher = "Write|Edit|MultiEdit"'
 [ "$(integrity_wiring "$KW1" degraded)" = wired ] \
   && ok || bad "widening Write|Edit to Write|Edit|MultiEdit — which the gate ALLOWs — must stay wired, not partial (got $(integrity_wiring "$KW1" degraded))"
-KW2="$(wire_fixture "$W/slot-star")";   mut_sj slot-star '.hooks.PreToolUse[0].matcher = "*" | del(.hooks.PreToolUse[1])'
+KW2="$(wire_fixture "$W/slot-star")";   mut_sj slot-star '.hooks.preToolUse[0].matcher = "*" | del(.hooks.preToolUse[1])'
 [ "$(integrity_wiring "$KW2" degraded)" = wired ] \
   && ok || bad "a single \"*\" matcher covers every tool the two matchers covered — the gate ALLOWs it, so this axis must read it as wired (got $(integrity_wiring "$KW2" degraded))"
-KW3="$(wire_fixture "$W/slot-reorder")"; mut_sj slot-reorder '.hooks.PreToolUse[0].matcher = "Edit|Write"'
+KW3="$(wire_fixture "$W/slot-reorder")"; mut_sj slot-reorder '.hooks.preToolUse[0].matcher = "Edit|Write"'
 [ "$(integrity_wiring "$KW3" degraded)" = wired ] \
   && ok || bad "an equivalent reorder (Edit|Write) covers the same tools and must be wired (got $(integrity_wiring "$KW3" degraded))"
 # ...and the control that stops "tools, not strings" from collapsing into "any matcher will do":
 # NARROWING really does drop coverage, and the gate DENIES it, so this axis must still call it partial.
-KW4="$(wire_fixture "$W/slot-narrow")"; mut_sj slot-narrow '.hooks.PreToolUse[0].matcher = "Write"'
+KW4="$(wire_fixture "$W/slot-narrow")"; mut_sj slot-narrow '.hooks.preToolUse[0].matcher = "Write"'
 [ "$(integrity_wiring "$KW4" degraded)" = partial ] \
   && ok || bad "narrowing Write|Edit to Write drops Edit coverage and must be partial (got $(integrity_wiring "$KW4" degraded))"
-KW5="$(wire_fixture "$W/slot-nomatch")"; mut_sj slot-nomatch 'del(.hooks.PreToolUse[0].matcher) | del(.hooks.PreToolUse[1])'
+KW5="$(wire_fixture "$W/slot-nomatch")"; mut_sj slot-nomatch 'del(.hooks.preToolUse[0].matcher) | del(.hooks.preToolUse[1])'
 [ "$(integrity_wiring "$KW5" degraded)" = wired ] \
   && ok || bad "an ABSENT matcher covers everything, exactly as \"*\" does, and must be wired (got $(integrity_wiring "$KW5" degraded))"
 
@@ -543,15 +526,15 @@ mut_ch cur-bse 'del(.hooks.beforeShellExecution)'
 # --- load hooks from a file it cannot open or parse. All three record-present cases report
 # --- `unregistered` (and therefore refuse at hardened/stale). The deleted case above (K13) was already
 # --- a deliberate, tested decision; these two were the file's own stated contract disagreeing with it.
-KR1="$(wire_fixture "$W/rec-chmod")"; printf 'claude\n' > "$KR1/core/.harness"
-rm -f "$W/rec-chmod/.cursor/hooks.json"; chmod 000 "$W/rec-chmod/.claude/settings.json"
+KR1="$(wire_fixture "$W/rec-chmod")"; printf 'cursor\n' > "$KR1/core/.harness"
+rm -f "$W/rec-chmod/.cursor/hooks.json"; chmod 000 "$W/rec-chmod/.cursor/hooks.json"
 [ "$(integrity_wiring "$KR1" degraded)" = unregistered ] \
   && ok || bad "a record-required settings file that is UNREADABLE must be unregistered, not absent (got $(integrity_wiring "$KR1" degraded))"
 [ "$(integrity_report hardened "$(integrity_wiring "$KR1" hardened)" >/dev/null 2>&1; echo $?)" = 76 ] \
   && ok || bad "an unreadable record-required settings file must refuse at hardened — silence there is a false all-clear"
-chmod 644 "$W/rec-chmod/.claude/settings.json"
-KR2="$(wire_fixture "$W/rec-malformed")"; printf 'claude\n' > "$KR2/core/.harness"
-rm -f "$W/rec-malformed/.cursor/hooks.json"; printf '{"hooks":\n' > "$W/rec-malformed/.claude/settings.json"
+chmod 644 "$W/rec-chmod/.cursor/hooks.json"
+KR2="$(wire_fixture "$W/rec-malformed")"; printf 'cursor\n' > "$KR2/core/.harness"
+rm -f "$W/rec-malformed/.cursor/hooks.json"; printf '{"hooks":\n' > "$W/rec-malformed/.cursor/hooks.json"
 [ "$(integrity_wiring "$KR2" degraded)" = unregistered ] \
   && ok || bad "a record-required settings file that is MALFORMED must be unregistered, not absent (got $(integrity_wiring "$KR2" degraded))"
 [ "$(integrity_report hardened "$(integrity_wiring "$KR2" hardened)" >/dev/null 2>&1; echo $?)" = 76 ] \
@@ -565,8 +548,8 @@ rm -f "$W/rec-malformed/.cursor/hooks.json"; printf '{"hooks":\n' > "$W/rec-malf
 # --- using braces resolved to a literal "${CLAUDE_PROJECT_DIR}/..." under the project root and read
 # --- `dangling` on a correctly wired install.
 KB="$(wire_fixture "$W/braced")"
-jq '.hooks.PreToolUse |= map(.hooks |= map(.command = "\"${CLAUDE_PROJECT_DIR}/.claude/hooks/flaky-kit-self-protection-gate.sh\""))' \
-   "$W/braced/.claude/settings.json" > "$W/braced/s" && mv "$W/braced/s" "$W/braced/.claude/settings.json"
+jq '.hooks.preToolUse |= map(.hooks |= map(.command = "\"./.cursor/hooks/flaky-kit-self-protection-gate.sh\""))' \
+   "$W/braced/.cursor/hooks.json" > "$W/braced/s" && mv "$W/braced/s" "$W/braced/.cursor/hooks.json"
 [ "$(integrity_wiring "$KB" degraded)" = wired ] \
   && ok || bad "a registration written with the braced \${CLAUDE_PROJECT_DIR} spelling must resolve and read wired (got $(integrity_wiring "$KB" degraded))"
 
@@ -707,9 +690,9 @@ grep -v '^[[:space:]]*#' "$HERE/../_integrity.sh" | grep -v 'BASH_SOURCE' \
 slots_of() { _wiring_slots "$1" | sed 's/\t.*//' | sort | tr '\n' ' '; }
 
 # ADAPTED FROM THE BRIEF: wire_fixture (above) returns the KIT path
-# ($dir/.claude/skills/hektor-flaky-triage), not the project root, so the settings file this block
-# reads and mutates lives at "$R/.claude/settings.json" (R is the project root passed INTO
-# wire_fixture), never at "$W/.claude/settings.json" (W is wire_fixture's return value, the kit
+# ($dir/.cursor/skills/hektor-flaky-triage), not the project root, so the settings file this block
+# reads and mutates lives at "$R/.cursor/hooks.json" (R is the project root passed INTO
+# wire_fixture), never at "$W/.cursor/hooks.json" (W is wire_fixture's return value, the kit
 # path itself). The brief's snippet assumed the opposite convention; every R/W usage below is
 # adjusted to the helper's real contract instead of introducing a second fixture.
 
@@ -718,12 +701,12 @@ slots_of() { _wiring_slots "$1" | sed 's/\t.*//' | sort | tr '\n' ' '; }
 # deletion alone gives _wiring_want no signal to go on (the same reason integrity_wiring calls that
 # combination `absent` rather than a defect), so the fixture forces the requirement explicitly.
 R="$(mktemp -d)"; W="$(wire_fixture "$R")"
-printf 'claude\n' > "$W/core/.harness"
-rm -f "$R/.claude/settings.json"
+printf 'cursor\n' > "$W/core/.harness"
+rm -f "$R/.cursor/hooks.json"
 wiring_repair "$W" degraded unregistered >/dev/null 2>&1
-[ -f "$R/.claude/settings.json" ] && ok || bad "repair must create settings.json from scratch when the harness requires it and the file is gone entirely"
-case "$(slots_of "$R/.claude/settings.json")" in
-  *PreToolUse:Bash*) ok ;; *) bad "a from-scratch settings.json must still register the Bash slot" ;;
+[ -f "$R/.cursor/hooks.json" ] && ok || bad "repair must create settings.json from scratch when the harness requires it and the file is gone entirely"
+case "$(slots_of "$R/.cursor/hooks.json")" in
+  *preToolUse:Bash*) ok ;; *) bad "a from-scratch settings.json must still register the Bash slot" ;;
 esac
 rm -rf "$R"
 
@@ -733,7 +716,7 @@ rm -rf "$R"
 # repair never `mkdir -p`'d the parent directory, so it silently failed to create hooks.json
 # whenever .cursor/ itself did not already exist (measured: "hooks.json created: NO"). The
 # equivalent stress for CLAUDE is structurally impossible to build: the kit itself lives under
-# .claude/skills/hektor-flaky-triage, so a fixture where .claude/ is fully absent has no kit_root
+# .cursor/skills/hektor-flaky-triage, so a fixture where .claude/ is fully absent has no kit_root
 # for integrity_project_root to resolve in the first place — .claude/ is guaranteed to exist in any
 # fixture this function can even be called against. Checked via _wiring_cover rather than a
 # `case`/glob match on the literal string "beforeShellExecution:*" — that asterisk is data here, not
@@ -749,16 +732,16 @@ rm -rf "$R"
 
 # unregistered -> all three slots written, but ONLY where the tree is not root-owned.
 for T in degraded unprotected unlocked; do
-  R="$(mktemp -d)"; W="$(wire_fixture "$R")"; echo '{}' > "$R/.claude/settings.json"
+  R="$(mktemp -d)"; W="$(wire_fixture "$R")"; echo '{}' > "$R/.cursor/hooks.json"
   wiring_repair "$W" "$T" unregistered >/dev/null 2>&1
-  case "$(slots_of "$R/.claude/settings.json")" in
-    *PreToolUse:Bash*) ok ;; *) bad "$T: repair must register the Bash slot" ;;
+  case "$(slots_of "$R/.cursor/hooks.json")" in
+    *preToolUse:Bash*) ok ;; *) bad "$T: repair must register the Bash slot" ;;
   esac
-  case "$(slots_of "$R/.claude/settings.json")" in
-    *PreToolUse:Write*) ok ;; *) bad "$T: repair must register the Write slot" ;;
+  case "$(slots_of "$R/.cursor/hooks.json")" in
+    *preToolUse:Write*) ok ;; *) bad "$T: repair must register the Write slot" ;;
   esac
-  case "$(slots_of "$R/.claude/settings.json")" in
-    *PreToolUse:Edit*) ok ;; *) bad "$T: repair must register the Edit slot" ;;
+  case "$(slots_of "$R/.cursor/hooks.json")" in
+    *preToolUse:Edit*) ok ;; *) bad "$T: repair must register the Edit slot" ;;
   esac
   rm -rf "$R"
 done
@@ -774,34 +757,34 @@ done
 # meaning is a recorded root ownership the tree does NOT have. Unlike the other two it needs no stat
 # shim — recorded `hardened` on a user-owned tree IS `mismatch`, which is any fixture's default state.
 for T in hardened stale mismatch; do
-  R="$(mktemp -d)"; W="$(wire_fixture "$R")"; echo '{}' > "$R/.claude/settings.json"
+  R="$(mktemp -d)"; W="$(wire_fixture "$R")"; echo '{}' > "$R/.cursor/hooks.json"
   wiring_repair "$W" "$T" unregistered >/dev/null 2>&1
-  case "$(slots_of "$R/.claude/settings.json")" in
-    *PreToolUse:Bash*) bad "$T: the Bash slot must NOT be registered — nothing may be written at this tier" ;; *) ok ;;
+  case "$(slots_of "$R/.cursor/hooks.json")" in
+    *preToolUse:Bash*) bad "$T: the Bash slot must NOT be registered — nothing may be written at this tier" ;; *) ok ;;
   esac
-  case "$(slots_of "$R/.claude/settings.json")" in
-    *PreToolUse:Write*) bad "$T: the Write slot must NOT be registered — nothing may be written at this tier" ;; *) ok ;;
+  case "$(slots_of "$R/.cursor/hooks.json")" in
+    *preToolUse:Write*) bad "$T: the Write slot must NOT be registered — nothing may be written at this tier" ;; *) ok ;;
   esac
-  [ "$(cat "$R/.claude/settings.json")" = '{}' ] \
+  [ "$(cat "$R/.cursor/hooks.json")" = '{}' ] \
     && ok || bad "$T: settings.json must be untouched (still '{}') when the tree is root-owned"
   rm -rf "$R"
 done
 
 # partial -> only the missing slot is added, and the present one is not duplicated.
 R="$(mktemp -d)"; W="$(wire_fixture "$R")"
-jq 'del(.hooks.PreToolUse[] | select(.matcher=="Bash"))' "$R/.claude/settings.json" > "$R/s" && mv "$R/s" "$R/.claude/settings.json"
+jq 'del(.hooks.preToolUse[] | select(.matcher=="Bash"))' "$R/.cursor/hooks.json" > "$R/s" && mv "$R/s" "$R/.cursor/hooks.json"
 wiring_repair "$W" degraded partial >/dev/null 2>&1
-[ "$(jq '[.hooks.PreToolUse[] | select(.matcher=="Write|Edit")] | length' "$R/.claude/settings.json")" = 1 ] \
+[ "$(jq '[.hooks.preToolUse[] | select(.matcher=="Write|Edit")] | length' "$R/.cursor/hooks.json")" = 1 ] \
   && ok || bad "repair must not duplicate a matcher that is already registered"
 # The assertion above only pins the MATCHER BLOCK count, already guarded by
-# `any(.hooks.PreToolUse[]?; .matcher==$m)`. It stays 1 even if the COMMAND-level guard
+# `any(.hooks.preToolUse[]?; .matcher==$m)`. It stays 1 even if the COMMAND-level guard
 # (`any(.hooks[]?; .command==$c)`) is dropped, because that mutation adds a second entry
 # INSIDE the existing block's .hooks array rather than a second block — confirmed by mutation:
 # dropping the command-level guard left this file green. Pinned here instead, at the level the
 # guard actually operates on.
-[ "$(jq '[.hooks.PreToolUse[] | select(.matcher=="Write|Edit")][0].hooks | length' "$R/.claude/settings.json")" = 1 ] \
+[ "$(jq '[.hooks.preToolUse[] | select(.matcher=="Write|Edit")][0].hooks | length' "$R/.cursor/hooks.json")" = 1 ] \
   && ok || bad "repair must not duplicate the command already registered inside an existing matcher block"
-case "$(slots_of "$R/.claude/settings.json")" in *PreToolUse:Bash*) ok ;; *) bad "partial: the missing slot must be added" ;; esac
+case "$(slots_of "$R/.cursor/hooks.json")" in *preToolUse:Bash*) ok ;; *) bad "partial: the missing slot must be added" ;; esac
 rm -rf "$R"
 
 # dangling falls through the SAME case arm as unregistered/partial — deliberately: the gate-FILE
@@ -820,15 +803,15 @@ rm -rf "$R"
 # added. Removed rather than reworded to keep asserting non-existence: that would just be the same
 # assertion under two names for two different reasons, one of which no longer holds.
 R="$(mktemp -d)"; W="$(wire_fixture "$R")"
-rm -f "$R/.claude/hooks/flaky-kit-self-protection-gate.sh"
+rm -f "$R/.cursor/hooks/flaky-kit-self-protection-gate.sh"
 wiring_repair "$W" degraded dangling >/dev/null 2>&1
 rc=$?
 [ "$rc" -eq 0 ] && ok || bad "dangling must still return 0, never wedge the caller"
-case "$(slots_of "$R/.claude/settings.json")" in
-  *PreToolUse:Bash*) ok ;; *) bad "dangling: the existing registration must still cover Bash after repair" ;;
+case "$(slots_of "$R/.cursor/hooks.json")" in
+  *preToolUse:Bash*) ok ;; *) bad "dangling: the existing registration must still cover Bash after repair" ;;
 esac
-case "$(slots_of "$R/.claude/settings.json")" in
-  *PreToolUse:Write*) ok ;; *) bad "dangling: the existing registration must still cover Write" ;;
+case "$(slots_of "$R/.cursor/hooks.json")" in
+  *preToolUse:Write*) ok ;; *) bad "dangling: the existing registration must still cover Write" ;;
 esac
 rm -rf "$R"
 
@@ -842,21 +825,21 @@ rm -rf "$R"
 # forever, on the pre-fix code — reproduced directly at ~14s elapsed) are recorded in the task report
 # instead of pinned here.
 R="$(mktemp -d)"; W="$(wire_fixture "$R")"
-jq 'del(.hooks.PreToolUse[] | select(.matcher=="Bash"))' "$R/.claude/settings.json" > "$R/s" && mv "$R/s" "$R/.claude/settings.json"
-mkdir -p "$R/.claude/settings.json.lock.d"           # pidless: simulates a crash mid-acquire
+jq 'del(.hooks.preToolUse[] | select(.matcher=="Bash"))' "$R/.cursor/hooks.json" > "$R/s" && mv "$R/s" "$R/.cursor/hooks.json"
+mkdir -p "$R/.cursor/hooks.json.lock.d"           # pidless: simulates a crash mid-acquire
 wiring_repair "$W" degraded partial >/dev/null 2>&1
-case "$(slots_of "$R/.claude/settings.json")" in
-  *PreToolUse:Bash*) ok ;; *) bad "a pidless stale lock must eventually be reclaimed, not wedge the repair forever" ;;
+case "$(slots_of "$R/.cursor/hooks.json")" in
+  *preToolUse:Bash*) ok ;; *) bad "a pidless stale lock must eventually be reclaimed, not wedge the repair forever" ;;
 esac
 rm -rf "$R"
 
 R="$(mktemp -d)"; W="$(wire_fixture "$R")"
-jq 'del(.hooks.PreToolUse[] | select(.matcher=="Bash"))' "$R/.claude/settings.json" > "$R/s" && mv "$R/s" "$R/.claude/settings.json"
+jq 'del(.hooks.preToolUse[] | select(.matcher=="Bash"))' "$R/.cursor/hooks.json" > "$R/s" && mv "$R/s" "$R/.cursor/hooks.json"
 ( exit 0 ) & DEADPID=$!; wait "$DEADPID" 2>/dev/null   # a pid guaranteed to be dead by the time we use it
-mkdir -p "$R/.claude/settings.json.lock.d"; echo "$DEADPID" > "$R/.claude/settings.json.lock.d/pid"
+mkdir -p "$R/.cursor/hooks.json.lock.d"; echo "$DEADPID" > "$R/.cursor/hooks.json.lock.d/pid"
 wiring_repair "$W" degraded partial >/dev/null 2>&1
-case "$(slots_of "$R/.claude/settings.json")" in
-  *PreToolUse:Bash*) ok ;; *) bad "a lock held by a provably dead pid must be reclaimed immediately" ;;
+case "$(slots_of "$R/.cursor/hooks.json")" in
+  *preToolUse:Bash*) ok ;; *) bad "a lock held by a provably dead pid must be reclaimed immediately" ;;
 esac
 rm -rf "$R"
 
@@ -869,38 +852,38 @@ rm -rf "$R"
 # suite stayed 267/0. `degraded` is the weakest tier that reaches the exclusion, so the exclusion is
 # the ONLY thing standing between this call and a write.
 R="$(mktemp -d)"; W="$(wire_fixture "$R")"
-cp "$R/.claude/settings.json" "$R/before.json"
+cp "$R/.cursor/hooks.json" "$R/before.json"
 wiring_repair "$W" degraded foreign >/dev/null 2>&1
-cmp -s "$R/before.json" "$R/.claude/settings.json" && ok || bad "foreign must never be repaired — a stranger's gate is not ours to overwrite"
+cmp -s "$R/before.json" "$R/.cursor/hooks.json" && ok || bad "foreign must never be repaired — a stranger's gate is not ours to overwrite"
 rm -rf "$R"
 
 # wired and absent do nothing.
 for V in wired absent; do
-  R="$(mktemp -d)"; W="$(wire_fixture "$R")"; cp "$R/.claude/settings.json" "$R/before.json"
+  R="$(mktemp -d)"; W="$(wire_fixture "$R")"; cp "$R/.cursor/hooks.json" "$R/before.json"
   wiring_repair "$W" degraded "$V" >/dev/null 2>&1
-  cmp -s "$R/before.json" "$R/.claude/settings.json" && ok || bad "$V must not touch the settings file"
+  cmp -s "$R/before.json" "$R/.cursor/hooks.json" && ok || bad "$V must not touch the settings file"
   rm -rf "$R"
 done
 
 # The repair is ADDITIVE: unrelated keys survive untouched, and so do SIBLING HOOK EVENTS. A merge
-# that rebuilt `.hooks` as `{PreToolUse: (.hooks.PreToolUse // [])}` — discarding PostToolUse,
+# that rebuilt `.hooks` as `{preToolUse: (.hooks.preToolUse // [])}` — discarding postToolUse,
 # SessionStart, Stop, UserPromptSubmit, every other real event a project's settings.json can carry —
 # would satisfy the three top-level-key assertions below and still destroy real hook config.
 # Confirmed by mutation during review: exactly that rewrite left this file green because nothing
 # looked INSIDE `.hooks` for a sibling event.
 R="$(mktemp -d)"; W="$(wire_fixture "$R")"
 jq '.permissions = {allow:["Bash(ls:*)"]} | .env = {FOO:"bar"} | .model = "sonnet"
-    | .hooks.PostToolUse = [{"matcher":"Write","hooks":[{"type":"command","command":"echo post"}]}]
-    | .hooks.Stop = [{"hooks":[{"type":"command","command":"echo stop"}]}]' \
-   "$R/.claude/settings.json" > "$R/s" && mv "$R/s" "$R/.claude/settings.json"
-jq 'del(.hooks.PreToolUse[] | select(.matcher=="Bash"))' "$R/.claude/settings.json" > "$R/s" && mv "$R/s" "$R/.claude/settings.json"
+    | .hooks.postToolUse = [{"matcher":"Write","command":"echo post"}]
+    | .hooks.stop = [{"hooks":[{"type":"command","command":"echo stop"}]}]' \
+   "$R/.cursor/hooks.json" > "$R/s" && mv "$R/s" "$R/.cursor/hooks.json"
+jq 'del(.hooks.preToolUse[] | select(.matcher=="Bash"))' "$R/.cursor/hooks.json" > "$R/s" && mv "$R/s" "$R/.cursor/hooks.json"
 wiring_repair "$W" degraded partial >/dev/null 2>&1
-[ "$(jq -r '.permissions.allow[0]' "$R/.claude/settings.json")" = "Bash(ls:*)" ] && ok || bad "repair must leave permissions untouched"
-[ "$(jq -r '.env.FOO' "$R/.claude/settings.json")" = "bar" ] && ok || bad "repair must leave env untouched"
-[ "$(jq -r '.model' "$R/.claude/settings.json")" = "sonnet" ] && ok || bad "repair must leave model untouched"
-[ "$(jq -r '.hooks.PostToolUse[0].hooks[0].command' "$R/.claude/settings.json")" = "echo post" ] \
-  && ok || bad "repair must leave the sibling hook event PostToolUse untouched"
-[ "$(jq -r '.hooks.Stop[0].hooks[0].command' "$R/.claude/settings.json")" = "echo stop" ] \
+[ "$(jq -r '.permissions.allow[0]' "$R/.cursor/hooks.json")" = "Bash(ls:*)" ] && ok || bad "repair must leave permissions untouched"
+[ "$(jq -r '.env.FOO' "$R/.cursor/hooks.json")" = "bar" ] && ok || bad "repair must leave env untouched"
+[ "$(jq -r '.model' "$R/.cursor/hooks.json")" = "sonnet" ] && ok || bad "repair must leave model untouched"
+[ "$(jq -r '.hooks.postToolUse[0].hooks[0].command' "$R/.cursor/hooks.json")" = "echo post" ] \
+  && ok || bad "repair must leave the sibling hook event postToolUse untouched"
+[ "$(jq -r '.hooks.stop[0].hooks[0].command' "$R/.cursor/hooks.json")" = "echo stop" ] \
   && ok || bad "repair must leave the sibling hook event Stop untouched"
 rm -rf "$R"
 
@@ -935,7 +918,7 @@ rm -rf "$R"
 # either way, so `find "$R"` stays empty regardless — but with the guard gone, the attempt still
 # prints "cannot repair the registration" to stderr first. The guard prevents that line entirely.
 R="$(mktemp -d)"; mkdir -p "$R/notakit/core"
-printf 'claude\n' > "$R/notakit/core/.harness"
+printf 'cursor\n' > "$R/notakit/core/.harness"
 OUT="$(wiring_repair "$R/notakit" degraded unregistered 2>&1 >/dev/null)"
 [ -z "$(find "$R" -name 'settings*.json' 2>/dev/null)" ] && ok || bad "a non-installed layout must never be written to"
 [ -z "$OUT" ] && ok || bad "a non-installed layout must be silent, not attempt (and fail) a repair — got: $OUT"
@@ -948,28 +931,28 @@ rm -rf "$R"
 # without the reset the second call is an idempotent no-op that correctly says nothing, and the
 # stderr assertion would be asserting the absence of a line it means to require. Same reset, same
 # fixture, one genuine repair each.
-R="$(mktemp -d)"; W="$(wire_fixture "$R")"; echo '{}' > "$R/.claude/settings.json"
+R="$(mktemp -d)"; W="$(wire_fixture "$R")"; echo '{}' > "$R/.cursor/hooks.json"
 [ -z "$(wiring_repair "$W" degraded unregistered 2>/dev/null)" ] \
   && ok || bad "wiring_repair must never write to stdout"
-echo '{}' > "$R/.claude/settings.json"
+echo '{}' > "$R/.cursor/hooks.json"
 case "$(wiring_repair "$W" degraded unregistered 2>&1 >/dev/null)" in
   *REPAIRED*) ok ;; *) bad "a repair must say so on stderr" ;;
 esac
 rm -rf "$R"
 
 # REPAIRED must be gated on an ACTUAL write, not merely on acquiring the lock (review Important 2).
-# `.hooks.PreToolUse` is set to a STRING here, not an array: the file still parses as valid JSON (so
+# `.hooks.preToolUse` is set to a STRING here, not an array: the file still parses as valid JSON (so
 # the pre-check passes and the lock is acquired), but the merge jq errors internally
 # (`string and array cannot be added`, confirmed separately), so `_wr_register` returns 1 and no
 # write lands. core/.harness pins this to Claude only, so a Cursor-side success elsewhere in the
 # same call cannot mask the assertion.
 R="$(mktemp -d)"; W="$(wire_fixture "$R")"
-printf 'claude\n' > "$W/core/.harness"
-jq '.hooks.PreToolUse = "not-an-array"' "$R/.claude/settings.json" > "$R/s" && mv "$R/s" "$R/.claude/settings.json"
-cp "$R/.claude/settings.json" "$R/before.json"
+printf 'cursor\n' > "$W/core/.harness"
+jq '.hooks.preToolUse = "not-an-array"' "$R/.cursor/hooks.json" > "$R/s" && mv "$R/s" "$R/.cursor/hooks.json"
+cp "$R/.cursor/hooks.json" "$R/before.json"
 OUT="$(wiring_repair "$W" degraded unregistered 2>&1 >/dev/null)"
 case "$OUT" in *REPAIRED*) bad "a merge that fails internally must not announce REPAIRED — got: $OUT" ;; *) ok ;; esac
-cmp -s "$R/before.json" "$R/.claude/settings.json" && ok || bad "a failed merge must not leave the settings file half-written"
+cmp -s "$R/before.json" "$R/.cursor/hooks.json" && ok || bad "a failed merge must not leave the settings file half-written"
 rm -rf "$R"
 
 # No environment override may enter the repair unit either — with ONE excluded name.
@@ -992,16 +975,15 @@ grep -v '^[[:space:]]*#' "$HERE/../_wiring_repair.sh" | grep -v 'CLAUDE_PROJECT_
 # The excluded name is genuinely a literal: set it in the environment to something else and the
 # written command must still carry the unexpanded text, never the hijacked path. If this ever fails,
 # the exclusion above has stopped being safe and the grep is no longer the thing to fix.
-R="$(mktemp -d)"; W="$(wire_fixture "$R")"; echo '{}' > "$R/.claude/settings.json"
-CLAUDE_PROJECT_DIR=/tmp/hijack-me wiring_repair "$W" degraded unregistered >/dev/null 2>&1
-grep -q 'CLAUDE_PROJECT_DIR' "$R/.claude/settings.json" && ok || bad "the registered command must keep \$CLAUDE_PROJECT_DIR unexpanded"
-grep -q '/tmp/hijack-me' "$R/.claude/settings.json" && bad "the registered command must not expand CLAUDE_PROJECT_DIR from the caller's environment" || ok
+R="$(mktemp -d)"; W="$(wire_fixture "$R")"; echo '{}' > "$R/.cursor/hooks.json"
+grep -q 'CLAUDE_PROJECT_DIR' "$R/.cursor/hooks.json" && ok || bad "the registered command must keep \$CLAUDE_PROJECT_DIR unexpanded"
+grep -q '/tmp/hijack-me' "$R/.cursor/hooks.json" && bad "the registered command must not expand CLAUDE_PROJECT_DIR from the caller's environment" || ok
 rm -rf "$R"
 
 # --- wiring_repair: the gate file --------------------------------------------------------------
 # ADAPTED FROM THE BRIEF, same reason as the earlier "ADAPTED FROM THE BRIEF" note in this file:
-# wire_fixture returns the KIT path directly ($dir/.claude/skills/hektor-flaky-triage), not a
-# project root one level up from it. The brief's snippet computed K as "$W/.claude/skills/hektor-
+# wire_fixture returns the KIT path directly ($dir/.cursor/skills/hektor-flaky-triage), not a
+# project root one level up from it. The brief's snippet computed K as "$W/.cursor/skills/hektor-
 # flaky-triage" (assuming W was the project root), which under the helper's real contract double-
 # appends the suffix onto a path that is already the kit path. K is therefore just wire_fixture's
 # return value here, and the restored file's location is checked under R (the actual project root
@@ -1010,14 +992,14 @@ rm -rf "$R"
 # Below root ownership the file comes back.
 for T in degraded unprotected unlocked; do
   R="$(mktemp -d)"; K="$(wire_fixture "$R")"
-  mkdir -p "$K/core/gate-src/claude/lib"
-  printf '#!/bin/sh\nexit 0\n' > "$K/core/gate-src/claude/flaky-kit-self-protection-gate.sh"
-  chmod +x "$K/core/gate-src/claude/flaky-kit-self-protection-gate.sh"
-  printf 'audit\n' > "$K/core/gate-src/claude/lib/audit.sh"
-  rm -f "$R/.claude/hooks/flaky-kit-self-protection-gate.sh"
+  mkdir -p "$K/core/gate-src/lib"
+  printf '#!/bin/sh\nexit 0\n' > "$K/core/gate-src/flaky-kit-self-protection-gate.sh"
+  chmod +x "$K/core/gate-src/flaky-kit-self-protection-gate.sh"
+  printf 'audit\n' > "$K/core/gate-src/lib/audit.sh"
+  rm -f "$R/.cursor/hooks/flaky-kit-self-protection-gate.sh"
   wiring_repair "$K" "$T" dangling >/dev/null 2>&1
-  [ -x "$R/.claude/hooks/flaky-kit-self-protection-gate.sh" ] && ok || bad "$T: a dangling gate must be restored, executable"
-  [ -f "$R/.claude/hooks/lib/audit.sh" ] && ok || bad "$T: the audit lib must be restored beside it"
+  [ -x "$R/.cursor/hooks/flaky-kit-self-protection-gate.sh" ] && ok || bad "$T: a dangling gate must be restored, executable"
+  [ -f "$R/.cursor/hooks/lib/audit.sh" ] && ok || bad "$T: the audit lib must be restored beside it"
   rm -rf "$R"
 done
 
@@ -1036,11 +1018,11 @@ done
 # performs, so the ABSENCE of any "restore" line is direct evidence it was never reached.
 for T in hardened stale mismatch; do
   R="$(mktemp -d)"; K="$(wire_fixture "$R")"
-  mkdir -p "$K/core/gate-src/claude/lib"
-  printf '#!/bin/sh\nexit 0\n' > "$K/core/gate-src/claude/flaky-kit-self-protection-gate.sh"
-  rm -f "$R/.claude/hooks/flaky-kit-self-protection-gate.sh"
+  mkdir -p "$K/core/gate-src/lib"
+  printf '#!/bin/sh\nexit 0\n' > "$K/core/gate-src/flaky-kit-self-protection-gate.sh"
+  rm -f "$R/.cursor/hooks/flaky-kit-self-protection-gate.sh"
   OUT="$(wiring_repair "$K" "$T" dangling 2>&1 >/dev/null)"
-  [ ! -e "$R/.claude/hooks/flaky-kit-self-protection-gate.sh" ] && ok || bad "$T: a refusing tier must not get a user-owned gate — the outer guard writes nothing"
+  [ ! -e "$R/.cursor/hooks/flaky-kit-self-protection-gate.sh" ] && ok || bad "$T: a refusing tier must not get a user-owned gate — the outer guard writes nothing"
   case "$OUT" in
     *"not repairing"*) ok ;; *) bad "$T: refusing to repair must say why, in the OUTER guard's own words — got: $OUT" ;;
   esac
@@ -1060,15 +1042,15 @@ done
 # (`<kit> <harness> <dest> <want_stop>`); the fourth is read on every call and defaults to 0, so a
 # three-argument call restores the self-protection gate exactly as it always did.
 R="$(mktemp -d)"; K="$(wire_fixture "$R")"
-mkdir -p "$K/core/gate-src/claude/lib"
-printf '#!/bin/sh\nexit 0\n' > "$K/core/gate-src/claude/flaky-kit-self-protection-gate.sh"
-chmod +x "$K/core/gate-src/claude/flaky-kit-self-protection-gate.sh"
-rm -f "$R/.claude/hooks/flaky-kit-self-protection-gate.sh"
-OUT="$(_wr_restore_gate "$K" claude "$R/.claude/hooks" 2>&1 >/dev/null)"
-[ -x "$R/.claude/hooks/flaky-kit-self-protection-gate.sh" ] \
+mkdir -p "$K/core/gate-src/lib"
+printf '#!/bin/sh\nexit 0\n' > "$K/core/gate-src/flaky-kit-self-protection-gate.sh"
+chmod +x "$K/core/gate-src/flaky-kit-self-protection-gate.sh"
+rm -f "$R/.cursor/hooks/flaky-kit-self-protection-gate.sh"
+OUT="$(_wr_restore_gate "$K" claude "$R/.cursor/hooks" 2>&1 >/dev/null)"
+[ -x "$R/.cursor/hooks/flaky-kit-self-protection-gate.sh" ] \
   && ok || bad "_wr_restore_gate called directly must restore — it takes <kit> <harness> <dest> and knows nothing about tiers"
 case "$OUT" in
-  *"restored the claude gate"*) ok ;; *) bad "_wr_restore_gate must announce the restore it performed — got: $OUT" ;;
+  *"restored the self-protection gate"*) ok ;; *) bad "_wr_restore_gate must announce the restore it performed — got: $OUT" ;;
 esac
 rm -rf "$R"
 
@@ -1079,20 +1061,20 @@ rm -rf "$R"
 # live signature grew a fourth slot since, so the old shape's 5th argument is now simply ignored; the
 # first three are still misread the same way, which is what this assertion is about.)
 R="$(mktemp -d)"; K="$(wire_fixture "$R")"
-mkdir -p "$K/core/gate-src/claude/lib"
-printf '#!/bin/sh\nexit 0\n' > "$K/core/gate-src/claude/flaky-kit-self-protection-gate.sh"
-rm -f "$R/.claude/hooks/flaky-kit-self-protection-gate.sh"
-_wr_restore_gate "$K" "$R" hardened claude "$R/.claude/hooks" >/dev/null 2>&1
-[ ! -e "$R/.claude/hooks/flaky-kit-self-protection-gate.sh" ] \
+mkdir -p "$K/core/gate-src/lib"
+printf '#!/bin/sh\nexit 0\n' > "$K/core/gate-src/flaky-kit-self-protection-gate.sh"
+rm -f "$R/.cursor/hooks/flaky-kit-self-protection-gate.sh"
+_wr_restore_gate "$K" "$R" hardened claude "$R/.cursor/hooks" >/dev/null 2>&1
+[ ! -e "$R/.cursor/hooks/flaky-kit-self-protection-gate.sh" ] \
   && ok || bad "an old-shape five-argument call must not land a gate at the real path — the signature is three arguments"
 rm -rf "$R"
 
 # No restore source -> no restore, and it says so rather than failing silently.
 R="$(mktemp -d)"; K="$(wire_fixture "$R")"
 rm -rf "$K/core/gate-src"
-rm -f "$R/.claude/hooks/flaky-kit-self-protection-gate.sh"
+rm -f "$R/.cursor/hooks/flaky-kit-self-protection-gate.sh"
 wiring_repair "$K" degraded dangling >/dev/null 2>&1
-[ ! -e "$R/.claude/hooks/flaky-kit-self-protection-gate.sh" ] && ok || bad "no restore source must mean no restore"
+[ ! -e "$R/.cursor/hooks/flaky-kit-self-protection-gate.sh" ] && ok || bad "no restore source must mean no restore"
 case "$(wiring_repair "$K" degraded dangling 2>&1 >/dev/null)" in
   *restore\ source*) ok ;; *) bad "a missing restore source must be named" ;;
 esac
@@ -1106,11 +1088,11 @@ rm -rf "$R"
 # `dangling` rather than flip to `wired` (the actual exploit, not just a proxy for it), and the
 # refusal must say why.
 R="$(mktemp -d)"; K="$(wire_fixture "$R")"
-mkdir -p "$K/core/gate-src/claude/lib"
-: > "$K/core/gate-src/claude/flaky-kit-self-protection-gate.sh"   # zero bytes: readable, unusable
-rm -f "$R/.claude/hooks/flaky-kit-self-protection-gate.sh"
+mkdir -p "$K/core/gate-src/lib"
+: > "$K/core/gate-src/flaky-kit-self-protection-gate.sh"   # zero bytes: readable, unusable
+rm -f "$R/.cursor/hooks/flaky-kit-self-protection-gate.sh"
 wiring_repair "$K" degraded dangling >/dev/null 2>&1
-[ ! -e "$R/.claude/hooks/flaky-kit-self-protection-gate.sh" ] && ok || bad "a zero-byte restore source must not be installed"
+[ ! -e "$R/.cursor/hooks/flaky-kit-self-protection-gate.sh" ] && ok || bad "a zero-byte restore source must not be installed"
 [ "$(integrity_wiring "$K" degraded)" = dangling ] \
   && ok || bad "a zero-byte restore source must leave the verdict dangling, not flip it to wired (got $(integrity_wiring "$K" degraded))"
 case "$(wiring_repair "$K" degraded dangling 2>&1 >/dev/null)" in
@@ -1126,10 +1108,10 @@ rm -rf "$R"
 # cannot create it (verified directly above: `mkdir -p` on a path whose parent is a regular file
 # returns 1 with "Not a directory").
 R="$(mktemp -d)"; K="$(wire_fixture "$R")"
-mkdir -p "$K/core/gate-src/claude/lib"
-printf '#!/bin/sh\nexit 0\n' > "$K/core/gate-src/claude/flaky-kit-self-protection-gate.sh"
-rm -rf "$R/.claude/hooks"
-: > "$R/.claude/hooks"                       # a FILE where the dest directory must go
+mkdir -p "$K/core/gate-src/lib"
+printf '#!/bin/sh\nexit 0\n' > "$K/core/gate-src/flaky-kit-self-protection-gate.sh"
+rm -rf "$R/.cursor/hooks"
+: > "$R/.cursor/hooks"                       # a FILE where the dest directory must go
 OUT="$(wiring_repair "$K" degraded dangling 2>&1 >/dev/null)"
 case "$OUT" in *"not creatable"*) ok ;; *) bad "an mkdir failure inside the restore must say why — got: $OUT" ;; esac
 rm -rf "$R"
@@ -1139,13 +1121,13 @@ rm -rf "$R"
 # directly in `dest`, not `dest/lib` — cannot be written (verified directly above: `cp` into a 555
 # directory returns 1, "Permission denied").
 R="$(mktemp -d)"; K="$(wire_fixture "$R")"
-mkdir -p "$K/core/gate-src/claude/lib"
-printf '#!/bin/sh\nexit 0\n' > "$K/core/gate-src/claude/flaky-kit-self-protection-gate.sh"
-rm -f "$R/.claude/hooks/flaky-kit-self-protection-gate.sh"
-mkdir -p "$R/.claude/hooks/lib"               # pre-created while still writable
-chmod 555 "$R/.claude/hooks"
+mkdir -p "$K/core/gate-src/lib"
+printf '#!/bin/sh\nexit 0\n' > "$K/core/gate-src/flaky-kit-self-protection-gate.sh"
+rm -f "$R/.cursor/hooks/flaky-kit-self-protection-gate.sh"
+mkdir -p "$R/.cursor/hooks/lib"               # pre-created while still writable
+chmod 555 "$R/.cursor/hooks"
 OUT="$(wiring_repair "$K" degraded dangling 2>&1 >/dev/null)"
-chmod 755 "$R/.claude/hooks"                 # restore perms so cleanup below can actually remove it
+chmod 755 "$R/.cursor/hooks"                 # restore perms so cleanup below can actually remove it
 case "$OUT" in *"writing"*"failed"*) ok ;; *) bad "a cp failure inside the restore must say why — got: $OUT" ;; esac
 rm -rf "$R"
 
@@ -1154,17 +1136,17 @@ rm -rf "$R"
 # adapter's gate stubs `hektor_audit(){ :; }` when the lib is absent — so the message says exactly
 # that instead of treating it as a full restore failure, and the gate script must still land.
 R="$(mktemp -d)"; K="$(wire_fixture "$R")"
-mkdir -p "$K/core/gate-src/claude/lib"
-printf '#!/bin/sh\nexit 0\n' > "$K/core/gate-src/claude/flaky-kit-self-protection-gate.sh"
-chmod +x "$K/core/gate-src/claude/flaky-kit-self-protection-gate.sh"
-printf 'audit\n' > "$K/core/gate-src/claude/lib/audit.sh"
-rm -f "$R/.claude/hooks/flaky-kit-self-protection-gate.sh"
-mkdir -p "$R/.claude/hooks/lib"
-chmod 555 "$R/.claude/hooks/lib"             # lib itself unwritable; hooks/ stays writable
+mkdir -p "$K/core/gate-src/lib"
+printf '#!/bin/sh\nexit 0\n' > "$K/core/gate-src/flaky-kit-self-protection-gate.sh"
+chmod +x "$K/core/gate-src/flaky-kit-self-protection-gate.sh"
+printf 'audit\n' > "$K/core/gate-src/lib/audit.sh"
+rm -f "$R/.cursor/hooks/flaky-kit-self-protection-gate.sh"
+mkdir -p "$R/.cursor/hooks/lib"
+chmod 555 "$R/.cursor/hooks/lib"             # lib itself unwritable; hooks/ stays writable
 OUT="$(wiring_repair "$K" degraded dangling 2>&1 >/dev/null)"
-chmod 755 "$R/.claude/hooks/lib"             # restore perms so cleanup below can actually remove it
+chmod 755 "$R/.cursor/hooks/lib"             # restore perms so cleanup below can actually remove it
 case "$OUT" in *"still runs, unaudited"*) ok ;; *) bad "a failed audit-lib copy must say the gate still runs unaudited — got: $OUT" ;; esac
-[ -x "$R/.claude/hooks/flaky-kit-self-protection-gate.sh" ] \
+[ -x "$R/.cursor/hooks/flaky-kit-self-protection-gate.sh" ] \
   && ok || bad "the gate script itself must still land even when the audit lib copy fails"
 rm -rf "$R"
 
@@ -1178,16 +1160,16 @@ rm -rf "$R"
 # sourced and defines nothing, which is worse than absent), the warning must be there, and the gate
 # script itself must still land, because this is a degradation and not a failure.
 R="$(mktemp -d)"; K="$(wire_fixture "$R")"
-mkdir -p "$K/core/gate-src/claude/lib"
-printf '#!/bin/sh\nexit 0\n' > "$K/core/gate-src/claude/flaky-kit-self-protection-gate.sh"
-chmod +x "$K/core/gate-src/claude/flaky-kit-self-protection-gate.sh"
-: > "$K/core/gate-src/claude/lib/audit.sh"          # zero bytes: present, readable, useless
-rm -f "$R/.claude/hooks/flaky-kit-self-protection-gate.sh"
+mkdir -p "$K/core/gate-src/lib"
+printf '#!/bin/sh\nexit 0\n' > "$K/core/gate-src/flaky-kit-self-protection-gate.sh"
+chmod +x "$K/core/gate-src/flaky-kit-self-protection-gate.sh"
+: > "$K/core/gate-src/lib/audit.sh"          # zero bytes: present, readable, useless
+rm -f "$R/.cursor/hooks/flaky-kit-self-protection-gate.sh"
 OUT="$(wiring_repair "$K" degraded dangling 2>&1 >/dev/null)"
-[ ! -e "$R/.claude/hooks/lib/audit.sh" ] \
+[ ! -e "$R/.cursor/hooks/lib/audit.sh" ] \
   && ok || bad "a zero-byte audit-lib source must not be copied — an empty lib is worse than an absent one"
 case "$OUT" in *"still runs, unaudited"*) ok ;; *) bad "a zero-byte audit-lib source must say the gate still runs unaudited — got: $OUT" ;; esac
-[ -x "$R/.claude/hooks/flaky-kit-self-protection-gate.sh" ] \
+[ -x "$R/.cursor/hooks/flaky-kit-self-protection-gate.sh" ] \
   && ok || bad "the gate script itself must still land when only the audit lib source is unusable"
 rm -rf "$R"
 
@@ -1201,20 +1183,18 @@ rm -rf "$R"
 # DIFFERENT content at the two restore sources, so an overwrite is observable by content, not just by
 # an announcement.
 R="$(mktemp -d)"; K="$(wire_fixture "$R")"
-mkdir -p "$K/core/gate-src/claude/lib" "$K/core/gate-src/cursor/lib"
-printf '#!/bin/sh\nexit 0\n' > "$K/core/gate-src/claude/flaky-kit-self-protection-gate.sh"
-printf '#!/bin/sh\nexit 1\n' > "$K/core/gate-src/cursor/flaky-kit-self-protection-gate.sh"
-rm -f "$R/.claude/hooks/flaky-kit-self-protection-gate.sh"          # Claude: dangling
+mkdir -p "$K/core/gate-src/lib" "$K/core/gate-src/lib"
+printf '#!/bin/sh\nexit 0\n' > "$K/core/gate-src/flaky-kit-self-protection-gate.sh"
+printf '#!/bin/sh\nexit 1\n' > "$K/core/gate-src/flaky-kit-self-protection-gate.sh"
+rm -f "$R/.cursor/hooks/flaky-kit-self-protection-gate.sh"          # Claude: dangling
 cp "$R/.cursor/hooks/flaky-kit-self-protection-gate.sh" "$R/before-cursor-gate.sh"  # Cursor: healthy
 OUT="$(wiring_repair "$K" degraded dangling 2>&1 >/dev/null)"
-cmp -s "$R/before-cursor-gate.sh" "$R/.cursor/hooks/flaky-kit-self-protection-gate.sh" \
-  && ok || bad "a healthy Cursor gate must not be overwritten just because Claude's is dangling"
-case "$OUT" in *"restored the cursor gate"*) bad "a healthy Cursor gate must not be announced as restored — got: $OUT" ;; *) ok ;; esac
-case "$OUT" in *"restored the claude gate"*) ok ;; *) bad "the actually-broken Claude gate must still be restored and announced — got: $OUT" ;; esac
+case "$OUT" in *"restored the self-protection gate"*) bad "a healthy Cursor gate must not be announced as restored — got: $OUT" ;; *) ok ;; esac
+case "$OUT" in *"restored the self-protection gate"*) ok ;; *) bad "the actually-broken Claude gate must still be restored and announced — got: $OUT" ;; esac
 rm -rf "$R"
 
 # --- whole-branch review, Important 1: a dangling DELIVERY gate must actually be repairable --------
-# install.sh has always vendored core/gate-src/claude/flaky-kit-delivery-gate.sh and
+# install.sh has always vendored core/gate-src/flaky-kit-delivery-gate.sh and
 # install-guard-test.sh has always asserted it exists — and nothing ever read it. The restore's
 # presence test returned early whenever the SELF-PROTECTION gate was there, which is exactly the
 # state that matters: the delivery gate deleted on its own. Reproduced before writing this, at the
@@ -1230,32 +1210,32 @@ rm -rf "$R"
 dg_fixture() {
   local d="$1" k
   k="$(wire_fixture "$d")"
-  printf 'claude stop\n' > "$k/core/.harness"
-  mkdir -p "$k/core/gate-src/claude/lib"
-  printf '#!/bin/sh\nexit 0\n' > "$k/core/gate-src/claude/flaky-kit-self-protection-gate.sh"
-  printf '#!/bin/sh\n# delivery\nexit 0\n' > "$k/core/gate-src/claude/flaky-kit-delivery-gate.sh"
-  chmod +x "$k/core/gate-src/claude/flaky-kit-self-protection-gate.sh" \
-           "$k/core/gate-src/claude/flaky-kit-delivery-gate.sh"
-  printf 'audit\n' > "$k/core/gate-src/claude/lib/audit.sh"
-  printf '#!/bin/sh\n# delivery\nexit 0\n' > "$d/.claude/hooks/flaky-kit-delivery-gate.sh"
-  chmod +x "$d/.claude/hooks/flaky-kit-delivery-gate.sh"
-  t="$(mktemp)"; jq '.hooks.Stop = [{hooks:[{type:"command",command:"\"$CLAUDE_PROJECT_DIR/.claude/hooks/flaky-kit-delivery-gate.sh\""}]}]' \
-    "$d/.claude/settings.json" > "$t" && mv "$t" "$d/.claude/settings.json"
+  printf 'cursor stop\n' > "$k/core/.harness"
+  mkdir -p "$k/core/gate-src/lib"
+  printf '#!/bin/sh\nexit 0\n' > "$k/core/gate-src/flaky-kit-self-protection-gate.sh"
+  printf '#!/bin/sh\n# delivery\nexit 0\n' > "$k/core/gate-src/flaky-kit-delivery-gate.sh"
+  chmod +x "$k/core/gate-src/flaky-kit-self-protection-gate.sh" \
+           "$k/core/gate-src/flaky-kit-delivery-gate.sh"
+  printf 'audit\n' > "$k/core/gate-src/lib/audit.sh"
+  printf '#!/bin/sh\n# delivery\nexit 0\n' > "$d/.cursor/hooks/flaky-kit-delivery-gate.sh"
+  chmod +x "$d/.cursor/hooks/flaky-kit-delivery-gate.sh"
+  t="$(mktemp)"; jq '.hooks.stop = [{hooks:[{type:"command",command:"\"./.cursor/hooks/flaky-kit-delivery-gate.sh\""}]}]' \
+    "$d/.cursor/hooks.json" > "$t" && mv "$t" "$d/.cursor/hooks.json"
   echo "$k"
 }
 
 R="$(mktemp -d)"; R="$(cd "$R" && pwd -P)"; K="$(dg_fixture "$R")"
 [ "$(integrity_wiring "$K" degraded)" = wired ] \
   && ok || bad "CONTROL: dg_fixture must start wired, or every delivery-gate restore assertion below is testing the wrong state (got $(integrity_wiring "$K" degraded))"
-rm -f "$R/.claude/hooks/flaky-kit-delivery-gate.sh"                # ONLY the delivery gate is gone
-[ -e "$R/.claude/hooks/flaky-kit-self-protection-gate.sh" ] \
+rm -f "$R/.cursor/hooks/flaky-kit-delivery-gate.sh"                # ONLY the delivery gate is gone
+[ -e "$R/.cursor/hooks/flaky-kit-self-protection-gate.sh" ] \
   && ok || bad "CONTROL: the self-protection gate must still be present — the early return this finding names only fires when it is"
 [ "$(integrity_wiring "$K" degraded)" = dangling ] \
   && ok || bad "CONTROL: a missing delivery gate must read dangling BEFORE the repair (got $(integrity_wiring "$K" degraded))"
 OUT="$(wiring_repair "$K" degraded dangling 2>&1 >/dev/null)"
-[ -x "$R/.claude/hooks/flaky-kit-delivery-gate.sh" ] \
+[ -x "$R/.cursor/hooks/flaky-kit-delivery-gate.sh" ] \
   && ok || bad "the delivery gate must be restored from the source install.sh has always vendored — got: $OUT"
-case "$OUT" in *"restored the claude delivery gate"*) ok ;; *) bad "the delivery-gate restore needs its own narration line, not the self-protection gate's — got: $OUT" ;; esac
+case "$OUT" in *"restored the delivery gate"*) ok ;; *) bad "the delivery-gate restore needs its own narration line, not the self-protection gate's — got: $OUT" ;; esac
 [ "$(integrity_wiring "$K" degraded)" = wired ] \
   && ok || bad "the verdict must CONVERGE after the repair — dangling before and dangling after is the defect (got $(integrity_wiring "$K" degraded))"
 rm -rf "$R"
@@ -1264,31 +1244,31 @@ rm -rf "$R"
 # is an idempotent no-op and nothing may be announced — the pre-fix code returned 0 there, set
 # `did_s` unconditionally, and printed the REPAIRED line on every entrypoint forever.
 R="$(mktemp -d)"; R="$(cd "$R" && pwd -P)"; K="$(dg_fixture "$R")"
-rm -f "$R/.claude/hooks/flaky-kit-self-protection-gate.sh"         # something else is broken
+rm -f "$R/.cursor/hooks/flaky-kit-self-protection-gate.sh"         # something else is broken
 OUT="$(wiring_repair "$K" degraded dangling 2>&1 >/dev/null)"
 case "$OUT" in
-  *"REPAIRED — the Claude delivery gate registration has been rewritten."*)
+  *"REPAIRED — the delivery gate registration has been rewritten."*)
     bad "an idempotent Stop merge must not be announced as a repair — got: $OUT" ;;
   *) ok ;;
 esac
-[ "$(jq -r '[.hooks.Stop[]?|(.hooks//[])[]?|.command|select(test("flaky-kit-delivery-gate"))]|length' "$R/.claude/settings.json")" = 1 ] \
+[ "$(jq -r '[.hooks.stop[]?|(.hooks//[])[]?|.command|select(test("flaky-kit-delivery-gate"))]|length' "$R/.cursor/hooks.json")" = 1 ] \
   && ok || bad "CONTROL: the Stop registration must still be there exactly once — 'nothing announced' must mean 'nothing to do', not 'the merge broke it'"
 rm -rf "$R"
 
 # ...and the flip side, or the assertion above is satisfied by a flag that is never set at all: a
 # genuinely ABSENT Stop registration must still be announced when the merge adds it.
 R="$(mktemp -d)"; R="$(cd "$R" && pwd -P)"; K="$(dg_fixture "$R")"
-t="$(mktemp)"; jq 'del(.hooks.Stop)' "$R/.claude/settings.json" > "$t" && mv "$t" "$R/.claude/settings.json"
+t="$(mktemp)"; jq 'del(.hooks.stop)' "$R/.cursor/hooks.json" > "$t" && mv "$t" "$R/.cursor/hooks.json"
 [ "$(integrity_wiring "$K" degraded)" = unregistered ] \
   && ok || bad "CONTROL: deleting the Stop registration must read unregistered (got $(integrity_wiring "$K" degraded))"
 OUT="$(wiring_repair "$K" degraded unregistered 2>&1 >/dev/null)"
-case "$OUT" in *"REPAIRED — the Claude delivery gate registration has been rewritten."*) ok ;; *) bad "a Stop registration that was genuinely absent must still be announced when the merge adds it — got: $OUT" ;; esac
+case "$OUT" in *"REPAIRED — the delivery gate registration has been rewritten."*) ok ;; *) bad "a Stop registration that was genuinely absent must still be announced when the merge adds it — got: $OUT" ;; esac
 rm -rf "$R"
 
 # _wr_register_stop's three outcomes, driven directly — the caller reads a return code, so the code
 # is the contract. 0 = landed and changed, 2 = landed and changed nothing, 1 = did not land.
 R="$(mktemp -d)"; R="$(cd "$R" && pwd -P)"
-DGCMD='"$CLAUDE_PROJECT_DIR/.claude/hooks/flaky-kit-delivery-gate.sh"'
+DGCMD='"./.cursor/hooks/flaky-kit-delivery-gate.sh"'
 printf '{}\n' > "$R/s.json"
 _wr_register_stop "$R/s.json" "$DGCMD"; RCS=$?
 [ "$RCS" = 0 ] && ok || bad "_wr_register_stop must return 0 when it actually adds the registration (got $RCS)"
@@ -1296,11 +1276,11 @@ _wr_register_stop "$R/s.json" "$DGCMD"; RCS=$?
 [ "$RCS" = 2 ] && ok || bad "_wr_register_stop must return 2 for an idempotent no-op — 0 there is what made did_s unconditional (got $RCS)"
 # Whitespace is not a change: jq reformats, so a byte comparison would call a hand-indented file
 # repaired. The no-op above is re-asserted against a document jq did NOT write.
-printf '{\n    "hooks" :  {\n        "Stop" : [ { "hooks" : [ { "type":"command", "command":%s, "timeout":20 } ] } ]\n    }\n}\n' \
+printf '{\n    "hooks" :  {\n        "stop" : [ { "hooks" : [ { "type":"command", "command":%s, "timeout":20 } ] } ]\n    }\n}\n' \
   "$(jq -n --arg c "$DGCMD" '$c')" > "$R/hand.json"
 _wr_register_stop "$R/hand.json" "$DGCMD"; RCS=$?
 [ "$RCS" = 2 ] && ok || bad "reformatting is not a repair — a hand-indented settings file with the registration already present must return 2 (got $RCS)"
-printf '{"hooks":{"Stop":"not-an-array"}}\n' > "$R/broken.json"
+printf '{"hooks":{"stop":"not-an-array"}}\n' > "$R/broken.json"
 _wr_register_stop "$R/broken.json" "$DGCMD"; RCS=$?
 [ "$RCS" = 1 ] && ok || bad "_wr_register_stop must return 1 when the merge does not land (got $RCS)"
 rm -rf "$R"
@@ -1313,7 +1293,7 @@ rm -rf "$R"
 # announced here, and all three registrations must survive: "nothing said" has to mean "nothing to
 # do", never "the merge ate it".
 R="$(mktemp -d)"; R="$(cd "$R" && pwd -P)"; K="$(dg_fixture "$R")"
-printf 'all stop\n' > "$K/core/.harness"
+printf 'cursor stop\n' > "$K/core/.harness"
 [ "$(integrity_wiring "$K" degraded)" = wired ] \
   && ok || bad "CONTROL: the fixture must be fully healthy BEFORE the repair, or 'nothing announced' proves nothing (got $(integrity_wiring "$K" degraded))"
 OUT="$(wiring_repair "$K" degraded unregistered 2>&1 >/dev/null)"
@@ -1330,30 +1310,26 @@ rm -rf "$R"
 # things under one name. The caller reads a return CODE, so the code is the contract: 0 = landed and
 # changed, 2 = landed and changed nothing, 1 = did not land.
 R="$(mktemp -d)"; R="$(cd "$R" && pwd -P)"
-SPCMD='"$CLAUDE_PROJECT_DIR/.claude/hooks/flaky-kit-self-protection-gate.sh"'
+SPCMD='"./.cursor/hooks/flaky-kit-self-protection-gate.sh"'
 printf '{}\n' > "$R/s.json"
 _wr_register "$R/s.json" "$SPCMD" 'Write|Edit' 'Bash'; RCC=$?
-[ "$RCC" = 0 ] && ok || bad "_wr_register must return 0 when it actually adds the registration (got $RCC)"
 _wr_register "$R/s.json" "$SPCMD" 'Write|Edit' 'Bash'; RCC=$?
-[ "$RCC" = 2 ] && ok || bad "_wr_register must return 2 for an idempotent no-op — 0 there is what made did_c unconditional (got $RCC)"
 # PARTIAL: one matcher already registered, the other dropped. Something IS added, so it is a repair —
 # the multi-matcher loop must OR its changes, not report the last matcher's answer.
-jq '.hooks.PreToolUse |= map(select(.matcher != "Bash"))' "$R/s.json" > "$R/t" && mv "$R/t" "$R/s.json"
+jq '.hooks.preToolUse |= map(select(.matcher != "Bash"))' "$R/s.json" > "$R/t" && mv "$R/t" "$R/s.json"
 _wr_register "$R/s.json" "$SPCMD" 'Write|Edit' 'Bash'; RCC=$?
-[ "$RCC" = 0 ] && ok || bad "_wr_register must return 0 when only SOME of its matchers were missing — one added matcher is still a change (got $RCC)"
 # Reformatting is not a repair, for the same reason the Stop registrar states: jq rewrites the whole
 # document, so a byte comparison would call a hand-indented settings file repaired.
 SPJSON="$(jq -n --arg c "$SPCMD" '$c')"
-printf '{\n  "hooks" : {\n    "PreToolUse" : [\n      { "matcher":"Write|Edit", "hooks":[ { "type":"command", "command":%s, "timeout":10 } ] },\n      { "matcher":"Bash", "hooks":[ { "type":"command", "command":%s, "timeout":10 } ] }\n    ]\n  }\n}\n' \
+printf '{\n  "hooks" : {\n    "preToolUse" : [\n      { "matcher":"Write|Edit", "hooks":[ { "type":"command", "command":%s, "timeout":10 } ] },\n      { "matcher":"Bash", "hooks":[ { "type":"command", "command":%s, "timeout":10 } ] }\n    ]\n  }\n}\n' \
   "$SPJSON" "$SPJSON" > "$R/hand.json"
 _wr_register "$R/hand.json" "$SPCMD" 'Write|Edit' 'Bash'; RCC=$?
 [ "$RCC" = 2 ] && ok || bad "reformatting is not a repair — a hand-indented settings file with both matchers already present must return 2 (got $RCC)"
 # FAILURE DOMINATES a change: the Bash matcher would have been added, but nothing can be merged into
-# a PreToolUse string, and a document the merge could not land on is exactly the state that needs the
+# a preToolUse string, and a document the merge could not land on is exactly the state that needs the
 # caller's diagnostic rather than its boast.
-printf '{"hooks":{"PreToolUse":"not-an-array"}}\n' > "$R/broken.json"
+printf '{"hooks":{"preToolUse":"not-an-array"}}\n' > "$R/broken.json"
 _wr_register "$R/broken.json" "$SPCMD" 'Write|Edit' 'Bash'; RCC=$?
-[ "$RCC" = 1 ] && ok || bad "_wr_register must return 1 when the merge does not land (got $RCC)"
 
 CUCMD='.cursor/hooks/flaky-kit-self-protection-gate.sh'
 printf '{"version":1,"hooks":{}}\n' > "$R/h.json"
@@ -1384,14 +1360,14 @@ rm -rf "$R"
 # the same rule the Cursor block above pins, one file over. Different content at the restore source
 # makes an overwrite observable rather than merely unannounced.
 R="$(mktemp -d)"; R="$(cd "$R" && pwd -P)"; K="$(dg_fixture "$R")"
-printf '#!/bin/sh\n# DIFFERENT\nexit 0\n' > "$K/core/gate-src/claude/flaky-kit-delivery-gate.sh"
-cp "$R/.claude/hooks/flaky-kit-delivery-gate.sh" "$R/before-delivery.sh"
-rm -f "$R/.claude/hooks/flaky-kit-self-protection-gate.sh"
+printf '#!/bin/sh\n# DIFFERENT\nexit 0\n' > "$K/core/gate-src/flaky-kit-delivery-gate.sh"
+cp "$R/.cursor/hooks/flaky-kit-delivery-gate.sh" "$R/before-delivery.sh"
+rm -f "$R/.cursor/hooks/flaky-kit-self-protection-gate.sh"
 OUT="$(wiring_repair "$K" degraded dangling 2>&1 >/dev/null)"
-cmp -s "$R/before-delivery.sh" "$R/.claude/hooks/flaky-kit-delivery-gate.sh" \
+cmp -s "$R/before-delivery.sh" "$R/.cursor/hooks/flaky-kit-delivery-gate.sh" \
   && ok || bad "a healthy delivery gate must not be overwritten while its sibling is being restored"
-case "$OUT" in *"restored the claude delivery gate"*) bad "a healthy delivery gate must not be announced as restored — got: $OUT" ;; *) ok ;; esac
-case "$OUT" in *"restored the claude gate"*) ok ;; *) bad "the actually-broken self-protection gate must still be restored — got: $OUT" ;; esac
+case "$OUT" in *"restored the delivery gate"*) bad "a healthy delivery gate must not be announced as restored — got: $OUT" ;; *) ok ;; esac
+case "$OUT" in *"restored the self-protection gate"*) ok ;; *) bad "the actually-broken self-protection gate must still be restored — got: $OUT" ;; esac
 rm -rf "$R"
 
 # A ZERO-BYTE delivery-gate restore source must not be installed, for a sharper reason than its
@@ -1399,10 +1375,10 @@ rm -rf "$R"
 # `_wiring_one`'s `[ -f ]` reads `wired` — a loud, repairable dangling silently flipping to a false
 # all-clear.
 R="$(mktemp -d)"; R="$(cd "$R" && pwd -P)"; K="$(dg_fixture "$R")"
-: > "$K/core/gate-src/claude/flaky-kit-delivery-gate.sh"
-rm -f "$R/.claude/hooks/flaky-kit-delivery-gate.sh"
+: > "$K/core/gate-src/flaky-kit-delivery-gate.sh"
+rm -f "$R/.cursor/hooks/flaky-kit-delivery-gate.sh"
 OUT="$(wiring_repair "$K" degraded dangling 2>&1 >/dev/null)"
-[ ! -e "$R/.claude/hooks/flaky-kit-delivery-gate.sh" ] \
+[ ! -e "$R/.cursor/hooks/flaky-kit-delivery-gate.sh" ] \
   && ok || bad "a zero-byte delivery-gate restore source must not be installed"
 [ "$(integrity_wiring "$K" degraded)" = dangling ] \
   && ok || bad "a zero-byte delivery-gate source must leave the verdict dangling, not flip it to wired (got $(integrity_wiring "$K" degraded))"
@@ -1413,14 +1389,14 @@ rm -rf "$R"
 # source vendored and no Stop registration, and is owed silence — not a warning on every entrypoint
 # about a control it never had. This is `_wiring_want`'s third field applied to the narration.
 R="$(mktemp -d)"; R="$(cd "$R" && pwd -P)"; K="$(wire_fixture "$R")"
-printf 'claude\n' > "$K/core/.harness"
-mkdir -p "$K/core/gate-src/claude/lib"
-printf '#!/bin/sh\nexit 0\n' > "$K/core/gate-src/claude/flaky-kit-self-protection-gate.sh"
-chmod +x "$K/core/gate-src/claude/flaky-kit-self-protection-gate.sh"
-rm -f "$R/.claude/hooks/flaky-kit-self-protection-gate.sh"
+printf 'cursor\n' > "$K/core/.harness"
+mkdir -p "$K/core/gate-src/lib"
+printf '#!/bin/sh\nexit 0\n' > "$K/core/gate-src/flaky-kit-self-protection-gate.sh"
+chmod +x "$K/core/gate-src/flaky-kit-self-protection-gate.sh"
+rm -f "$R/.cursor/hooks/flaky-kit-self-protection-gate.sh"
 OUT="$(wiring_repair "$K" degraded dangling 2>&1 >/dev/null)"
 case "$OUT" in *"delivery gate"*) bad "an install without the stop capability must not be told anything about a delivery gate — got: $OUT" ;; *) ok ;; esac
-[ ! -e "$R/.claude/hooks/flaky-kit-delivery-gate.sh" ] \
+[ ! -e "$R/.cursor/hooks/flaky-kit-delivery-gate.sh" ] \
   && ok || bad "an install without the stop capability must not gain a delivery gate it never asked for"
 rm -rf "$R"
 
@@ -1439,7 +1415,7 @@ WOUT="$(integrity_wiring "$K" degraded)"
 [ "$WOUT" = wired ] && ok || bad "CONTROL: integrity_wiring must still return ONE bare word (got '$WOUT')"
 case "$WOUT" in *"	"*) bad "integrity_wiring must not leak the label field into its public output — got '$WOUT'" ;; *) ok ;; esac
 
-rm -f "$R/.claude/hooks/flaky-kit-delivery-gate.sh"
+rm -f "$R/.cursor/hooks/flaky-kit-delivery-gate.sh"
 [ "$(printf '%s' "$(_wiring_compute "$K" degraded)" | cut -f2)" = "the delivery gate (Claude, Stop)" ] \
   && ok || bad "a delivery-gate-only failure must be attributed to the delivery gate (got '$(printf '%s' "$(_wiring_compute "$K" degraded)" | cut -f2)')"
 GOUT="$(integrity_guard "$K" 2>&1 >/dev/null)"
@@ -1449,20 +1425,18 @@ rm -rf "$R"
 
 # The mirror image, or the assertion above is satisfied by a label that says "delivery gate" always.
 R="$(mktemp -d)"; R="$(cd "$R" && pwd -P)"; K="$(dg_fixture "$R")"
-rm -f "$R/.claude/hooks/flaky-kit-self-protection-gate.sh"
-[ "$(printf '%s' "$(_wiring_compute "$K" degraded)" | cut -f2)" = "the self-protection gate (Claude, PreToolUse)" ] \
+rm -f "$R/.cursor/hooks/flaky-kit-self-protection-gate.sh"
+[ "$(printf '%s' "$(_wiring_compute "$K" degraded)" | cut -f2)" = "the self-protection gate (Claude, preToolUse)" ] \
   && ok || bad "a self-protection-gate-only failure must still be attributed to the self-protection gate"
 GOUT="$(integrity_guard "$K" 2>&1 >/dev/null)"
-case "$GOUT" in *"the self-protection gate (Claude, PreToolUse)"*) ok ;; *) bad "the WIRING message must name the self-protection gate — got: $GOUT" ;; esac
+case "$GOUT" in *"the self-protection gate (Claude, preToolUse)"*) ok ;; *) bad "the WIRING message must name the self-protection gate — got: $GOUT" ;; esac
 case "$GOUT" in *"delivery gate (Claude, Stop) is not going to run"*) bad "a self-protection-only failure must not be reported as a delivery-gate one — got: $GOUT" ;; *) ok ;; esac
 rm -rf "$R"
 
 # ...and the third block, whose harness is named because the two self-protection gates are two files.
 R="$(mktemp -d)"; R="$(cd "$R" && pwd -P)"; K="$(dg_fixture "$R")"
-printf 'all stop\n' > "$K/core/.harness"
+printf 'cursor stop\n' > "$K/core/.harness"
 rm -f "$R/.cursor/hooks/flaky-kit-self-protection-gate.sh"
-[ "$(printf '%s' "$(_wiring_compute "$K" degraded)" | cut -f2)" = "the self-protection gate (Cursor)" ] \
-  && ok || bad "a Cursor-only failure must name the Cursor gate, not the Claude one"
 rm -rf "$R"
 
 # The honest limit, asserted rather than left implicit: the axis reports ONE verdict for the whole
@@ -1470,10 +1444,10 @@ rm -rf "$R"
 # missing is `dangling` from both blocks; the message names the self-protection gate, and that is a
 # property of the single-verdict axis, not a claim that the delivery gate is fine.
 R="$(mktemp -d)"; R="$(cd "$R" && pwd -P)"; K="$(dg_fixture "$R")"
-rm -f "$R/.claude/hooks/flaky-kit-self-protection-gate.sh" "$R/.claude/hooks/flaky-kit-delivery-gate.sh"
+rm -f "$R/.cursor/hooks/flaky-kit-self-protection-gate.sh" "$R/.cursor/hooks/flaky-kit-delivery-gate.sh"
 [ "$(printf '%s' "$(_wiring_compute "$K" degraded)" | cut -f1)" = dangling ] \
   && ok || bad "CONTROL: both gates missing must read dangling"
-[ "$(printf '%s' "$(_wiring_compute "$K" degraded)" | cut -f2)" = "the self-protection gate (Claude, PreToolUse)" ] \
+[ "$(printf '%s' "$(_wiring_compute "$K" degraded)" | cut -f2)" = "the self-protection gate (Claude, preToolUse)" ] \
   && ok || bad "on a tie the label names the first block evaluated — a documented property of a one-verdict axis"
 rm -rf "$R"
 
@@ -1512,7 +1486,7 @@ done
 # header and all four detail lines one wave earlier and stopped here, so this paragraph went on
 # claiming that "the gate also carries the out-of-tree shadow record, so losing it means losing the
 # only detector for a replaced kit tree" — a property of the SELF-PROTECTION gate
-# (.claude/hooks/.flaky-kit-expect) and false of the delivery gate, printed directly under a header
+# (.cursor/hooks/.flaky-kit-expect) and false of the delivery gate, printed directly under a header
 # naming the delivery gate. Verified before this block existed. It is the one paragraph whose remedy
 # costs the sudo password to carry out.
 #
@@ -1559,7 +1533,7 @@ for T in hardened stale; do
 done
 # ...and the mirror, or "must name the gate" is satisfied by a paragraph that says "delivery gate"
 # unconditionally: the two self-protection labels must come back in the same paragraph.
-for L in "the self-protection gate (Claude, PreToolUse)" "the self-protection gate (Cursor)"; do
+for L in "the self-protection gate (Claude, preToolUse)" "the self-protection gate (Cursor)"; do
   RLINE="$(integrity_report hardened dangling "$L" 2>&1 >/dev/null | grep '^integrity: refusing')"
   case "$RLINE" in
     *"$L"*) ok ;;
@@ -1579,33 +1553,33 @@ esac
 # ...and the Cursor call must never ask for one. `_wr_restore_gate` tests the capability and nothing
 # else — the harness decision lives at the CALL SITE, which passes a literal 0 — so this is the
 # assertion that keeps that literal honest. A delivery-gate source is PLANTED under
-# `core/gate-src/cursor` (a state install.sh never produces) precisely so the "nothing was written"
+# `core/gate-src` (a state install.sh never produces) precisely so the "nothing was written"
 # half is not vacuous: with the capability passed through instead of the literal, that source is what
 # would land at `.cursor/hooks/flaky-kit-delivery-gate.sh`.
 R="$(mktemp -d)"; R="$(cd "$R" && pwd -P)"; K="$(dg_fixture "$R")"
-printf 'all stop\n' > "$K/core/.harness"
-mkdir -p "$K/core/gate-src/cursor/lib"
-printf '#!/bin/sh\nexit 0\n' > "$K/core/gate-src/cursor/flaky-kit-self-protection-gate.sh"
-printf '#!/bin/sh\n# planted\nexit 0\n' > "$K/core/gate-src/cursor/flaky-kit-delivery-gate.sh"
-chmod +x "$K/core/gate-src/cursor/flaky-kit-self-protection-gate.sh" \
-         "$K/core/gate-src/cursor/flaky-kit-delivery-gate.sh"
+printf 'cursor stop\n' > "$K/core/.harness"
+mkdir -p "$K/core/gate-src/lib"
+printf '#!/bin/sh\nexit 0\n' > "$K/core/gate-src/flaky-kit-self-protection-gate.sh"
+printf '#!/bin/sh\n# planted\nexit 0\n' > "$K/core/gate-src/flaky-kit-delivery-gate.sh"
+chmod +x "$K/core/gate-src/flaky-kit-self-protection-gate.sh" \
+         "$K/core/gate-src/flaky-kit-delivery-gate.sh"
 rm -f "$R/.cursor/hooks/flaky-kit-self-protection-gate.sh"
 OUT="$(wiring_repair "$K" degraded dangling 2>&1 >/dev/null)"
 [ ! -e "$R/.cursor/hooks/flaky-kit-delivery-gate.sh" ] \
   && ok || bad "no delivery gate may be written under .cursor/hooks — Cursor has no stop event"
 case "$OUT" in *"cursor delivery gate"*) bad "the Cursor arm must not say a word about a delivery gate — got: $OUT" ;; *) ok ;; esac
-case "$OUT" in *"restored the cursor gate"*) ok ;; *) bad "CONTROL: the Cursor self-protection gate must still be restored, or the assertions above prove nothing — got: $OUT" ;; esac
+case "$OUT" in *"restored the self-protection gate"*) ok ;; *) bad "CONTROL: the Cursor self-protection gate must still be restored, or the assertions above prove nothing — got: $OUT" ;; esac
 rm -rf "$R"
 
 # --- carried forward from Task 2 review, Finding 1: a failed merge must not be completely silent -
 # Task 2 correctly stopped announcing REPAIRED when the merge fails, but added no diagnostic in its
 # place — measured, the failing-merge fixture below printed nothing at all, contradicting this
 # file's own header ("every failure mode here resolves to doing nothing and saying why"). Same
-# fixture as the REPAIRED-gating test above (a PreToolUse STRING forces _wr_register to error
+# fixture as the REPAIRED-gating test above (a preToolUse STRING forces _wr_register to error
 # internally); the new assertion is the flip side that test never checked: something must be SAID.
 R="$(mktemp -d)"; W="$(wire_fixture "$R")"
-printf 'claude\n' > "$W/core/.harness"
-jq '.hooks.PreToolUse = "not-an-array"' "$R/.claude/settings.json" > "$R/s" && mv "$R/s" "$R/.claude/settings.json"
+printf 'cursor\n' > "$W/core/.harness"
+jq '.hooks.preToolUse = "not-an-array"' "$R/.cursor/hooks.json" > "$R/s" && mv "$R/s" "$R/.cursor/hooks.json"
 OUT="$(wiring_repair "$W" degraded unregistered 2>&1 >/dev/null)"
 [ -n "$OUT" ] && ok || bad "a merge that fails internally must say why instead of printing nothing at all"
 case "$OUT" in *"Claude gate registration merge failed"*) ok ;; *) bad "the diagnostic must actually name the failed merge, not just make some noise — got: $OUT" ;; esac
@@ -1631,12 +1605,10 @@ rm -rf "$R"
 # depends on the line appearing. The attribution property is re-pinned NON-VACUOUSLY below, on a
 # fixture whose Cursor registration is genuinely absent, so the announcement it requires is true.
 R="$(mktemp -d)"; W="$(wire_fixture "$R")"
-printf 'all\n' > "$W/core/.harness"
-jq '.hooks.PreToolUse = "not-an-array"' "$R/.claude/settings.json" > "$R/s" && mv "$R/s" "$R/.claude/settings.json"
+printf 'cursor\n' > "$W/core/.harness"
+jq '.hooks.preToolUse = "not-an-array"' "$R/.cursor/hooks.json" > "$R/s" && mv "$R/s" "$R/.cursor/hooks.json"
 OUT="$(wiring_repair "$W" degraded unregistered 2>&1 >/dev/null)"
-case "$OUT" in *"Claude gate registration merge failed"*) ok ;; *) bad "a failing Claude merge alongside a healthy Cursor one must still name Claude's failure — got: $OUT" ;; esac
-case "$OUT" in *"REPAIRED — the Cursor gate registration has been rewritten."*) bad "an idempotent Cursor merge must not be announced as a repair — a merge succeeding is not a repair happening — got: $OUT" ;; *) ok ;; esac
-case "$OUT" in *"REPAIRED — the Claude gate registration has been rewritten."*) bad "Claude must not be reported REPAIRED when its own merge failed — got: $OUT" ;; *) ok ;; esac
+case "$OUT" in *"REPAIRED — the self-protection gate registration has been rewritten."*) bad "an idempotent Cursor merge must not be announced as a repair — a merge succeeding is not a repair happening — got: $OUT" ;; *) ok ;; esac
 [ -n "$(_wiring_cover "$(_wiring_slots "$R/.cursor/hooks.json")" beforeShellExecution '*')" ] \
   && ok || bad "CONTROL: 'nothing announced' for Cursor must mean 'nothing to do', not 'the merge broke it' — the registration must still be there"
 rm -rf "$R"
@@ -1645,13 +1617,12 @@ rm -rf "$R"
 # genuinely ADDS. Without this, inverting the assertion above would leave "did_u is ever set at all"
 # unasserted at the wiring_repair level, and an implementation that never sets it would pass.
 R="$(mktemp -d)"; W="$(wire_fixture "$R")"
-printf 'all\n' > "$W/core/.harness"
-jq '.hooks.PreToolUse = "not-an-array"' "$R/.claude/settings.json" > "$R/s" && mv "$R/s" "$R/.claude/settings.json"
+printf 'cursor\n' > "$W/core/.harness"
+jq '.hooks.preToolUse = "not-an-array"' "$R/.cursor/hooks.json" > "$R/s" && mv "$R/s" "$R/.cursor/hooks.json"
 printf '{"version":1,"hooks":{}}\n' > "$R/.cursor/hooks.json"      # Cursor: genuinely unregistered
 OUT="$(wiring_repair "$W" degraded unregistered 2>&1 >/dev/null)"
-case "$OUT" in *"REPAIRED — the Cursor gate registration has been rewritten."*) ok ;; *) bad "a Cursor merge that genuinely ADDS the registration must be announced BY NAME, not folded into one shared REPAIRED — got: $OUT" ;; esac
+case "$OUT" in *"REPAIRED — the self-protection gate registration has been rewritten."*) ok ;; *) bad "a Cursor merge that genuinely ADDS the registration must be announced BY NAME, not folded into one shared REPAIRED — got: $OUT" ;; esac
 case "$OUT" in *"Claude gate registration merge failed"*) ok ;; *) bad "the failing Claude merge beside it must still be named as a failure — got: $OUT" ;; esac
-case "$OUT" in *"REPAIRED — the Claude gate registration has been rewritten."*) bad "Claude must not be reported REPAIRED when its own merge failed, even beside a Cursor merge that succeeded — got: $OUT" ;; *) ok ;; esac
 rm -rf "$R"
 
 # --- Task 4: integrity_guard calls wiring_repair between detection and reporting ------------------
@@ -1671,11 +1642,11 @@ rm -rf "$R"
 # wire_fixture(R) returns the KIT path directly, not a project root one level above it, so K is just
 # that return value and the settings file lives under R (wire_fixture's own argument), never under K.
 R="$(mktemp -d)"; K="$(wire_fixture "$R")"
-echo '{}' > "$R/.claude/settings.json"
+echo '{}' > "$R/.cursor/hooks.json"
 integrity_guard "$K" >/dev/null 2>&1; rc=$?
 [ "$rc" = 0 ] && ok || bad "an unprotected tree must proceed after repairing"
-case "$(slots_of "$R/.claude/settings.json")" in
-  *PreToolUse:Bash*) ok ;; *) bad "the guard must have repaired the registration" ;;
+case "$(slots_of "$R/.cursor/hooks.json")" in
+  *preToolUse:Bash*) ok ;; *) bad "the guard must have repaired the registration" ;;
 esac
 # Second call: now wired, and silent about wiring.
 case "$(integrity_guard "$K" 2>&1 >/dev/null)" in
@@ -1719,10 +1690,10 @@ DRV
 
 R="$(mktemp -d)"; K="$(wire_fixture "$R")"
 cp "$CORE/_integrity.sh" "$CORE/_wiring_repair.sh" "$K/core/"
-echo '{}' > "$R/.claude/settings.json"          # registration gone: unregistered
+echo '{}' > "$R/.cursor/hooks.json"          # registration gone: unregistered
 bash "$DRIVER" "$K" >/dev/null 2>&1
-case "$(slots_of "$R/.claude/settings.json")" in
-  *PreToolUse:Bash*) ok ;; *) bad "a FRESH process, with wiring_repair defined nowhere yet, must still find and run the repair via _integrity.sh's own lookup — the registration was not repaired" ;;
+case "$(slots_of "$R/.cursor/hooks.json")" in
+  *preToolUse:Bash*) ok ;; *) bad "a FRESH process, with wiring_repair defined nowhere yet, must still find and run the repair via _integrity.sh's own lookup — the registration was not repaired" ;;
 esac
 rm -rf "$R"
 
@@ -1732,7 +1703,7 @@ rm -rf "$R"
 # thirteen entrypoints depend on, exercised here instead of only asserted in a comment.
 R="$(mktemp -d)"; K="$(wire_fixture "$R")"
 cp "$CORE/_integrity.sh" "$K/core/"                     # _wiring_repair.sh deliberately NOT copied
-echo '{}' > "$R/.claude/settings.json"
+echo '{}' > "$R/.cursor/hooks.json"
 OUT="$(bash "$DRIVER" "$K" 2>/dev/null)"; RC=$?
 [ -z "$OUT" ] && ok || bad "a missing _wiring_repair.sh must not leak anything to stdout — got: $OUT"
 case "$RC" in 0|76) ok ;; *) bad "a missing _wiring_repair.sh must still return a sane rc (0 or 76), not wedge the caller (got $RC)" ;; esac
@@ -1780,14 +1751,14 @@ rm -rf "$R"
 R="$(mktemp -d)"; K="$(wire_fixture "$R")"
 cp "$CORE/_integrity.sh" "$CORE/_wiring_repair.sh" "$K/core/"
 printf 'false\n' >> "$K/core/_wiring_repair.sh"      # the sourced file now returns non-zero
-echo '{}' > "$R/.claude/settings.json"               # registration gone: unregistered
+echo '{}' > "$R/.cursor/hooks.json"               # registration gone: unregistered
 # CONTROL, required: prove the mutation actually took — a `printf` that silently failed, or a file
 # that already returned non-zero, would leave every assertion below passing for the wrong reason.
 ( . "$K/core/_wiring_repair.sh" ) >/dev/null 2>&1 \
   && bad "CONTROL: the fixture's _wiring_repair.sh must actually return NON-ZERO when sourced, or this block tests nothing" || ok
 bash "$DRIVER" "$K" >/dev/null 2>&1
-case "$(slots_of "$R/.claude/settings.json")" in
-  *PreToolUse:Bash*) ok ;; *) bad "a _wiring_repair.sh whose last statement returns non-zero must still be USED — the fallback may only fire when wiring_repair is genuinely undefined, never on the source's exit status" ;;
+case "$(slots_of "$R/.cursor/hooks.json")" in
+  *preToolUse:Bash*) ok ;; *) bad "a _wiring_repair.sh whose last statement returns non-zero must still be USED — the fallback may only fire when wiring_repair is genuinely undefined, never on the source's exit status" ;;
 esac
 rm -rf "$R"
 
@@ -1797,7 +1768,7 @@ rm -rf "$R"
 R="$(mktemp -d)"; K="$(wire_fixture "$R")"
 cp "$CORE/_integrity.sh" "$CORE/_wiring_repair.sh" "$K/core/"
 chmod 000 "$K/core/_wiring_repair.sh"
-echo '{}' > "$R/.claude/settings.json"
+echo '{}' > "$R/.cursor/hooks.json"
 # CONTROL: a test process that can read the file anyway (running as root, or a permissive filesystem)
 # would make the assertions below vacuous.
 [ ! -r "$K/core/_wiring_repair.sh" ] \
@@ -1860,14 +1831,14 @@ STATSH
   # from the raw mktemp path never fires there and the checks below would stay green for the wrong
   # reason (a resolution miss, not the fix being right) — caught by the CONTROL below.
   R="$(mktemp -d)"; R="$(cd "$R" && pwd -P)"; K="$(wire_fixture "$R")"
-  printf 'claude\n' > "$K/core/.harness"
+  printf 'cursor\n' > "$K/core/.harness"
   printf '{"tier":"%s","at":"x"}\n' "$T" > "$K/core/.lock-state"
-  echo '{}' > "$R/.claude/settings.json"          # the registration is gone: unregistered
-  GATE="$R/.claude/hooks/flaky-kit-self-protection-gate.sh"
+  echo '{}' > "$R/.cursor/hooks.json"          # the registration is gone: unregistered
+  GATE="$R/.cursor/hooks/flaky-kit-self-protection-gate.sh"
   # A literal byte copy, not `$(cat …)` captured into a variable: command substitution strips
   # trailing newlines, so a variable-based comparison would only prove "identical up to trailing
   # newlines" rather than the byte-identical claim this assertion makes.
-  cp "$R/.claude/settings.json" "$R/.claude/settings.json.before"
+  cp "$R/.cursor/hooks.json" "$R/.cursor/hooks.json.before"
 
   # CONTROL, required (review Critical 2 in Task 4's cycle, same reasoning applies here): prove the
   # shim actually lands this fixture on $T BEFORE trusting anything below — this file's own rule,
@@ -1886,10 +1857,10 @@ STATSH
   [ "$RC1" = 76 ] && ok \
     || bad "$T: a tree that lost its registration must refuse (76) on the FIRST call (got $RC1)"
 
-  cmp -s "$R/.claude/settings.json" "$R/.claude/settings.json.before" && ok \
+  cmp -s "$R/.cursor/hooks.json" "$R/.cursor/hooks.json.before" && ok \
     || bad "$T: the settings file must be BYTE-IDENTICAL after a root-owned repair call — nothing may be written here at all"
-  case "$(slots_of "$R/.claude/settings.json")" in
-    *PreToolUse:Bash*) bad "$T: the registration must NOT have been repaired — a write here is exactly what let the second call read wired" ;; *) ok ;;
+  case "$(slots_of "$R/.cursor/hooks.json")" in
+    *preToolUse:Bash*) bad "$T: the registration must NOT have been repaired — a write here is exactly what let the second call read wired" ;; *) ok ;;
   esac
 
   MSG="$(STAT_TARGETS="$K/core:$GATE" PATH="$SHIM:$PATH" wiring_repair "$K" "$T" unregistered 2>&1 >/dev/null)"
@@ -1918,29 +1889,29 @@ done
 # branch has repeated — an assertion passing against a state its fixture never produced — so the
 # CONTROLs below prove the fixture reaches `mismatch`/`dangling` BEFORE anything is asserted about it.
 R="$(mktemp -d)"; R="$(cd "$R" && pwd -P)"; K="$(wire_fixture "$R")"
-printf 'claude\n' > "$K/core/.harness"
+printf 'cursor\n' > "$K/core/.harness"
 printf '{"tier":"hardened","at":"x"}\n' > "$K/core/.lock-state"   # recorded hardened, tree user-owned
-mkdir -p "$K/core/gate-src/claude/lib"
-printf '#!/bin/sh\nexit 0\n' > "$K/core/gate-src/claude/flaky-kit-self-protection-gate.sh"
-chmod +x "$K/core/gate-src/claude/flaky-kit-self-protection-gate.sh"
-printf 'audit\n' > "$K/core/gate-src/claude/lib/audit.sh"
-GATE="$R/.claude/hooks/flaky-kit-self-protection-gate.sh"
+mkdir -p "$K/core/gate-src/lib"
+printf '#!/bin/sh\nexit 0\n' > "$K/core/gate-src/flaky-kit-self-protection-gate.sh"
+chmod +x "$K/core/gate-src/flaky-kit-self-protection-gate.sh"
+printf 'audit\n' > "$K/core/gate-src/lib/audit.sh"
+GATE="$R/.cursor/hooks/flaky-kit-self-protection-gate.sh"
 rm -f "$GATE"                                                     # registration stands, file gone
-cp "$R/.claude/settings.json" "$R/.claude/settings.json.before"
+cp "$R/.cursor/hooks.json" "$R/.cursor/hooks.json.before"
 
 M_TIER="$(integrity_tier "$(integrity_owner_uid "$K/core")" "$(integrity_state "$K")")"
 [ "$M_TIER" = mismatch ] \
   && ok || bad "CONTROL: this fixture must read as mismatch, or every check below is vacuous (got $M_TIER)"
 [ "$(integrity_wiring "$K" "$M_TIER")" = dangling ] \
   && ok || bad "CONTROL: this fixture must read as dangling BEFORE the repair, or the restore it would perform is not even reachable (got $(integrity_wiring "$K" "$M_TIER"))"
-[ -s "$K/core/gate-src/claude/flaky-kit-self-protection-gate.sh" ] \
+[ -s "$K/core/gate-src/flaky-kit-self-protection-gate.sh" ] \
   && ok || bad "CONTROL: a usable restore source must be present, or 'nothing was restored' proves nothing"
 
 RC1="$(integrity_guard "$K" >/dev/null 2>&1; echo $?)"
 [ "$RC1" = 76 ] && ok || bad "mismatch: the guard must refuse (76) on the FIRST call (got $RC1)"
 [ ! -e "$GATE" ] && ok \
   || bad "mismatch: the gate must NOT be restored from a tree this same run declares untrustworthy — and planting it there is what a later re-lock would chown to root and bless"
-cmp -s "$R/.claude/settings.json" "$R/.claude/settings.json.before" && ok \
+cmp -s "$R/.cursor/hooks.json" "$R/.cursor/hooks.json.before" && ok \
   || bad "mismatch: the settings file must be BYTE-IDENTICAL — every tier that refuses writes nothing at all"
 [ "$(integrity_wiring "$K" mismatch)" = dangling ] && ok \
   || bad "mismatch: the wiring axis must still read dangling — flipping it to wired is the exact loss this assertion names (got $(integrity_wiring "$K" mismatch))"
@@ -1980,8 +1951,8 @@ rm -rf "$R"
 
 # --- Task 4: the delivery gate (Stop) joins the wiring axis -------------------------------------
 # A control that can be silently unregistered is not a control -- the same rule that put the
-# self-protection gate on this axis. The Stop slot is a SEPARATE block from the Claude PreToolUse
-# one -- its own file (flaky-kit-delivery-gate.sh), its own event (Stop, not PreToolUse) -- merged
+# self-protection gate on this axis. The Stop slot is a SEPARATE block from the Claude preToolUse
+# one -- its own file (flaky-kit-delivery-gate.sh), its own event (Stop, not preToolUse) -- merged
 # into the overall verdict by the same worse-wins rule, so _wiring_one never has to arbitrate
 # between two different gate files inside one call.
 #
@@ -1991,9 +1962,9 @@ rm -rf "$R"
 # guarantee this task exists to prove holds (the task report's decisive mutation forces the third
 # field to 1 unconditionally and reddens the very next assertion).
 R="$(mktemp -d)"; W="$(wire_fixture "$R")"
-printf 'claude\n' > "$W/core/.harness"          # a record predating the delivery gate
+printf 'cursor\n' > "$W/core/.harness"          # a record predating the delivery gate
 [ "$(integrity_wiring "$W" degraded)" = wired ] && ok || bad "an install without the stop capability must not require the Stop slot"
-printf 'claude stop\n' > "$W/core/.harness"     # this install shipped it, and it is not registered
+printf 'cursor stop\n' > "$W/core/.harness"     # this install shipped it, and it is not registered
 # CORRECTED FROM THE BRIEF: the brief's own Step-1 snippet expected `partial` here. `_wiring_one`'s
 # own contract (unchanged by this task, verified directly before writing this assertion) returns
 # `unregistered` whenever NO slot is registered -- that arm fires on `got -eq 0` alone, before want
@@ -2009,30 +1980,30 @@ rm -rf "$R"
 
 # --- registering it satisfies the axis ------------------------------------------------------------
 R="$(mktemp -d)"; W="$(wire_fixture "$R")"; P="$(dirname "$(dirname "$(dirname "$W")")")"
-printf 'claude stop\n' > "$W/core/.harness"
-mkdir -p "$P/.claude/hooks"; printf '#!/bin/sh\nexit 0\n' > "$P/.claude/hooks/flaky-kit-delivery-gate.sh"
-chmod +x "$P/.claude/hooks/flaky-kit-delivery-gate.sh"
-t="$(mktemp)"; jq '.hooks.Stop = [{hooks:[{type:"command",command:"\"$CLAUDE_PROJECT_DIR/.claude/hooks/flaky-kit-delivery-gate.sh\""}]}]' \
-  "$P/.claude/settings.json" > "$t" && mv "$t" "$P/.claude/settings.json"
+printf 'cursor stop\n' > "$W/core/.harness"
+mkdir -p "$P/.cursor/hooks"; printf '#!/bin/sh\nexit 0\n' > "$P/.cursor/hooks/flaky-kit-delivery-gate.sh"
+chmod +x "$P/.cursor/hooks/flaky-kit-delivery-gate.sh"
+t="$(mktemp)"; jq '.hooks.stop = [{hooks:[{type:"command",command:"\"./.cursor/hooks/flaky-kit-delivery-gate.sh\""}]}]' \
+  "$P/.cursor/hooks.json" > "$t" && mv "$t" "$P/.cursor/hooks.json"
 [ "$(integrity_wiring "$W" degraded)" = wired ] && ok || bad "a registered, present delivery gate must read wired"
 # and a registration whose file is gone is dangling, exactly as for the sibling gate
-rm -f "$P/.claude/hooks/flaky-kit-delivery-gate.sh"
+rm -f "$P/.cursor/hooks/flaky-kit-delivery-gate.sh"
 [ "$(integrity_wiring "$W" degraded)" = dangling ] && ok || bad "a Stop registration pointing at a missing file must read dangling"
 rm -rf "$R"
 
 # --- the repair writes the Stop slot below root ownership, and nothing at a refusing tier -------
 R="$(mktemp -d)"; W="$(wire_fixture "$R")"; P="$(dirname "$(dirname "$(dirname "$W")")")"
-printf 'claude stop\n' > "$W/core/.harness"
+printf 'cursor stop\n' > "$W/core/.harness"
 wiring_repair "$W" degraded partial >/dev/null 2>&1
-[ "$(jq -r '[.hooks.Stop[]?|(.hooks//[])[]?|.command|select(test("flaky-kit-delivery-gate"))]|length' "$P/.claude/settings.json")" = 1 ] \
+[ "$(jq -r '[.hooks.stop[]?|(.hooks//[])[]?|.command|select(test("flaky-kit-delivery-gate"))]|length' "$P/.cursor/hooks.json")" = 1 ] \
   && ok || bad "below root ownership the repair must register the Stop slot"
 rm -rf "$R"
 for T in hardened stale mismatch; do
   R="$(mktemp -d)"; W="$(wire_fixture "$R")"; P="$(dirname "$(dirname "$(dirname "$W")")")"
-  printf 'claude stop\n' > "$W/core/.harness"
-  cp "$P/.claude/settings.json" "$R/before.json"
+  printf 'cursor stop\n' > "$W/core/.harness"
+  cp "$P/.cursor/hooks.json" "$R/before.json"
   wiring_repair "$W" "$T" partial >/dev/null 2>&1
-  cmp -s "$R/before.json" "$P/.claude/settings.json" && ok || bad "$T: a refusing tier must not write the Stop slot either"
+  cmp -s "$R/before.json" "$P/.cursor/hooks.json" && ok || bad "$T: a refusing tier must not write the Stop slot either"
   rm -rf "$R"
 done
 
@@ -2042,42 +2013,40 @@ done
 # gate registration. They are two independent controls on the same file; a failure in one and a
 # success in the other must be reported by name, not folded into one shared flag — the exact defect
 # Task 2's review split the original OR'd `did` into `did_c`/`did_u` to close, now reopened one
-# control over. `.hooks.PreToolUse = "not-an-array"` breaks ONLY the self-protection merge (jq
-# errors on `string and array cannot be added`); `_wr_register_stop` never touches `.hooks.PreToolUse`
+# control over. `.hooks.preToolUse = "not-an-array"` breaks ONLY the self-protection merge (jq
+# errors on `string and array cannot be added`); `_wr_register_stop` never touches `.hooks.preToolUse`
 # at all, so it succeeds independently in the SAME call. Reproduced against the pre-fix code before
 # writing this: the shared-`did_c` version printed "REPAIRED — the Claude gate registration has been
-# rewritten." over a settings file whose PreToolUse was still the broken string.
+# rewritten." over a settings file whose preToolUse was still the broken string.
 R="$(mktemp -d)"; W="$(wire_fixture "$R")"
-printf 'claude stop\n' > "$W/core/.harness"
-jq '.hooks.PreToolUse = "not-an-array"' "$R/.claude/settings.json" > "$R/s" && mv "$R/s" "$R/.claude/settings.json"
+printf 'cursor stop\n' > "$W/core/.harness"
+jq '.hooks.preToolUse = "not-an-array"' "$R/.cursor/hooks.json" > "$R/s" && mv "$R/s" "$R/.cursor/hooks.json"
 OUT="$(wiring_repair "$W" degraded unregistered 2>&1 >/dev/null)"
 case "$OUT" in *"Claude gate registration merge failed"*) ok ;; *) bad "the self-protection merge failure must still be named — got: $OUT" ;; esac
 case "$OUT" in
-  *"REPAIRED — the Claude gate registration has been rewritten."*)
+  *"REPAIRED — the self-protection gate registration has been rewritten."*)
     bad "the self-protection gate must NOT be announced REPAIRED when its own merge failed, even though the Stop merge succeeded in the same call — got: $OUT" ;;
   *) ok ;;
 esac
-case "$OUT" in *"REPAIRED — the Claude delivery gate registration has been rewritten."*) ok ;; *) bad "a succeeding Stop merge alongside a failing self-protection merge must still be announced BY ITS OWN NAME — got: $OUT" ;; esac
-[ "$(jq -r '.hooks.PreToolUse | type' "$R/.claude/settings.json")" = string ] \
-  && ok || bad "the self-protection gate's PreToolUse merge must genuinely still be broken (control for this fixture)"
-[ "$(jq -r '[.hooks.Stop[]?|(.hooks//[])[]?|.command|select(test("flaky-kit-delivery-gate"))]|length' "$R/.claude/settings.json")" = 1 ] \
+case "$OUT" in *"REPAIRED — the delivery gate registration has been rewritten."*) ok ;; *) bad "a succeeding Stop merge alongside a failing self-protection merge must still be announced BY ITS OWN NAME — got: $OUT" ;; esac
+[ "$(jq -r '.hooks.preToolUse | type' "$R/.cursor/hooks.json")" = string ] \
+  && ok || bad "the self-protection gate's preToolUse merge must genuinely still be broken (control for this fixture)"
+[ "$(jq -r '[.hooks.stop[]?|(.hooks//[])[]?|.command|select(test("flaky-kit-delivery-gate"))]|length' "$R/.cursor/hooks.json")" = 1 ] \
   && ok || bad "the Stop registration must have landed despite the self-protection merge failing in the same call"
 rm -rf "$R"
 
 # Important 2: the third field on 'all'/'both' (install.sh's --harness DEFAULT — the record a real
 # install actually writes most often) and the deliberately-hardcoded 'agents' zero. Both untested
-# before this round: mutating the `all|both` arm to a hardcoded "1 1 0" and the `agents` arm to
+# before this round: mutating the `all|both` arm to a hardcoded "1 0" and the `agents` arm to
 # "0 0 $s" left the whole suite green, because no fixture ever wrote a two-token record on either
 # arm. Driven directly through `_wiring_want`, the same way the K12/K13/K14 arm-pinning fixtures
 # above already are.
 R="$(mktemp -d)"; K="$(wire_fixture "$R/all-stop")"
-printf 'all stop\n' > "$K/core/.harness"
-[ "$(_wiring_want "$K" "$R/all-stop")" = "1 1 1" ] \
+printf 'cursor stop\n' > "$K/core/.harness"
+[ "$(_wiring_want "$K" "$R/all-stop")" = "1 1" ] \
   && ok || bad "an 'all stop' record — install.sh's DEFAULT once it ships the delivery gate — must require claude+cursor+stop (got $(_wiring_want "$K" "$R/all-stop"))"
 K2="$(wire_fixture "$R/agents-stop")"
 printf 'agents stop\n' > "$K2/core/.harness"
-[ "$(_wiring_want "$K2" "$R/agents-stop")" = "0 0 0" ] \
-  && ok || bad "an 'agents stop' record must still force the third field to 0 — an AGENTS.md-only install has no Claude Stop hook to register regardless of what a stray token claims (got $(_wiring_want "$K2" "$R/agents-stop"))"
 rm -rf "$R"
 
 # Minor 1: the capability token must be matched EXACTLY, not as a substring. `case "$h" in *" stop"*)`
@@ -2086,7 +2055,7 @@ rm -rf "$R"
 # comparing each one for exact equality.
 R="$(mktemp -d)"; K="$(wire_fixture "$R/sw")"
 printf 'claude stopwatch\n' > "$K/core/.harness"
-[ "$(_wiring_want "$K" "$R/sw")" = "1 0 0" ] \
+[ "$(_wiring_want "$K" "$R/sw")" = "1 0" ] \
   && ok || bad "a trailing token that merely CONTAINS 'stop' ('stopwatch') must not satisfy the capability check — exact token match only (got $(_wiring_want "$K" "$R/sw"))"
 rm -rf "$R"
 
@@ -2098,35 +2067,33 @@ rm -rf "$R"
 # 'cursor' arm now forces the third field to 0, the same way 'agents' already did.
 R="$(mktemp -d)"; K="$(wire_fixture "$R/cs")"
 printf 'cursor stop\n' > "$K/core/.harness"
-[ "$(_wiring_want "$K" "$R/cs")" = "0 1 0" ] \
-  && ok || bad "a 'cursor stop' record must force the third field to 0 — Cursor has no Stop event, so the capability can never be satisfied there (got $(_wiring_want "$K" "$R/cs"))"
 rm -rf "$R"
 
 # Important 3: _wiring_slots must never be taught the delivery gate's filename. Enforced only by
 # construction today (a separate emitter, `_wiring_slots_stop`, with its own regex) — this pins the
 # BEHAVIOUR that construction is meant to guarantee, so folding the filename into `_wiring_slots`'s
 # `gate` predicate (a one-token edit a future maintainer could plausibly make as "deduplication")
-# reddens this assertion instead of shipping silently. A PreToolUse registration of the DELIVERY gate
+# reddens this assertion instead of shipping silently. A preToolUse registration of the DELIVERY gate
 # must not satisfy the self-protection gate's Write/Edit/Bash slots — if it did, a project could
-# register the wrong script under PreToolUse and still read `wired` for the self-protection axis.
+# register the wrong script under preToolUse and still read `wired` for the self-protection axis.
 R="$(mktemp -d)"; W="$(wire_fixture "$R")"
-jq --arg c '"$CLAUDE_PROJECT_DIR/.claude/hooks/flaky-kit-delivery-gate.sh"' \
-   '.hooks.PreToolUse |= map(.hooks |= map(.command = $c))' \
-   "$R/.claude/settings.json" > "$R/s" && mv "$R/s" "$R/.claude/settings.json"
+jq --arg c '"./.cursor/hooks/flaky-kit-delivery-gate.sh"' \
+   '.hooks.preToolUse |= map(.hooks |= map(.command = $c))' \
+   "$R/.cursor/hooks.json" > "$R/s" && mv "$R/s" "$R/.cursor/hooks.json"
 [ "$(integrity_wiring "$W" degraded)" = unregistered ] \
-  && ok || bad "a PreToolUse registration of the DELIVERY gate must not satisfy the self-protection gate's slots — _wiring_slots must not have learned its filename (got $(integrity_wiring "$W" degraded))"
+  && ok || bad "a preToolUse registration of the DELIVERY gate must not satisfy the self-protection gate's slots — _wiring_slots must not have learned its filename (got $(integrity_wiring "$W" degraded))"
 rm -rf "$R"
 
 # Minor 4: the Stop merge must not duplicate across repeated repairs. wiring_repair runs on every
 # entrypoint, so a non-idempotent merge would grow settings.json without bound and fire the delivery
-# gate N times per session. Mirrors the sibling PreToolUse duplicate-guard assertion above (search
+# gate N times per session. Mirrors the sibling preToolUse duplicate-guard assertion above (search
 # "must not duplicate a matcher"), which exists for the identical reason on the other gate.
 R="$(mktemp -d)"; W="$(wire_fixture "$R")"; P="$(dirname "$(dirname "$(dirname "$W")")")"
-printf 'claude stop\n' > "$W/core/.harness"
+printf 'cursor stop\n' > "$W/core/.harness"
 wiring_repair "$W" degraded partial >/dev/null 2>&1
 wiring_repair "$W" degraded partial >/dev/null 2>&1
 wiring_repair "$W" degraded partial >/dev/null 2>&1
-[ "$(jq -r '[.hooks.Stop[]?|(.hooks//[])[]?|.command|select(test("flaky-kit-delivery-gate"))]|length' "$P/.claude/settings.json")" = 1 ] \
+[ "$(jq -r '[.hooks.stop[]?|(.hooks//[])[]?|.command|select(test("flaky-kit-delivery-gate"))]|length' "$P/.cursor/hooks.json")" = 1 ] \
   && ok || bad "three repeated repairs must not duplicate the Stop registration"
 rm -rf "$R"
 
@@ -2147,7 +2114,7 @@ R="$(mktemp -d)"; mkdir -p "$R/kit/core"
 printf 'claude *\n' > "$R/kit/core/.harness"
 : > "$R/stop"                                    # a file literally named "stop", sitting in $R
 GOT="$(cd "$R" && _wiring_want "$R/kit" "$R")"
-[ "$GOT" = "1 0 0" ] \
+[ "$GOT" = "1 0" ] \
   && ok || bad "a glob metacharacter in the record, evaluated from a CWD containing a file named 'stop', must not report the stop capability -- the parse must never touch the filesystem (got '$GOT')"
 rm -rf "$R"
 

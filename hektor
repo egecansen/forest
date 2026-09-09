@@ -2,15 +2,15 @@
 # hektor — the Hektor pack CLI.
 #
 # The headline command:
-#   hektor package install          wire the whole pack into the current repo
-#                                    (Claude Code + Cursor + AGENTS.md), one shot.
+#   hektor package install          wire the whole pack into the current repo, one shot.
 #
 # Other commands:
-#   hektor package install [--project DIR] [--harness all|claude|cursor|agents]
+#   hektor package install [--project DIR] [--no-kits]
 #   hektor package status  [--project DIR]     what's installed in a repo
 #   hektor package uninstall [--project DIR]   remove Hektor from a repo
 #   hektor package link    [--dir BIN]         put `hektor` on PATH (default ~/.local/bin)
 #   hektor package unlink  [--dir BIN]
+#   hektor doctor [--project DIR]              self-audit the pack
 #   hektor help | version
 #
 # Run it from your target repo after adding the hektor directory to it:
@@ -30,7 +30,7 @@ PACK_DIR="$(cd -P "$(dirname "$SRC")" && pwd)"
 die() { echo "hektor: $*" >&2; exit 1; }
 
 usage() {
-  sed -n '3,20p' "$PACK_DIR/hektor" | sed 's/^# \{0,1\}//'
+  sed -n '3,17p' "$PACK_DIR/hektor" | sed 's/^# \{0,1\}//'
 }
 
 # Default target repo: the git toplevel of where you run the command. If run from
@@ -46,10 +46,11 @@ default_project() {
 
 # ---- package subcommands ----------------------------------------------------
 pkg_install() {
-  local proj="" harness="all"
+  local proj="" pass=()
   while [ $# -gt 0 ]; do case "$1" in
     --project) proj="${2:-}"; shift 2 ;;
-    --harness) harness="${2:-all}"; shift 2 ;;
+    --no-kits) pass+=(--no-kits); shift ;;
+    --harness) shift 2 ;;   # accepted and ignored: the pack targets Cursor only
     *) die "install: unknown arg: $1" ;;
   esac; done
   [ -n "$proj" ] || proj="$(default_project)"
@@ -57,8 +58,8 @@ pkg_install() {
   proj="$(cd "$proj" && pwd)"
   [ "$proj" = "$PACK_DIR" ] && die "install: refusing to install into the pack itself.
 Run this from your target repo, or pass --project <your-repo>."
-  echo "hektor: installing into $proj (harness: $harness)"
-  exec bash "$PACK_DIR/install.sh" --harness "$harness" --project "$proj"
+  echo "hektor: installing into $proj"
+  exec bash "$PACK_DIR/install.sh" --project "$proj" ${pass+"${pass[@]}"}
 }
 
 pkg_status() {
@@ -68,18 +69,42 @@ pkg_status() {
   [ -d "$proj" ] || die "status: no such project dir: $proj"
   proj="$(cd "$proj" && pwd)"
   echo "hektor status — $proj"
-  local ok="  ✓" no="  ✗"
-  local n; n=$(ls -d "$proj"/.claude/skills/hektor-* 2>/dev/null | wc -l | tr -d ' ')
-  [ "${n:-0}" -gt 0 ] && echo "$ok skills:        $n installed (.claude/skills/hektor-*)" || echo "$no skills:        none"
-  [ -f "$proj/.claude/hooks/pr-rules-gate.sh" ] && echo "$ok pr-rules-gate: present" || echo "$no pr-rules-gate: missing"
-  if [ -f "$proj/.claude/settings.json" ] && command -v jq >/dev/null && \
-     jq -e '[.hooks[]?[]?.hooks[]?.command // empty] | any(contains("pr-rules-gate"))' "$proj/.claude/settings.json" >/dev/null 2>&1; then
-    echo "$ok Claude gates:  registered in .claude/settings.json"
+  local ok="  ✓" no="  ✗" C="$proj/.cursor"
+
+  local n; n=$(ls -d "$C"/skills/*/ 2>/dev/null | wc -l | tr -d ' ')
+  [ "${n:-0}" -gt 0 ] && echo "$ok skills:    $n installed (.cursor/skills/)" || echo "$no skills:    none"
+
+  local a; a=$(ls "$C"/agents/hektor-*.md 2>/dev/null | wc -l | tr -d ' ')
+  [ "${a:-0}" -gt 0 ] && echo "$ok agents:    $a subagent roles (.cursor/agents/)" || echo "$no agents:    none"
+
+  [ -f "$C/rules/hektor-kernel.mdc" ] && echo "$ok rule:      hektor-kernel.mdc (always applied)" || echo "$no rule:      missing"
+
+  local g; g=$(ls "$C"/hooks/*.sh 2>/dev/null | wc -l | tr -d ' ')
+  [ "${g:-0}" -gt 0 ] && echo "$ok gates:     $g scripts in .cursor/hooks/" || echo "$no gates:     none"
+
+  if [ -f "$C/hooks.json" ] && command -v jq >/dev/null; then
+    local r; r=$(jq '[.hooks[]?[]? | select((.command // "") | contains(".cursor/hooks/"))] | length' "$C/hooks.json" 2>/dev/null || echo 0)
+    if [ "${r:-0}" -gt 0 ]; then
+      echo "$ok wiring:    $r registrations in .cursor/hooks.json"
+      jq -r '.hooks | to_entries[] | "             \(.key): \(.value | length)"' "$C/hooks.json" 2>/dev/null
+    else
+      echo "$no wiring:    hooks.json present but no Hektor registrations"
+    fi
   else
-    echo "$no Claude gates:  not registered"
+    echo "$no wiring:    no .cursor/hooks.json"
   fi
-  [ -f "$proj/.cursor/rules/hektor.mdc" ] && echo "$ok Cursor:        rule + adapter wired (.cursor/)" || echo "$no Cursor:        not wired"
-  [ -f "$proj/AGENTS.md" ] && grep -qF 'hektor:begin' "$proj/AGENTS.md" 2>/dev/null && echo "$ok AGENTS.md:      pointer present" || echo "$no AGENTS.md:      no pointer"
+
+  # A registration naming a script that isn't there is worse than no registration:
+  # the harness silently runs nothing while status would otherwise report "wired".
+  if [ -f "$C/hooks.json" ] && command -v jq >/dev/null; then
+    local dangling=0 cmd path
+    while IFS= read -r cmd; do
+      [ -n "$cmd" ] || continue
+      path="${cmd#./}"
+      [ -f "$proj/$path" ] || { echo "  ! dangling: $cmd names no file"; dangling=$((dangling+1)); }
+    done < <(jq -r '.hooks[]?[]? | select((.command // "") | contains(".cursor/hooks/")) | .command' "$C/hooks.json" 2>/dev/null)
+    [ "$dangling" -gt 0 ] && echo "  ! $dangling registration(s) point at a missing script — re-run 'hektor package install'"
+  fi
 }
 
 pkg_uninstall() {
@@ -90,52 +115,53 @@ pkg_uninstall() {
   proj="$(cd "$proj" && pwd)"
   command -v jq >/dev/null || die "uninstall: jq is required"
   echo "hektor: removing Hektor from $proj"
+  local C="$proj/.cursor"
 
-  # Skills + schemas we shipped.
-  rm -rf "$proj"/.claude/skills/hektor-* 2>/dev/null || true
+  # Skills the pack ships, by name — never a blanket wipe of .cursor/skills/, which
+  # is a shared directory other tools install into.
+  local sk
+  while IFS= read -r sk; do
+    [ -n "$sk" ] && rm -rf "$C/skills/$sk" 2>/dev/null || true
+  done < <(cd "$PACK_DIR/skills" 2>/dev/null && ls -d */ 2>/dev/null | sed 's#/$##')
 
-  # Hooks we shipped (by basename), + strip their registrations from settings.json.
-  local names_json
-  names_json=$( (cd "$PACK_DIR/hooks" && ls *.sh 2>/dev/null) | jq -R . | jq -s . )
-  while IFS= read -r h; do rm -f "$proj/.claude/hooks/$h" 2>/dev/null || true; done \
+  # Agents, the rule, the shipped READMEs, and the return schemas.
+  rm -f "$C"/agents/hektor-*.md "$C/agents/README.md" "$C/rules/hektor-kernel.mdc" \
+        "$C/skills/README.md" "$C/hooks/README.md" 2>/dev/null || true
+  rm -rf "$C/schemas/subagent-returns" 2>/dev/null || true
+  rm -f "$C/schemas/verifier-result.schema.json" 2>/dev/null || true
+
+  # Gates we shipped (by basename), and their registrations.
+  local h
+  while IFS= read -r h; do rm -f "$C/hooks/$h" 2>/dev/null || true; done \
     < <(cd "$PACK_DIR/hooks" && ls *.sh 2>/dev/null)
-  local S="$proj/.claude/settings.json"
-  if [ -f "$S" ]; then
-    local t; t="$(mktemp)"
+  rm -f "$C/hooks/lib/cursor.sh" "$C/hooks/lib/audit.sh" "$C/hooks/lib/hook_profile.sh" 2>/dev/null || true
+
+  local H="$C/hooks.json"
+  if [ -f "$H" ]; then
+    local names_json t
+    names_json=$( (cd "$PACK_DIR/hooks" && ls *.sh 2>/dev/null) | jq -R . | jq -s . )
+    t="$(mktemp)"
+    # Drop only registrations naming a script THIS pack ships. An entry you added
+    # to the same event, or another tool's, is left exactly as it was — and an
+    # event left empty is dropped rather than kept as a bare [].
     jq --argjson names "$names_json" '
       if .hooks == null then . else
         .hooks |= (
-          map_values(
-            map(.hooks |= map(select(
-              (.command // "") as $c
-              | (($names | any(. as $n | $c | contains("/.claude/hooks/" + $n)))
-                 or ($c | contains("hektor-flaky-triage/hooks/"))) | not
-            )))
-            | map(select((.hooks | length) > 0))
-          )
-          | map_values(select(length > 0))
+          with_entries(.value |= map(select(
+            (.command // "") as $c
+            | ($names | any(. as $n | $c | contains(".cursor/hooks/" + $n))) | not
+          )))
+          | with_entries(select((.value | length) > 0))
         )
       end
-    ' "$S" > "$t" 2>/dev/null && mv "$t" "$S" || rm -f "$t"
+    ' "$H" > "$t" 2>/dev/null && mv "$t" "$H" || rm -f "$t"
   fi
 
-  # Cursor adapter + rule, + strip .cursor/hooks.json registrations.
-  rm -f "$proj/.cursor/hooks/adapter.sh" "$proj/.cursor/hooks/lib/cursor-compat.sh" "$proj/.cursor/rules/hektor.mdc" 2>/dev/null || true
-  local H="$proj/.cursor/hooks.json"
-  if [ -f "$H" ]; then
-    local t; t="$(mktemp)"
-    jq 'if .hooks == null then . else
-          .hooks |= with_entries(.value |= map(select((.command // "") | contains(".cursor/hooks/adapter.sh") | not)))
-        end' "$H" > "$t" 2>/dev/null && mv "$t" "$H" || rm -f "$t"
-  fi
-
-  # AGENTS.md pointer block.
-  local AG="$proj/AGENTS.md"
-  if [ -f "$AG" ] && grep -qF 'hektor:begin' "$AG"; then
-    local t; t="$(mktemp)"
-    sed '/<!-- hektor:begin -->/,/<!-- hektor:end -->/d' "$AG" > "$t" && mv "$t" "$AG"
-  fi
-  echo "hektor: removed (skills, hooks, Cursor wiring, AGENTS.md pointer). Your other .claude/.cursor entries are untouched."
+  # rmdir, never rm -rf: each only succeeds if the directory is now empty, so a
+  # directory still holding something you own is left exactly where it is.
+  rmdir "$C/agents" "$C/rules" "$C/hooks/lib" "$C/hooks" "$C/skills" "$C/schemas" 2>/dev/null || true
+  echo "hektor: removed (skills, agents, rule, gates, registrations)."
+  echo "hektor: left alone — docs/hektor/ (your run state) and any .cursor entry this pack didn't ship."
 }
 
 pkg_link() {
@@ -182,5 +208,5 @@ case "$cmd" in
   help|-h|--help)   usage ;;
   version|-v|--version)
     echo "hektor pack v$(jq -r '.version // "?"' "$PACK_DIR/catalog.json" 2>/dev/null || echo '?') ($PACK_DIR)" ;;
-  *) die "unknown command '$cmd' (try: package install | status | help | version)" ;;
+  *) die "unknown command '$cmd' (try: package install | status | doctor | help | version)" ;;
 esac

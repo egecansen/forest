@@ -8,6 +8,7 @@ description: >
   pattern, dynamic locators, and DI rules. Triggers on any request that
   involves authoring or reviewing Java test code in this repo. Always
   consulted before generating code — do not guess.
+paths: "web-ui-test/**/*.java, **/*Page.java, **/*Layout.java, **/*Test.java"
 ---
 
 # Hektor conventions — must-know framework rules
@@ -178,6 +179,26 @@ follows from the field's annotation:
 | `waitForVisibility = true` | `<Layout> waitForVisibilityFoo(int timeout)` |
 | `getListText = true` (on `List<WebElement>`) | `List<String> getListTextFoo()` |
 
+> **On a `List<WebElement>` the wait forms are INDEX-based, and the index is
+> resolved BEFORE any waiting.** `waitForVisibilityFoo(0, 5)` means
+> `foo.get(0)` then wait — so it throws `IndexOutOfBoundsException` on an empty
+> list instead of waiting for the list to fill. Worse,
+> `waitForInVisibilityFoo(5)` is a single-arg **index**, not a timeout:
+> `foo.get(5)`, which blows up whenever the list is shorter than 6.
+> Cost 2026-08-01: two tests crashed before reaching any assertion, which
+> masked a real data-gating finding for a full day.
+> **To wait for a list to become non-empty, poll the size getter instead:**
+> ```java
+> for (int attempt = 0; attempt < 30; attempt++) {
+>   if (layout.getSizeFoo() > 0) { break; }
+>   pageRefresh();
+>   waitForPageLoad();      // paces by a real page load, not a magic number
+> }
+> ```
+> `waitForPageLoad()` is `PageFacility`'s own `WebDriverWait` — use it rather
+> than `sleepSecond(n)`. Note server-side propagation (feature flags) needs a
+> generous attempt ceiling; the loop exits early when the condition is met.
+
 Generated methods you can rely on — never hand-write a method that already
 has a `@GenerateMethods` form. If the form doesn't exist for what you need,
 add the property to `@GenerateMethods`; don't write a one-off helper.
@@ -303,6 +324,38 @@ the page, layout, or a util class. `@MethodSource` factory methods that feed
 - **Keep `checkVisualRegression*` out of `assertx(...)`.** VRT checks belong on
   their own VRT chain, not nested inside a functional `assertx(...)`.
   `[PR-reviewer: WARNING]`
+- **`assertThat(List<String>).contains(x)` is exact ELEMENT equality, not
+  substring.** Comparing a filename constant against a list of full CDN URLs, or
+  a class-name fragment against a full `class` attribute, can never pass. When
+  the expected value is a *fragment* of the actual, use
+  `.anyMatch(e -> e.contains(fragment))` / `.noneMatch(...)`. When it is the
+  whole value, `contains` is right. Found 2026-08-01 after a review comment
+  simplified `anySatisfy(...)` to `contains(...)` and silently made four
+  assertions impossible.
+- **Guard every negative assertion against a vacuous pass.** `doesNotContain`,
+  `isZero`, `isEmpty` and friends all pass on an empty actual. Pair them with
+  `.isNotEmpty()` on the collection, or assert the positive case in the same
+  method, so "nothing rendered" cannot masquerade as "the bad thing is absent".
+  Two tests passed vacuously for months this way.
+
+### Language tests
+
+A language test is ONE method that passes in both the default TR run and the
+`-Dtest.lang=en` run (a foreign-language run executes ONLY tests tagged
+`@Tag(CommonTag.LANGUAGE)` — see `TestExecutionCondition`). The test never sets
+the language itself: no `_EN` url constant, no manual language cookie, no
+in-page language switch. Every language-dependent value (asserted text, url
+path, text-based locator fragment) is a layout/page constant defined with
+`LanguageText.pick("TR", "EN")`, replaced **in place** — never a second
+constant next to the TR one. The one carve-out: changing the language from
+inside the page is a legitimate scenario when the switcher itself is the
+subject under test (assert the `language` cookie).
+
+Load **`hektor-write-language-test`** before authoring or converting one; it
+owns the full rule set (method template, `pick` constant rules, forbidden
+list) plus the run mechanics — the EN-run gate, the `-Dlang.audit=true`
+localization audit, and the AI page-language check
+(`getWrongLanguageWords` / `isPageInLanguage` + `@Tag(CommonTag.AI)`).
 
 ---
 
@@ -315,6 +368,25 @@ the page, layout, or a util class. `@MethodSource` factory methods that feed
 | Domain | `SearchDomain.*`, `ClassifiedDomain.*`, `IndividualDomain.*`, `ShoppingDomain.*`, `CorporateDomain.*`, `FinanceDomain.*`, `S360Domain.*`, `LondonDomain.*`, `YepyDomain.*`, `OperationDomain.*` | One or more. The subsystem(s) exercised. |
 | Gating | `MainTag.PRODUCTION` (runs in prod canary), `MainTag.FASTTRACK`, `MainTag.HOTFIX`, `MainTag.READ_ONLY` | Optional, opt-in. |
 | Cross-cutting | `MainTag.EDR`, `MainTag.SECURITY`, `MainTag.VISUAL_REGRESSION`, `MainTag.KVKK`, `MainTag.RESPONSIVE`, `MainTag.NETWORK`, `MainTag.MICROSERVICE` | Add when applicable. |
+| Language | `CommonTag.LANGUAGE` (method-level) | Marks a language test — one method valid in both `-Dtest.lang` runs. See "Language tests" above + `hektor-write-language-test`. |
+
+> **`PARALLEL` / `SERIAL` are Gradle job-splitting labels, NOT JUnit
+> concurrency.** `build.gradle.kts:509-510` string-replaces `parallel_tests` →
+> `serial_tests` to select a job. There is no `junit-platform.properties` and
+> `maxParallelForks` is unset, so JUnit parallelism is off — tests already run
+> one at a time within a job. Consequences:
+> - You **cannot** "add a serial guard" to one method: a method-level
+>   `@Tag(MainTag.SERIAL)` inside a `@Tag(MainTag.PARALLEL)` class matches
+>   **both** task selections and the method **runs twice**. For a state-mutating
+>   test that is worse than no guard at all.
+> - `@ResourceLock` / `@Isolated` / `@Execution` have zero usage here and are
+>   no-ops.
+> - To make a mutating test safe in a `PARALLEL` class, don't reach for tags:
+>   pick a data target no other method touches, capture the original state
+>   before mutating, and restore it in `@AfterEach` so an abort mid-test cannot
+>   leave the row dirty.
+> - The repo pattern for a mixed class is PARALLEL/SERIAL on the **methods**,
+>   Kure/domain on the **class**.
 
 **Don't invent tags.** Look at the existing tag class for the domain you're
 touching:
@@ -398,6 +470,49 @@ For data that REST exposes, the resource client lives at the
 `com.sahibinden.client.*` namespace and is injected via `@AutowiredBean` on
 the test class (typically via `TestDataResource`).
 
+### `loginByPass` does NOT navigate
+
+It sets the `st` cookie and returns `this` (`ModuleFacility:41-83`). Meanwhile
+`CookieUtil.addInitCookies` does `browser.get("https://www.sahibinden.com")`, so
+unless the test calls `.go(url)` explicitly the browser is sitting on the **home
+page**. Assertions after a bare `loginByPass` then run against the wrong page —
+and any negative assertion (`doesNotContain`, `isZero`) passes vacuously.
+
+Always: `loginByPass(id).go(targetUrl).<wait>()`. If a page helper takes a URL,
+make sure its body actually uses it — a "clean up the unused variable" lint
+warning on a `String url` is usually the *symptom* of lost navigation, not a
+tidy-up opportunity.
+
+### Feature flags (FGW)
+
+| Call | Semantics |
+|---|---|
+| `updateFeatureConfig(flag, weights)` | **Global.** Creates `/config` if absent. WIPES the selector set. Affects the whole testbox. |
+| `updateFeatureConfigWithRestriction(...)` | REPLACES the selector set. Patches an existing config — **404s if none exists**. |
+| `createFeatureConfigWithRestriction(...)` | APPENDS a selector. Patches an existing config — **404s if none exists**. |
+
+So a user-scoped flag needs **two** calls: a bare `updateFeatureConfig(...)` to
+seed `/config`, then the restriction call with
+`Map.of(RestrictionType.USER_ID_CONDITION, String.valueOf(user.getId()))`.
+Prefer `create…WithRestriction(..., false)` when several tests read the same flag
+in parallel — it appends rather than replacing, and `false` leaves the global
+default alone. Order matters: **create the user → set the restricted flag →
+`loginByPass`.**
+
+Never set a flag globally and leave it: the weight applies to the whole box, other
+tests reading it fail randomly, and featuregw can evaluate a global weight as
+DISABLE in user context — so you believe the flag is on while running with it off.
+
+> **`getFeatureConfig` THROWS on 404, it never returns null.** `Clients.getFGW`
+> uses WebClient `.retrieve()`, whose `try/catch` wraps only the Jackson mapping.
+> So the common idiom `if (getFeatureConfig(FLAG.name()) == null) { seed... }` is
+> **dead code that blows up** on exactly the box where the flag was never defined.
+> Catch the 404 (or add a `getFeatureConfigOrNull` to test-data-client) if you
+> need that guard.
+
+Server-side flag propagation is not instant. A test that flips a flag mid-run
+must poll (see the list-wait note above), not assume the next page load reflects it.
+
 ---
 
 ## Build, run, and environment
@@ -412,6 +527,11 @@ the test class (typically via `TestDataResource`).
 | Run all | `gradle test -Dui.testbox=<id> -Denv.data.center=<dc> -Denv.launchpad=<...>` |
 | Run by tag | `gradle test -P<tagName>=true -Dui.testbox=<id> -Denv.data.center=<dc> -Denv.launchpad=<...>` |
 | Parallel | `-Djunit.jupiter.execution.parallel.enabled=true` |
+| **Mandatory `-D` set** | Every CLI run ALSO needs `-Dspring.profiles.active=testbox -Denv.launchpad=<...> -Dui.browser.type=chrome` (+ `-Dchrome.version=<v>` on selenoid). Each is hard-required: without the profile the `@Profile("testbox")` app config class is invisible to Spring's scan → `initializationError: Unable to find a @SpringBootConfiguration`; without `env.launchpad` logback's `WorkspacePropertyDefiner` NPEs; without `ui.browser.type` `WebDriverFactory.initDriver` NPEs. |
+| Language run | `-Dtest.lang=en` — executes ONLY `@Tag(CommonTag.LANGUAGE)` tests; the tag is ANDed into the selection automatically. A `--tests`-named target bypasses the filter and then **fails** with `LanguageTagMissingException` if untagged (loud on purpose, never a silent skip). Add `-Dlang.audit=true` for the AI localization audit. See `hektor-write-language-test`. |
+| **`-Dapi.url=<dc>tb<dc><id>`** | **MANDATORY and missing from most copy-pasted command blocks.** `client.properties` declares `api.url=${sys:api.url}` with no default, so without it the MySQL datasource resolves the literal host `api.url` and the whole Spring context fails to load (`UnknownHostException: api.url`). Reads like a broken build, not a missing flag. |
+| Re-running | `--no-build-cache` for a first run. For a **byte-identical repeat**, add `cleanTest` — `--no-build-cache` does NOT defeat Gradle's up-to-date check, and the repeat prints `BUILD SUCCESSFUL` with `Task :test UP-TO-DATE` having run **zero** tests. Do **NOT** use `--rerun-tasks`: it re-runs `:generate-method-plugin:instrumentCode` and the named test is then not discovered (`No tests were executed!`). |
+| JDK (macOS) | The Gradle daemon MUST run the same major JDK as the Java 17 toolchain: the test task copies every daemon system property into the forked test JVM, and a 21-daemon's `java.home` makes the 17 worker load JDK-21 CLDR classes → `UnsupportedClassVersionError`. Pass `-Dorg.gradle.java.home=<jdk17>` (and ensure `<jdk17>/Packages` exists — empty dir is fine — or `:generate-method-plugin:instrumentCode` fails). |
 
 **The testbox is non-negotiable.** Every Hektor session asks for the
 reserved testbox before running anything; the value is recorded in
@@ -420,10 +540,40 @@ invocation. Running without `-Dui.testbox` against a non-local
 launchpad targets `http://xtbx` (no suffix) which hits nothing real —
 and even if it did, it would clash with someone else's reservation.
 
+**Use only the box the user reserved.** A box answering an HTTP probe is not an
+allocation; a Test Onay's TESTBOX field records where manual QA ran — information,
+never authority. **161 and 230 are for preprod testing only, never for authoring
+or debugging.** If the reserved box is broken for the surface under test, record
+the blocker with evidence, leave the ticket honestly unvalidated and un-parked, and
+ask — never self-allocate.
+
+### Never trust `BUILD SUCCESSFUL` — gate every run
+
+`BUILD SUCCESSFUL` prints **alongside** failing tests, so it carries no
+information in either direction. Three separate mechanisms produce a result that
+means nothing. Before reading ANY outcome, green or red:
+
+| Grep | Must be | Failure mode it catches |
+|---|---|---|
+| `testbox : <id>` | present, never `production` | flags never landed → **fake green** |
+| `UnknownHostException: api.url` | 0 | `-Dapi.url` missing → context never loaded |
+| `Task :test UP-TO-DATE` | 0 | zero tests ran, output replayed → **fake green** |
+| `initializationError` | 0 | box down / DB unreachable → **meaningless red** |
+| `Failed to load ApplicationContext` | 0 | same |
+| `Running test:` | == the tests you named | the only proof of real execution |
+
+`Running test:` alone is not enough — it also appears for `initializationError`.
+When a red trips the init checks, re-probe the box before touching code:
+`curl -H "Host: www.sahibinden.com" -H "X-Forwarded-Proto: https" http://<dc>tb<dc><id>:9081/`
+(the plain `http://<dc>tb<dc><id>` is the Testbox Management Tool, not the app;
+web REST is on `:8081/sahibinden-web/rest`).
+
 When running tests as part of a Hektor phase, ALWAYS:
 1. Run against the reserved testbox first (matches CI shape).
 2. Confirm the test also passes locally (`-Denv.launchpad=local`) before
    committing — `review.md` requires both.
+3. For anything timing-sensitive (feature flags, indexing, async writes), a
+   single green proves nothing — repeat the run and show the count.
 
 ---
 
@@ -474,9 +624,25 @@ When running tests as part of a Hektor phase, ALWAYS:
 23. A magic number / literal value repeated 3+ times in the file — extract a
     `static final` constant (`0` / `1` and `static final` declarations are
     exempt). **(WARNING)**
+24. A negative assertion (`doesNotContain`, `isZero`, `isEmpty`) with nothing
+    proving the actual is non-empty — it passes when the page never rendered.
+    **(WARNING)**
+25. `assertThat(List<String>).contains(fragment)` where the expected value is a
+    *substring* of the actual (filename vs full URL, class fragment vs full
+    `class` attribute) — element equality can never match. **(WARNING)**
+26. A bare `loginByPass(...)` followed by assertions with no `.go(url)` in
+    between — the browser is on the home page. **(WARNING)**
+27. `cookies.setLanguage()` / `setLanguageEN()` / a pinned `BASE_URL_EN` inside a
+    `@Tag(CommonTag.LANGUAGE)` method — the run already set the cookie.
+    **(WARNING)**
+28. A method-level `@Tag(MainTag.SERIAL)` inside a `@Tag(MainTag.PARALLEL)`
+    class — the method runs **twice**. **(WARNING)**
+29. `sleepSecond(n)` used as a wait where a generated wait or `waitForPageLoad()
+    ` would do. Fixed sleeps only when nothing observable marks the transition,
+    and then with a comment saying why. **(WARNING)**
 
 Items 1–16 are reviewer **BLOCKERs** — refuse to commit code that trips one.
-Items 17–23 (and 9 above where inline) are reviewer **WARNINGs**: they don't
+Items 17–29 (and 9 above where inline) are reviewer **WARNINGs**: they don't
 block the merge, but the bot leaves an inline comment, so fix them in the same
 pass unless there's a documented reason. If you catch any BLOCKER in code the
 user asked you to commit, refuse and explain which rule was violated. The
@@ -512,6 +678,8 @@ workflow — but the headline rules are:
 - `review.md` — the team's PR review checklist. **The** kernel.
 - `hektor-resource-client` — the sibling skill for authoring test-data-client
   `*ResourceClient` code (the reviewer's second rule set).
+- `hektor-write-language-test` — the language-test authoring rule: one method,
+  both `-Dtest.lang` runs, `LanguageText.pick` constants, `CommonTag.LANGUAGE`.
 - `.claude/hooks/pr-rules-gate.sh` — the local diff-scanner that runs the
   reviewer's deterministic (Katman 1a) regex checks against your working tree
   at write-time, so a violation is caught before the PR. Kill switch:

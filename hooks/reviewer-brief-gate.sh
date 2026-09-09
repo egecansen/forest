@@ -3,7 +3,7 @@
 #                          dispatches. Closes the orchestrator-to-reviewer
 #                          brief-injection surface.
 #
-# Hook    : PreToolUse:Agent
+# Event   : subagentStart
 # Mode    : DENY
 # State   : none
 # Env     : HEKTOR_REVIEWER_BRIEF_GATE=off   advisory bypass (audit the use)
@@ -23,40 +23,28 @@
 # bypass to "must survive methodology discipline + schema-validated return".
 #
 # Port of Achilles' workflow-reviewer-brief-gate.sh, retargeted to run-status.json.
+#
+# On Cursor the role comes from the dispatch's first `role:` line (see
+# hektor_role in lib/cursor.sh) and the brief is the subagent's `task`.
 set -uo pipefail
 
-_LIB="$(dirname "${BASH_SOURCE[0]}")/lib/audit.sh"
-if [ -f "$_LIB" ]; then . "$_LIB"; else hektor_audit() { :; }; fi
+_DIR="$(dirname "${BASH_SOURCE[0]}")"
+[ -f "$_DIR/lib/audit.sh" ]        && . "$_DIR/lib/audit.sh"        || hektor_audit() { :; }
+[ -f "$_DIR/lib/hook_profile.sh" ] && . "$_DIR/lib/hook_profile.sh" || hektor_hook_enabled() { return 0; }
+[ -f "$_DIR/lib/cursor.sh" ]       && . "$_DIR/lib/cursor.sh"       || exit 0
 
-if [ "${HEKTOR_REVIEWER_BRIEF_GATE:-on}" = "off" ]; then
-  hektor_audit "reviewer-brief-gate bypassed (HEKTOR_REVIEWER_BRIEF_GATE=off)"
-  exit 0
-fi
+[ "${HEKTOR_REVIEWER_BRIEF_GATE:-on}" = "off" ] && { hektor_audit "reviewer-brief-gate bypassed (HEKTOR_REVIEWER_BRIEF_GATE=off)"; exit 0; }
+hektor_gate_init reviewer-brief-gate "strict"
 
-JQ="$(command -v jq || true)"
-[ -n "$JQ" ] || exit 0   # jq absent -> fail-open
-
-INPUT=$(cat)
-TOOL_NAME=$(echo "$INPUT" | "$JQ" -r '.tool_name // empty' 2>/dev/null || echo "")
-[ "$TOOL_NAME" = "Agent" ] || exit 0
-
-DESCRIPTION=$(echo "$INPUT" | "$JQ" -r '.tool_input.description // ""' 2>/dev/null || echo "")
+DESCRIPTION="$(hektor_role)"
 case "$DESCRIPTION" in
   workflow-reviewer-*) ;;
   *) exit 0 ;;
 esac
 
-PROMPT=$(echo "$INPUT" | "$JQ" -r '.tool_input.prompt // ""' 2>/dev/null || echo "")
+PROMPT="$(hektor_brief)"
 
-emit_deny() {
-  "$JQ" -n --arg r "$1" '{
-    "hookSpecificOutput": {
-      "hookEventName": "PreToolUse",
-      "permissionDecision": "deny",
-      "permissionDecisionReason": $r
-    }
-  }'
-}
+emit_deny() { hektor_deny "$1"; }
 
 VIOLATIONS=""
 printf '%s' "$PROMPT" | grep -qF "run-status.json" || VIOLATIONS="${VIOLATIONS}

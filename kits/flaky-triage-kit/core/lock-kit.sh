@@ -5,7 +5,7 @@
 #
 # WHY
 # ---
-# The PreToolUse self-protection gate (`<project>/.claude/hooks/flaky-kit-self-protection-gate.sh` —
+# The PreToolUse self-protection gate (`<project>/.cursor/hooks/flaky-kit-self-protection-gate.sh` —
 # relocated OUT of the kit tree so a rename cannot take the detector along with it) is the first
 # line, but it is policy: it only bites where the CLI honors a `deny`, and a Bash command is matched
 # only heuristically. What the OS enforces for EVERY writer — Edit/Write tool, Bash `>`/`sed -i`, an
@@ -64,7 +64,7 @@
 #      expectation in the same breath. Chowning that directory WOULD close this; the decision not
 #      to rests on the standing cost of routing every future pack-hook update through sudo, NOT on
 #      any claim that it would not help. It would. The gates do now count that record — and the
-#      `.claude/hooks` / `.cursor/hooks` directories themselves, as operands — as matched surface,
+#      `.cursor/hooks` / `.cursor/hooks` directories themselves, as operands — as matched surface,
 #      so erasing it is denied-and-audited wherever a gate runs. That is friction, not the
 #      ownership this item is about.
 #   3. Every surface path that lives OUTSIDE $KIT has the same shape: the two gate scripts and the
@@ -94,7 +94,7 @@
 #      printed whenever it said anything at all, and the banner derives its kit-root clause from the
 #      kit root's ACTUAL owner) and DIAGNOSABLE (`status` prints an owner per path). It is not
 #      prevented; re-running `lock` is the fix.
-#   7. The harness settings files (`.claude/settings.json`, `.claude/settings.local.json`,
+#   7. The harness settings files (`.cursor/hooks.json`
 #      `.cursor/hooks.json`) are not on this surface at all — they stay user-writable at every tier,
 #      including hardened, because the harness itself keeps editing them for reasons that have
 #      nothing to do with this kit. Their only protection is the PreToolUse gate: Bash denies any
@@ -116,9 +116,9 @@
 #      cannot prove the harness itself will honour that registration, at any tier. A harness setting
 #      that disables hooks entirely, or a harness bug that silently ignores one, is outside anything
 #      this file or `_integrity.sh` can see.
-#   9. A BARE `.claude` operand matches no surface pattern the gates carry — every alternative names
-#      something INSIDE it (`.claude/hooks`, `.claude/skills/hektor-flaky-triage`,
-#      `.claude/settings.json`), so `rm -rf .claude` is an ALLOW at every tier. At the hardened tier
+#   9. A BARE `.cursor` operand matches no surface pattern the gates carry — every alternative names
+#      something INSIDE it (`.cursor/hooks`, `.cursor/skills/hektor-flaky-triage`,
+#      `.cursor/hooks.json`), so removing the whole `.cursor` directory is an ALLOW at every tier. At the hardened tier
 #      it still unlinks the root-owned self-protection gate, the root-owned DELIVERY gate, the
 #      vendored audit lib and `.flaky-kit-expect` (item 3's parent-directory problem, one level
 #      higher), and now also the registration item 8's wiring check exists to verify — so the one
@@ -126,7 +126,7 @@
 #      not one. The item always covered the class; the delivery gate is named because a list of what
 #      one allowed command carries away is exactly the kind of list that goes stale silently.
 #      Deliberately NOT fixed here and scheduled as separate work: widening the pattern to a
-#      bare `.claude` changes the surface from "the kit's files" to "the harness's entire
+#      bare `.cursor` changes the surface from "the kit's files" to "the harness's entire
 #      configuration tree", which is a different promise with its own false-positive cost, and it
 #      needs its own design round rather than a line appended to a fix wave.
 #
@@ -171,9 +171,9 @@
 #  17. **The delivery gate's own protection is entirely second-order.** It is a `Stop` hook: it runs
 #      once, at end-of-session, and observes no tool call, so it can never deny the call that removes
 #      it. Everything that DOES deny that call — the surface match on
-#      `.claude/hooks/flaky-kit-delivery-gate.sh`, and the outcome test that refuses an edit dropping
+#      `.cursor/hooks/flaky-kit-delivery-gate.sh`, and the outcome test that refuses an edit dropping
 #      its `Stop` registration — lives in the PreToolUse self-protection gate. Unregister or defeat
-#      THAT gate first (item 7's escape classes, or item 9's bare `.claude`), and the delivery gate
+#      THAT gate first (item 7's escape classes, or item 9's bare `.cursor`), and the delivery gate
 #      falls with no further friction. Root-owning its file (`harden_targets` below) buys less here
 #      than item 3 already concedes: the registration is not chown'd at any tier, and unregistering
 #      is cheaper than editing. This is the honest shape of the control — a check that is guarded by
@@ -244,9 +244,9 @@ have_sudo() { [ "${HEKTOR_FK_NO_SUDO:-0}" = "1" ] && return 1; command -v sudo >
 write_state() { printf '{"tier":"%s","at":"%s"}\n' "$1" "$(date -u +%FT%TZ 2>/dev/null || echo '?')" > "$STATE" 2>/dev/null; }
 
 # Mirror the tier OUTSIDE the kit tree so a rename of the kit dir can be spotted. Best effort: a
-# project without a .claude/hooks/ (Cursor-only, or the engine used standalone) is not an error.
+# project without a .cursor/hooks/ (Cursor-only, or the engine used standalone) is not an error.
 #
-# Honest limit, stated plainly so nobody mistakes this for a tamper-proof record: .claude/hooks/
+# Honest limit, stated plainly so nobody mistakes this for a tamper-proof record: .cursor/hooks/
 # must stay user-writable (the pack installer writes its own hooks there without sudo), so
 # .flaky-kit-expect is deletable by exactly the same actor who can rename $KIT aside. This does not
 # close the residual header items 1-3 document — it converts a silent single `mv` into a two-step
@@ -262,8 +262,8 @@ write_state() { printf '{"tier":"%s","at":"%s"}\n' "$1" "$(date -u +%FT%TZ 2>/de
 # there is no protection left to have lost. Keep the window short (header item 5).
 write_expect() {
   local root; root="$(git -C "$KIT" rev-parse --show-toplevel 2>/dev/null)"
-  [ -n "$root" ] && [ -d "$root/.claude/hooks" ] || return 0
-  printf '%s\n' "$1" > "$root/.claude/hooks/.flaky-kit-expect" 2>/dev/null
+  [ -n "$root" ] && [ -d "$root/.cursor/hooks" ] || return 0
+  printf '%s\n' "$1" > "$root/.cursor/hooks/.flaky-kit-expect" 2>/dev/null
   return 0
 }
 
@@ -321,11 +321,9 @@ harden_targets() {
   [ -f "$KIT/SKILL.md" ] && printf '%s\n' "$KIT/SKILL.md"
   local root p; root="$(git -C "$KIT" rev-parse --show-toplevel 2>/dev/null)"
   if [ -n "$root" ]; then
-    for p in .claude/hooks/flaky-kit-self-protection-gate.sh \
-             .claude/hooks/flaky-kit-delivery-gate.sh \
-             .claude/hooks/lib/audit.sh \
-             .cursor/hooks/flaky-kit-self-protection-gate.sh \
-             .cursor/hooks/lib/cursor-compat.sh \
+    for p in .cursor/hooks/flaky-kit-self-protection-gate.sh \
+             .cursor/hooks/flaky-kit-delivery-gate.sh \
+             .cursor/hooks/lib/cursor.sh \
              .cursor/hooks/lib/audit.sh; do
       [ -f "$root/$p" ] && printf '%s\n' "$root/$p"
     done
@@ -351,7 +349,7 @@ harden_targets() {
 # ENTRY to root, which is all the paragraph above needs.
 #
 # What this still does NOT close, and the HARDENED message must not claim it does: $KIT's own parent
-# (.claude/skills/) has to stay user-owned, because every other skill installs there — so $KIT itself
+# (.cursor/skills/) has to stay user-owned, because every other skill installs there — so $KIT itself
 # can be renamed aside by the same trick one level up. That residual is the design's accepted one and
 # is what the relocated gate's out-of-tree expectation detects.
 harden_root() { printf '%s\n' "$KIT"; }

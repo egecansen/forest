@@ -136,5 +136,80 @@ OUT_TB="$(RERUN_DRY=1 "$CORE/rerun.sh" "com.x.FooTest" "tb161" 2>&1)"
 echo "$OUT_TB" | grep -q 'ui.testbox=161' && ok || bad "rerun.sh must pass the bare id to -Dui.testbox given tb161"
 echo "$OUT_TB" | grep -q 'api.url=[^ ]*tbtb' && bad "rerun.sh must not double the tb prefix in -Dapi.url" || ok
 
+# ============================================================================
+# Part 4 — the data-centre spellings (2026-08-19).
+#
+# The round above taught the kit `tb`. It did NOT teach it the data-centre letter, so `tbx161` —
+# the string hektor-orchestrator's own SKILL.md prints in its prompt, *"Which testbox? e.g.,
+# `tbx161`"* — was stripped to `x161` and rejected. The skill layer and the engine disagreed about
+# what a testbox looks like while the CHANGELOG claimed "a testbox is one thing again".
+# ============================================================================
+echo "== Part 4: data-centre spellings (tbx161 / xtbx161) =="
+
+# --- the four spellings all name box 161.
+[ "$(normalize_tb tbx161)"  = "161" ] && ok || bad "normalize_tb accepts tbx161 (orchestrator's own prompt string)"
+[ "$(normalize_tb tby161)"  = "161" ] && ok || bad "normalize_tb accepts tby161 (the gcp data centre)"
+[ "$(normalize_tb xtbx161)" = "161" ] && ok || bad "normalize_tb accepts xtbx161 (the URL host form)"
+[ "$(normalize_tb ytby161)" = "161" ] && ok || bad "normalize_tb accepts ytby161"
+[ "$(normalize_tb XTBX161)" = "161" ] && ok || bad "normalize_tb accepts the shouted spelling"
+
+# --- and the letter must not become a licence to accept nonsense.
+normalize_tb "xtby161" >/dev/null 2>&1 \
+  && bad "normalize_tb must reject xtby161 — the URL form repeats ONE data centre, so xy is a typo" || ok
+normalize_tb "x161"    >/dev/null 2>&1 && bad "normalize_tb must reject x161 — a letter with no tb to prefix"   || ok
+normalize_tb "ztbz161" >/dev/null 2>&1 && bad "normalize_tb must reject an unknown data-centre letter"          || ok
+normalize_tb "tbx"     >/dev/null 2>&1 && bad "normalize_tb must reject tbx — no id at all"                     || ok
+normalize_tb "tbx16a"  >/dev/null 2>&1 && bad "normalize_tb must reject a non-numeric id behind the letter"     || ok
+normalize_tb "$(mal xtbx161 '$(id)')" >/dev/null 2>&1 \
+  && bad "normalize_tb must reject an embedded-newline value whose first line is a valid dc spelling" || ok
+
+# --- normalize_tb_dc reports the letter the spelling carried, and only that.
+[ "$(normalize_tb_dc 161)"     = ""  ] && ok || bad "normalize_tb_dc reports no data centre for a bare id"
+[ "$(normalize_tb_dc tb161)"   = ""  ] && ok || bad "normalize_tb_dc reports no data centre for tb161"
+[ "$(normalize_tb_dc tbx161)"  = "x" ] && ok || bad "normalize_tb_dc reports x for tbx161"
+[ "$(normalize_tb_dc ytby161)" = "y" ] && ok || bad "normalize_tb_dc reports y for ytby161"
+[ "$(normalize_tb_dc XTBX161)" = "x" ] && ok || bad "normalize_tb_dc lowercases the letter it reports"
+
+# --- assert_tb_dc: silence when the spelling agrees or says nothing, refusal when it contradicts.
+assert_tb_dc "161"     "x" 2>/dev/null && ok || bad "assert_tb_dc passes a spelling that names no data centre"
+assert_tb_dc "tbx161"  "x" 2>/dev/null && ok || bad "assert_tb_dc passes a spelling that agrees with the kit"
+assert_tb_dc "ytby161" "x" 2>/dev/null && bad "assert_tb_dc must refuse a spelling that contradicts the kit" || ok
+assert_tb_dc "16a"     "x" 2>/dev/null && ok || bad "assert_tb_dc leaves an unparseable value to normalize_tb's own error"
+MSG_DC="$(assert_tb_dc "ytby161" "x" 2>&1)"
+echo "$MSG_DC" | grep -q "names data centre 'y'"  && ok || bad "assert_tb_dc's message names the data centre the operator asked for"
+echo "$MSG_DC" | grep -q "HEKTOR_FK_DATA_CENTER=y" && ok || bad "assert_tb_dc's message says how to proceed"
+
+# --- the regression that started this: tbx161 must reach gradle, not exit 77.
+OUT_X="$(RERUN_DRY=1 "$CORE/rerun.sh" "com.x.FooTest" "tbx161" 2>&1)"; RC_X=$?
+[ "$RC_X" -eq 0 ] && ok || bad "rerun.sh must ACCEPT tbx161 — orchestrator tells operators to type it (got $RC_X: $OUT_X)"
+echo "$OUT_X" | grep -q 'ui.testbox=161'     && ok || bad "rerun.sh passes the bare id to -Dui.testbox given tbx161"
+echo "$OUT_X" | grep -q 'api.url=[^ ]*xtbx161' && ok || bad "rerun.sh composes api.url as xtbx161 given tbx161"
+echo "$OUT_X" | grep -q 'api.url=[^ ]*tbtb'   && bad "rerun.sh must not double the tb prefix given tbx161" || ok
+
+# --- THE ONE THIS FIX EXISTS FOR: a contradicted data centre must never be silently re-aimed.
+# Accepting ytby161 and handing back a bare 161 would compose xtbx161 from the kit's own $DC and
+# run against a box in the wrong data centre without a word. Loud refusal is the required outcome.
+OUT_Y="$(RERUN_DRY=1 "$CORE/rerun.sh" "com.x.FooTest" "ytby161" 2>&1)"; RC_Y=$?
+[ "$RC_Y" -eq 77 ] && ok || bad "rerun.sh must refuse ytby161 while configured for x (got $RC_Y: $OUT_Y)"
+# Assert it never reached the gradle line at all. Grepping the output for `xtbx` would be wrong:
+# assert_tb_dc's message quotes the url it WOULD have built, which is exactly that string.
+echo "$OUT_Y" | grep -q '\-Dapi\.url=' && bad "rerun.sh must refuse before composing any -Dapi.url for a contradicted box" || ok
+
+# --- ...and the documented override is what unblocks it, in every script that takes a box.
+OUT_YE="$(HEKTOR_FK_DATA_CENTER=y RERUN_DRY=1 "$CORE/rerun.sh" "com.x.FooTest" "ytby161" 2>&1)"; RC_YE=$?
+[ "$RC_YE" -eq 0 ] && ok || bad "HEKTOR_FK_DATA_CENTER=y must let the y box through (got $RC_YE: $OUT_YE)"
+echo "$OUT_YE" | grep -q 'api.url=[^ ]*ytby161' && ok || bad "rerun.sh composes api.url as ytby161 under the y override"
+
+# dom-capture.sh and dom-on-failure.sh read run.data_center directly and ignored
+# HEKTOR_FK_DATA_CENTER, which config.json's own `_portability` note promises is honoured. Left
+# alone they would refuse the very box rerun.sh had just accepted under the override.
+"$CORE/dom-capture.sh"    "https://www.sahibinden.com/otomobil" "ytby161" >/dev/null 2>&1
+[ $? -eq 77 ] && ok || bad "dom-capture.sh must refuse a y box while configured for x"
+"$CORE/dom-on-failure.sh" "com.x.FooTest.m" "ytby161" >/dev/null 2>&1
+[ $? -eq 77 ] && ok || bad "dom-on-failure.sh must refuse a y box while configured for x"
+OUT_DCE="$(HEKTOR_FK_DATA_CENTER=y "$CORE/dom-capture.sh" "https://www.sahibinden.com/otomobil" "ytby161" 2>&1)"
+echo "$OUT_DCE" | grep -q 'names data centre' \
+  && bad "dom-capture.sh must honour HEKTOR_FK_DATA_CENTER like rerun.sh does" || ok
+
 echo "strict-test: $pass passed, $fail failed"
 [ "$fail" -eq 0 ]

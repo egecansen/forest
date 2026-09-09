@@ -2,11 +2,11 @@
 # subagent-return-schema-guard.sh — validates a subagent's return against its
 #                                   role schema (required keys + top-level enums).
 #
-# Hook    : PostToolUse:Agent
-# Mode    : WARN (PostToolUse can't reverse a return; surface a systemMessage.
-#                 Achilles ships this as WARN initially too, pending false-
-#                 positive calibration before any flip to DENY.)
-# State   : reads .claude/schemas/subagent-returns/<role>.schema.json (read-only)
+# Event   : subagentStop
+# Mode    : FOLLOW-UP (the return already ran and cannot be reversed, so the
+#                 gate makes the parent take another turn. Achilles ships this
+#                 non-blocking too, pending false-positive calibration.)
+# State   : reads .cursor/schemas/subagent-returns/<role>.schema.json (read-only)
 # Env     : none
 #
 # What it checks (jq-driven, dependency-free)
@@ -24,14 +24,14 @@
 # Port of Achilles' subagent-return-schema-guard.sh, jq-only Hektor variant.
 set -uo pipefail
 
-JQ="$(command -v jq || true)"
-[ -n "$JQ" ] || exit 0
+_DIR="$(dirname "${BASH_SOURCE[0]}")"
+[ -f "$_DIR/lib/audit.sh" ]        && . "$_DIR/lib/audit.sh"        || hektor_audit() { :; }
+[ -f "$_DIR/lib/hook_profile.sh" ] && . "$_DIR/lib/hook_profile.sh" || hektor_hook_enabled() { return 0; }
+[ -f "$_DIR/lib/cursor.sh" ]       && . "$_DIR/lib/cursor.sh"       || exit 0
 
-INPUT=$(cat)
-TOOL_NAME=$(echo "$INPUT" | "$JQ" -r '.tool_name // empty' 2>/dev/null || echo "")
-[ "$TOOL_NAME" = "Agent" ] || exit 0
+hektor_gate_init subagent-return-schema-guard "standard,strict"
 
-DESCRIPTION=$(echo "$INPUT" | "$JQ" -r '.tool_input.description // ""' 2>/dev/null || echo "")
+DESCRIPTION="$(hektor_role)"
 case "$DESCRIPTION" in
   composer-*)         SCHEMA_BASE="composer.schema.json" ;;
   probe-*)            SCHEMA_BASE="probe.schema.json" ;;
@@ -40,22 +40,14 @@ case "$DESCRIPTION" in
   *)                  exit 0 ;;
 esac
 
-GUARD_CWD=$(echo "$INPUT" | "$JQ" -r '.cwd // "."' 2>/dev/null || echo ".")
-REPO_ROOT=$(git -C "$GUARD_CWD" rev-parse --show-toplevel 2>/dev/null || echo "$GUARD_CWD")
-SCHEMA="$REPO_ROOT/.claude/schemas/subagent-returns/$SCHEMA_BASE"
+REPO_ROOT="$(hektor_repo_root)"
+SCHEMA="$REPO_ROOT/.cursor/schemas/subagent-returns/$SCHEMA_BASE"
 [ -f "$SCHEMA" ] || exit 0   # schema missing -> nothing to validate against
 
-# Flatten the return text.
-RESPONSE=$(echo "$INPUT" | "$JQ" -r '
-  [
-    (.tool_response.output? | if type == "array" then map(.text? // (.|tostring)) | join("\n") elif type == "string" then . else (.|tostring) end),
-    (.tool_response.result? // empty | tostring),
-    (if (.tool_response | type) == "string" then .tool_response else empty end)
-  ] | map(select(. != null and . != "")) | unique | join("\n")
-' 2>/dev/null || echo "")
+RESPONSE="$(hektor_summary)"
 case "$RESPONSE" in ""|"null"|"{}"|"[]") exit 0 ;; esac
 
-emit_warn() { "$JQ" -n --arg m "$1" '{ "systemMessage": $m, "suppressOutput": false }'; }
+emit_warn() { hektor_followup "$1"; }
 
 # Helper: read a top-level scalar field value from the YAML return.
 # Matches `key: value` at column 0, strips inline comments + quotes + space.
@@ -69,7 +61,7 @@ yaml_top_value() {
 VIOLATIONS=""
 
 # --- required top-level keys present ---
-REQUIRED=$("$JQ" -r '.required[]? // empty' "$SCHEMA" 2>/dev/null || echo "")
+REQUIRED=$("$CC_JQ" -r '.required[]? // empty' "$SCHEMA" 2>/dev/null || echo "")
 while IFS= read -r key; do
   [ -z "$key" ] && continue
   if ! printf '%s\n' "$RESPONSE" | grep -qE "^$key:"; then
@@ -80,7 +72,7 @@ done <<< "$REQUIRED"
 
 # --- top-level enum membership ---
 # Emit "key\tval1,val2,..." lines for every top-level property carrying an enum.
-ENUM_LINES=$("$JQ" -r '
+ENUM_LINES=$("$CC_JQ" -r '
   (.properties // {}) | to_entries[]
   | select(.value.enum != null)
   | "\(.key)\t\(.value.enum | join(","))"
@@ -101,7 +93,7 @@ done <<< "$ENUM_LINES"
 # schemas use (handover.status const, a top-level const, or a top-level numeric
 # minimum). Dependency-free (jq + grep) — covers what an ajv engine would for
 # these specific schemas, without vendoring ajv.
-RULES=$("$JQ" -r '
+RULES=$("$CC_JQ" -r '
   .allOf[]? | select(.if and .then) | . as $r
   | ($r.then.required // [])[] as $req
   | (
@@ -146,7 +138,7 @@ Violations:${VIOLATIONS}
 
 The return shape is the contract the orchestrator relies on to route next steps.
 Re-dispatch the subagent with a brief that pins the missing fields, or correct
-the return. Schema: .claude/schemas/subagent-returns/${SCHEMA_BASE}
+the return. Schema: .cursor/schemas/subagent-returns/${SCHEMA_BASE}
 
-WARN, not DENY: PostToolUse cannot reverse a return that already ran."
+A follow-up rather than a block — subagentStop cannot reverse a return that already ran."
 exit 0

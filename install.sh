@@ -1,203 +1,197 @@
 #!/bin/bash
-# install.sh — install the whole Hektor QA pack into a project so it works across
-# harnesses: Claude Code, Cursor, and any AGENTS.md-reading LLM (Codex, Gemini, …).
+# install.sh — install the Hektor QA pack into a project as native Cursor assets.
 #
-# Self-contained + idempotent (re-runnable, never duplicates). Lays the durable
-# assets (skills/ hooks/ schemas/) into the project's .claude/ — the canonical
-# home every harness reads from — then wires each harness on top:
-#   Claude : merges settings.hooks.json into .claude/settings.json (the gates).
-#   Cursor : rule + hooks.json registrations that run the SAME .claude/hooks/*.sh
-#            gates via the ECC-style adapter shim (.cursor/hooks/adapter.sh).
-#   AGENTS : an AGENTS.md pointer for any other terminal LLM.
+# Everything lands under the project's .cursor/, which is the only tree Cursor
+# reads:
+#
+#   .cursor/skills/<name>/SKILL.md     the playbooks (auto-invoked by description,
+#                                      or explicitly as /<name>)
+#   .cursor/agents/*.md                the subagent roles the skills dispatch
+#   .cursor/rules/hektor-kernel.mdc    the always-applied router
+#   .cursor/hooks/ + hooks.json        the enforcement gates
+#   .cursor/schemas/                   subagent return contracts
+#
+# Self-contained and idempotent — re-running never duplicates a registration and
+# never touches a .cursor/hooks.json entry that isn't Hektor's.
 #
 # Usage:
-#   ./install.sh [--harness all|claude|cursor|agents|both] [--project <dir>]
-#     --harness  what to wire up (default: all = claude + cursor + AGENTS.md)
+#   ./install.sh [--project <dir>] [--no-kits]
 #     --project  target project root (default: current directory)
+#     --no-kits  skip the bundled kits' own installers
 #
-# After install: restart Claude Code / Cursor so the hooks load. Each gate has
-# its own kill switch (HEKTOR_PR_RULES_GATE=off, HEKTOR_COMMIT_GATE=off, …);
-# HEKTOR_CURSOR_HOOKS=off disables all Cursor adaptation.
+# After install: reload the Cursor window so the hooks and skills load.
+# Kill switches: HEKTOR_CURSOR_HOOKS=off (everything), HEKTOR_<GATE>=off (one),
+# HEKTOR_HOOK_PROFILE=minimal|standard|strict (tier).
 set -uo pipefail
 HERE="$(cd "$(dirname "$0")" && pwd)"
 command -v jq >/dev/null || { echo "install: jq is required" >&2; exit 69; }
 
-HARNESS="all"; PROJ="$(pwd)"
+PROJ="$(pwd)"; DO_KITS=1; HARNESS="all"
 while [ $# -gt 0 ]; do
   case "$1" in
     --harness) HARNESS="${2:-all}"; shift 2 ;;
     --project) PROJ="${2:-$(pwd)}"; shift 2 ;;
-    -h|--help) sed -n '2,20p' "$0"; exit 0 ;;
+    --no-kits) DO_KITS=0; shift ;;
+    -h|--help) sed -n '2,24p' "$0"; exit 0 ;;
     *) echo "install: unknown arg: $1" >&2; exit 64 ;;
   esac
 done
-do_claude=0; do_cursor=0; do_agents=0
+
+# --harness exists because scripts/worktree-provision.sh passes it on every call.
+# It was dropped when the adapters/ tree was folded into hooks/, so provisioning
+# ANY worktree died on "install: unknown arg: --harness" — every tree stood up
+# after that refactor was Hektor-blind, under a provisioner reporting success.
+do_cursor=0; do_agents=0; want_claude=0
 case "$HARNESS" in
-  claude) do_claude=1 ;;
   cursor) do_cursor=1 ;;
   agents) do_agents=1 ;;
-  both)   do_claude=1; do_cursor=1 ;;
-  all)    do_claude=1; do_cursor=1; do_agents=1 ;;
-  *) echo "install: --harness must be all|claude|cursor|agents|both" >&2; exit 64 ;;
+  claude) want_claude=1 ;;
+  both)   do_cursor=1; want_claude=1 ;;
+  all)    do_cursor=1; do_agents=1; want_claude=1 ;;
+  *) echo "install: --harness must be all|claude|cursor|agents|both (got: $HARNESS)" >&2; exit 64 ;;
 esac
 [ -d "$PROJ" ] || { echo "install: no such project dir: $PROJ" >&2; exit 66; }
 PROJ="$(cd "$PROJ" && pwd)"
+CUR="$PROJ/.cursor"
 
 # ---------------------------------------------------------------------------
-# 1) Durable assets -> .claude/ (canonical home for EVERY harness). Always done.
+# 1) Assets.
 # ---------------------------------------------------------------------------
-CL="$PROJ/.claude"
-mkdir -p "$CL/skills" "$CL/hooks" "$CL/schemas"
-cp -R "$HERE/skills/." "$CL/skills/"
-cp -R "$HERE/hooks/."  "$CL/hooks/"
-cp -R "$HERE/schemas/." "$CL/schemas/"
-chmod +x "$CL/hooks"/*.sh "$CL/hooks/lib"/*.sh 2>/dev/null || true
-find "$CL/skills" -name '*.sh' -exec chmod +x {} + 2>/dev/null || true
-find "$CL/skills" -name '*.py' -exec chmod +x {} + 2>/dev/null || true
-find "$CL" -name '.DS_Store' -delete 2>/dev/null || true
-echo "install: skills/ hooks/ schemas/ -> .claude/"
+mkdir -p "$CUR/skills" "$CUR/agents" "$CUR/rules" "$CUR/hooks/lib" "$CUR/schemas"
+cp -R "$HERE/skills/."  "$CUR/skills/"
+cp -R "$HERE/agents/."  "$CUR/agents/"
+cp -R "$HERE/hooks/."   "$CUR/hooks/"
+cp -R "$HERE/schemas/." "$CUR/schemas/"
+cp "$HERE/rules/hektor-kernel.mdc" "$CUR/rules/hektor-kernel.mdc"
 
-# ---------------------------------------------------------------------------
-# 2) Claude Code — merge the gate registrations into .claude/settings.json.
-#    Idempotent: ensures each (event, matcher, command) exists exactly once.
-# ---------------------------------------------------------------------------
-if [ "$do_claude" = 1 ]; then
-  S="$CL/settings.json"; [ -f "$S" ] || echo '{}' > "$S"
-  # Extract every (event, matcher, command, timeout) tuple. Fields are joined on the
-  # ASCII Unit Separator (), NOT a tab — a matcher-less event (Stop) has an
-  # empty matcher field, and `read` would collapse an empty tab-delimited field.
-  while IFS=$'\037' read -r EV M CMD TMO; do
-    [ -n "$EV" ] || continue
-    t="$(mktemp)"
-    if [ -n "$M" ]; then
-      # matcher-scoped events (PreToolUse/PostToolUse): key on matcher.
-      jq --arg ev "$EV" --arg m "$M" --arg c "$CMD" --argjson to "${TMO:-10}" '
-        .hooks //= {} | .hooks[$ev] //= [] |
-        (if any(.hooks[$ev][]?; .matcher==$m) then . else .hooks[$ev] += [{matcher:$m, hooks:[]}] end) |
-        .hooks[$ev] |= map(
-          if .matcher==$m then (.hooks //= []) |
-            (if any(.hooks[]?; .command==$c) then . else .hooks += [{type:"command", command:$c, timeout:$to}] end)
-          else . end)
-      ' "$S" > "$t" && mv "$t" "$S"
-    else
-      # matcher-less events (Stop): a single entry with no matcher key.
-      jq --arg ev "$EV" --arg c "$CMD" --argjson to "${TMO:-10}" '
-        .hooks //= {} | .hooks[$ev] //= [] |
-        (if any(.hooks[$ev][]?; (.matcher // null)==null) then . else .hooks[$ev] += [{hooks:[]}] end) |
-        .hooks[$ev] |= map(
-          if (.matcher // null)==null then (.hooks //= []) |
-            (if any(.hooks[]?; .command==$c) then . else .hooks += [{type:"command", command:$c, timeout:$to}] end)
-          else . end)
-      ' "$S" > "$t" && mv "$t" "$S"
-    fi
-  done < <(jq -r '.hooks | to_entries[] | .key as $ev | .value[] | (.matcher // "") as $m
-                  | .hooks[] | [$ev, $m, .command, (.timeout // 10 | tostring)] | join("")' "$HERE/settings.hooks.json")
-  echo "install: Claude Code wired (.claude/settings.json: $(jq -r '[.hooks[][]?.hooks[]?] | length' "$HERE/settings.hooks.json") gate registrations, idempotent)"
-fi
+chmod +x "$CUR/hooks"/*.sh "$CUR/hooks/lib"/*.sh 2>/dev/null || true
+find "$CUR/skills" \( -name '*.sh' -o -name '*.py' \) -exec chmod +x {} + 2>/dev/null || true
+find "$CUR" -name '.DS_Store' -delete 2>/dev/null || true
+
+SKILL_N=$(find "$CUR/skills" -name SKILL.md | wc -l | tr -d ' ')
+AGENT_N=$(find "$CUR/agents" -name 'hektor-*.md' | wc -l | tr -d ' ')
+echo "install: $SKILL_N skills, $AGENT_N agents, 1 rule, gates + schemas -> .cursor/"
 
 # ---------------------------------------------------------------------------
-# 3) Cursor — rule + the ECC-style adapter that runs the SAME .claude gates.
-# ---------------------------------------------------------------------------
-if [ "$do_cursor" = 1 ]; then
-  mkdir -p "$PROJ/.cursor/hooks/lib" "$PROJ/.cursor/rules"
-  cp "$HERE/adapters/cursor/adapter.sh"        "$PROJ/.cursor/hooks/adapter.sh"
-  cp "$HERE/adapters/cursor/lib/cursor-compat.sh" "$PROJ/.cursor/hooks/lib/cursor-compat.sh"
-  cp "$HERE/adapters/cursor/rules/hektor.mdc"  "$PROJ/.cursor/rules/hektor.mdc"
-  chmod +x "$PROJ/.cursor/hooks/adapter.sh" 2>/dev/null || true
-
-  H="$PROJ/.cursor/hooks.json"; [ -f "$H" ] || echo '{"version":1,"hooks":{}}' > "$H"
-  # (event, cursor-command) registrations. adapter.sh runs the named .claude gate.
-  #   beforeShellExecution -> commit-gate (real block on git commit/push)
-  #   afterFileEdit        -> pr-rules-gate (advisory PR-rule findings; Cursor
-  #                           has no reliable pre-edit block)
-  reg() { # $1=event  $2=command
-    local t; t="$(mktemp)"
-    jq --arg e "$1" --arg c "$2" '
-      .hooks //= {} | .hooks[$e] //= [] |
-      (if any(.hooks[$e][]?; .command==$c) then . else .hooks[$e] += [{command:$c, event:$e}] end)
-    ' "$H" > "$t" && mv "$t" "$H"
-  }
-  reg "beforeShellExecution" "bash .cursor/hooks/adapter.sh --gate commit-gate.sh --tool Bash --mode pre"
-  reg "afterFileEdit"        "bash .cursor/hooks/adapter.sh --gate pr-rules-gate.sh --tool Write --mode post"
-  echo "install: Cursor wired (.cursor/: hektor.mdc rule + adapter on beforeShellExecution + afterFileEdit)"
-fi
-
-# ---------------------------------------------------------------------------
-# 4) Any other LLM/harness — an AGENTS.md pointer (Codex, Gemini, etc. read it).
-# ---------------------------------------------------------------------------
-if [ "$do_agents" = 1 ]; then
-  AG="$PROJ/AGENTS.md"; MARK="<!-- hektor:begin -->"
-  if [ -f "$AG" ] && grep -qF "$MARK" "$AG"; then
-    echo "install: AGENTS.md pointer already present"
-  else
-    { [ -f "$AG" ] && printf '\n'; cat <<'EOF'
-<!-- hektor:begin -->
-## Hektor QA methodology
-
-Authoring + triage for the sahibinden Selenium/JUnit suite. Specs are plain
-markdown at `.claude/skills/hektor-*/SKILL.md` — read them directly.
-
-BEFORE writing code, read the kernel for the repo you're touching:
-- web-test (`*Page/*Layout/*Test.java`): `.claude/skills/hektor-conventions/SKILL.md`
-- test-data-client (`*ResourceClient/AbName.java`): `.claude/skills/hektor-resource-client/SKILL.md`
-Router for the full flow: `.claude/skills/hektor-orchestrator/SKILL.md`.
-
-PR reviewer (binding): every PR is scanned; a BLOCKER marks it Needs Work.
-`.claude/hooks/pr-rules-gate.sh` mirrors those checks — run it / heed it before
-opening a PR. Never `new XxxPage()`; no XPath in `@FindBy(css=…)`; no
-`getRemoteWebDriver()`/`getShadowRoot()` in a test/layout; `@ScheduledDisable`
-needs `reason`; `*ResourceClient` extends `AbstractService` + `@Component`;
-`clients.*` URLs start with `/` and never contain `//`.
-
-The agent never commits/pushes — the user reviews the working tree and commits.
-<!-- hektor:end -->
-EOF
-    } >> "$AG"
-    echo "install: AGENTS.md pointer added"
-  fi
-fi
-
-# ---------------------------------------------------------------------------
-# 5) Kits — delegate to each kit's own installer. LAST, so a kit's harness
-#    registrations land on top of the pack's rather than under them.
+# 2) Gate registrations -> .cursor/hooks.json.
 #
-#    Why delegate instead of shipping a copy under skills/: the flaky-triage kit
-#    used to exist TWICE — once as kits/flaky-triage-kit (maintained) and once as
-#    skills/hektor-flaky-triage (a frozen fork). Both installed to the SAME path,
-#    .claude/skills/hektor-flaky-triage, so whichever installer ran last won, and
-#    running this one last silently downgraded a hardened kit to the stale fork.
-#    The fork is gone; the kit is now the single source and installs itself here.
-#    Sibling skills that reference `hektor-flaky-triage/core/*` (hektor-verify,
-#    hektor-bug-discovery, hektor-visual-regression) keep resolving unchanged —
-#    the install path is identical, only the content is now the maintained one.
+#    Idempotent and additive. For each Hektor registration the event's array is
+#    rewritten as "everything that isn't this command, then this command" — so a
+#    re-run replaces Hektor's own entry in place rather than duplicating it, and
+#    a hook you added yourself to the same event survives untouched.
+#
+#    Registrations are applied in hooks.json order, so Hektor's gates end up in
+#    that order within each event. That matters on subagentStart, where
+#    reviewer-approver-registry must run before the gates that read its registry.
+#
+#    Rows are passed as compact JSON, one per line — not a delimited string. An
+#    optional field (loop_limit) would otherwise arrive as an empty trailing
+#    field, which `read` collapses.
 # ---------------------------------------------------------------------------
-for kit_installer in "$HERE"/kits/*/install.sh; do
-  [ -x "$kit_installer" ] || continue
-  kit_name="$(basename "$(dirname "$kit_installer")")"
-  "$kit_installer" --harness "$HARNESS" --project "$PROJ"; kit_rc=$?
-  if [ "$kit_rc" -eq 0 ]; then
-    echo "install: kit '$kit_name' installed (delegated to its own installer)"
-  else
-    # Never fail the whole pack install because one kit's installer did — the pack's
-    # skills/hooks are already in place and useful on their own. Say so loudly instead.
-    #
-    # "did not install cleanly", NOT "is NOT installed". A kit installer's non-zero exit no longer
-    # implies nothing landed: flaky-triage-kit finishes its whole install and THEN exits 74 when the
-    # delivery gate's Stop registration could not be merged, precisely so a partial install is not
-    # left half-written. Telling the reader that kit is absent would send them looking for files that
-    # are there and away from the one message that says what actually failed — which its own output,
-    # already on this terminal, states in full.
-    echo "install: WARN kit '$kit_name' installer did NOT finish cleanly (exit $kit_rc) — pack assets are installed; read that kit's own output above for what it could not do, or re-run $kit_installer to see it again" >&2
-  fi
-done
+H="$CUR/hooks.json"
+[ -f "$H" ] || echo '{"version":1,"hooks":{}}' > "$H"
+jq -e '.' "$H" >/dev/null 2>&1 || { echo "install: $H is not valid JSON — fix or remove it first" >&2; exit 65; }
+
+REG=0
+while IFS= read -r row; do
+  [ -n "$row" ] || continue
+  t="$(mktemp)"
+  jq --argjson r "$row" '
+    .version //= 1
+    | .hooks //= {}
+    | .hooks[$r.ev] //= []
+    | .hooks[$r.ev] |= (
+        map(select(.command != $r.cmd))
+        + [ {command: $r.cmd, timeout: $r.to}
+            + (if $r.loop == null then {} else {loop_limit: $r.loop} end) ]
+      )
+  ' "$H" > "$t" && mv "$t" "$H" && REG=$((REG+1)) || rm -f "$t"
+done < <(jq -c '.hooks | to_entries[] | .key as $ev | .value[]
+                | {ev: $ev, cmd: .command, to: (.timeout // 10), loop: (.loop_limit // null)}' \
+              "$HERE/hooks.json")
+echo "install: Cursor gates wired ($REG registrations in .cursor/hooks.json, idempotent)"
+
+# ---------------------------------------------------------------------------
+# 3) Working dir + gitignore for the run-local artefacts. These are session
+#    state, not deliverables — they must never reach a PR.
+# ---------------------------------------------------------------------------
+mkdir -p "$PROJ/docs/hektor"
+GI="$PROJ/.gitignore"; MARK="# hektor (generated — run state, never committed)"
+if [ ! -f "$GI" ] || ! grep -qF "$MARK" "$GI" 2>/dev/null; then
+  { [ -f "$GI" ] && printf '\n'; cat <<'EOF'
+# hektor (generated — run state, never committed)
+docs/hektor/run-status.json
+docs/hektor/coverage-expansion-state.json
+docs/hektor/multi-ticket-state.json
+docs/hektor/observations.jsonl
+docs/hektor/memory-proposals.md
+docs/hektor/.distill-input.md
+docs/hektor/.workflow-approvers.json
+docs/hektor/.hook-audit.log
+docs/hektor/.cursor-hook-payload.log
+EOF
+  } >> "$GI"
+  echo "install: gitignore entries for docs/hektor/ run state added"
+fi
+
+# ---------------------------------------------------------------------------
+# 4) Kits — each ships its own installer. Last, so a kit's registrations land on
+#    top of the pack's rather than under them.
+# ---------------------------------------------------------------------------
+if [ "$DO_KITS" = 1 ]; then
+  for kit_installer in "$HERE"/kits/*/install.sh; do
+    [ -x "$kit_installer" ] || continue
+    kit_name="$(basename "$(dirname "$kit_installer")")"
+    "$kit_installer" --project "$PROJ"; kit_rc=$?
+    if [ "$kit_rc" -eq 0 ]; then
+      echo "install: kit '$kit_name' installed"
+    else
+      # Never fail the whole pack install because one kit's installer did — the
+      # pack's skills and gates are already in place and useful on their own.
+      # "did not finish cleanly", NOT "is not installed": a kit installer's
+      # non-zero exit does not imply nothing landed.
+      echo "install: WARN kit '$kit_name' did NOT finish cleanly (exit $kit_rc) — pack assets ARE installed; read that kit's own output above, or re-run $kit_installer" >&2
+    fi
+  done
+fi
+
+# ---------------------------------------------------------------------------
+# 5) AGENTS.md — the pointer any non-Cursor terminal LLM reads. Cursor does not
+#    read CLAUDE.md, so without this the build flags, the testbox discipline and
+#    the "Never trust BUILD SUCCESSFUL" gate table are invisible outside Claude
+#    Code. A symlink, so the two can never drift.
+# ---------------------------------------------------------------------------
+if [ "$do_agents" = 1 ] && [ -f "$PROJ/CLAUDE.md" ] && [ ! -e "$PROJ/AGENTS.md" ]; then
+  ln -s CLAUDE.md "$PROJ/AGENTS.md" && echo "install: AGENTS.md -> CLAUDE.md (symlink)"
+fi
+
+# ---------------------------------------------------------------------------
+# 6) The Claude axis is NOT installable from this pack right now — say so rather
+#    than half-doing it. Since the adapters/ tree was folded into hooks/, every
+#    gate denies through lib/cursor.sh:hektor_deny(), which emits Cursor's
+#    {"permission":"deny"} and nothing else. Copying those into .claude/hooks/
+#    would register gates that Claude Code parses as "allow" — enforcement that
+#    looks installed and blocks nothing, which is strictly worse than absent.
+#    Restoring it means giving hektor_deny a Claude branch
+#    ({hookSpecificOutput:{permissionDecision:"deny"}}) and bringing back
+#    settings.hooks.json (still in git: `git show b75ac8f:settings.hooks.json`).
+# ---------------------------------------------------------------------------
+if [ "$want_claude" = 1 ]; then
+  echo "install: WARN --harness $HARNESS asked for the Claude axis, but this pack has no Claude-shaped gates" >&2
+  echo "install:      since the adapters/ refactor (hooks/lib/cursor.sh emits Cursor's deny shape only)." >&2
+  echo "install:      .cursor/ IS installed and enforcing. .claude/ was skipped deliberately — installing" >&2
+  echo "install:      these gates there would block nothing while appearing wired." >&2
+fi
 
 cat >&2 <<EOF
 
-install: done ($HARNESS) in $PROJ
+install: done in $PROJ
 next:
-  1) restart Claude Code / Cursor so the new hooks load
-  2) read  .claude/skills/hektor-conventions/SKILL.md  (web-test rules)
-       and  .claude/skills/hektor-resource-client/SKILL.md  (test-data-client rules)
-kill switches (per gate): HEKTOR_PR_RULES_GATE=off · HEKTOR_COMMIT_GATE=off · … ·
-                          HEKTOR_CURSOR_HOOKS=off (all Cursor adaptation)
+  1) reload the Cursor window so the skills, agents and hooks load
+     (Cmd/Ctrl+Shift+P -> "Developer: Reload Window")
+  2) try  /hektor-orchestrator  in Agent chat, or just describe the task
+  3) read .cursor/skills/hektor-conventions/SKILL.md before writing Java
+kill switches: HEKTOR_CURSOR_HOOKS=off (all) . HEKTOR_PR_RULES_GATE=off,
+               HEKTOR_COMMIT_GATE=off, ... (per gate) .
+               HEKTOR_HOOK_PROFILE=minimal|standard|strict (tier)
 EOF

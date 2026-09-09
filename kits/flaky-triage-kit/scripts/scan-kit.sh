@@ -58,22 +58,20 @@ scan_tree() { # $1 = kit root -> 0 clean / 1 dirty, violations to stderr
   return $dirty
 }
 
-# --- harness parity --------------------------------------------------------------
-# The reasoning layer is per-harness: adapters/claude/SKILL.md and adapters/cursor/*.mdc
-# state the same contract in each harness's own idiom. Nothing checked they still agreed,
-# and they had stopped agreeing — the Cursor rule ran 67 lines against the skill's 167, so
-# a Cursor user silently got a thinner, older contract from the same kit version.
+# --- reasoning-layer completeness ------------------------------------------------
+# This check began as a PARITY check across two reasoning artifacts — a Claude SKILL.md
+# and a Cursor .mdc rule — which had silently stopped agreeing: the rule ran 67 lines
+# against the skill's 167, so a Cursor user got a thinner, older contract from the same
+# kit version. There is one artifact now, so file-against-file parity is vacuous.
 #
-# cross-harness.md documents the GATES degrading between harnesses: Cursor has no Stop
-# event, so I11 is the agent's own discipline there. That degradation is known and
-# accepted. The REASONING degrading is neither, and it is the more dangerous of the two —
-# a missing gate is a check that does not run, a missing rule is a check the agent does
-# not know exists.
+# What is NOT vacuous, and is the half that actually caught that defect, is the rule list
+# below: the reasoning layer must carry every load-bearing rule. A missing gate is a check
+# that does not run; a missing rule is a check the agent does not know exists, which is the
+# more dangerous of the two.
 #
-# This does not diff the files; they legitimately differ in structure and length. It
-# asserts each carries every load-bearing rule. Add a row when you add a rule a harness
-# would be unsafe or wrong without. Do not add one for phrasing.
-PARITY_FILES=("adapters/claude/SKILL.md" "adapters/cursor/hektor-flaky-triage.mdc")
+# This does not diff anything. It asserts SKILL.md states each rule. Add a row when you add
+# a rule the agent would be unsafe or wrong without. Do not add one for phrasing.
+PARITY_FILES=("skill/SKILL.md")
 
 # `label<TAB>ERE` — the ERE may itself contain `|` alternation, so the fields are
 # tab-separated rather than pipe-separated.
@@ -97,14 +95,14 @@ scan_parity() { # $1 = kit root -> 0 all present / 1 something missing
   for rel in "${PARITY_FILES[@]}"; do
     f="$root/$rel"
     if [ ! -f "$f" ]; then
-      echo "scan-kit: PARITY — missing adapter file: $rel" >&2; missing=1; continue
+      echo "scan-kit: RULES — missing reasoning file: $rel" >&2; missing=1; continue
     fi
     while IFS= read -r line; do
       [ -n "$line" ] || continue
       label="${line%%	*}"
       re="${line#*	}"
       grep -qE "$re" "$f" 2>/dev/null && continue
-      echo "scan-kit: PARITY — $rel never states: $label" >&2
+      echo "scan-kit: RULES — $rel never states: $label" >&2
       missing=1
     done < <(parity_rules)
   done
@@ -113,7 +111,7 @@ scan_parity() { # $1 = kit root -> 0 all present / 1 something missing
 
 if [ "${1:-}" = "--parity" ]; then
   scan_parity "${2:-$KIT_DEFAULT}" || exit 1
-  echo "scan-kit: harness parity OK (${#PARITY_FILES[@]} adapters)"
+  echo "scan-kit: reasoning-layer rules OK (${#PARITY_FILES[@]} file)"
   exit 0
 fi
 
@@ -129,19 +127,18 @@ if [ "${1:-}" = "--self-test" ]; then
   if scan_tree "$T/kit" >/dev/null 2>&1; then
     echo "scan-kit: SELF-TEST FAILED — a planted hostname was NOT refused" >&2; exit 1
   fi
-  # parity: a stripped adapter must be refused, an intact pair must pass.
-  mkdir -p "$T/kit/adapters/claude" "$T/kit/adapters/cursor"
-  cp "$KIT_DEFAULT/adapters/claude/SKILL.md" "$T/kit/adapters/claude/SKILL.md" 2>/dev/null
-  cp "$KIT_DEFAULT/adapters/cursor/hektor-flaky-triage.mdc" "$T/kit/adapters/cursor/" 2>/dev/null
+  # rules: the shipped skill must pass, a stripped copy must be refused.
+  mkdir -p "$T/kit/skill"
+  cp "$KIT_DEFAULT/skill/SKILL.md" "$T/kit/skill/SKILL.md" 2>/dev/null
   if scan_parity "$T/kit" >/dev/null 2>&1; then :; else
-    echo "scan-kit: SELF-TEST FAILED — the shipped adapters do not satisfy parity" >&2; exit 1
+    echo "scan-kit: SELF-TEST FAILED — the shipped skill does not carry every rule" >&2; exit 1
   fi
-  grep -v 'hedge-scan' "$T/kit/adapters/cursor/hektor-flaky-triage.mdc" > "$T/stripped" \
-    && mv "$T/stripped" "$T/kit/adapters/cursor/hektor-flaky-triage.mdc"
+  grep -v 'hedge-scan' "$T/kit/skill/SKILL.md" > "$T/stripped" \
+    && mv "$T/stripped" "$T/kit/skill/SKILL.md"
   if scan_parity "$T/kit" >/dev/null 2>&1; then
-    echo "scan-kit: SELF-TEST FAILED — an adapter missing a rule was NOT refused" >&2; exit 1
+    echo "scan-kit: SELF-TEST FAILED — a skill missing a rule was NOT refused" >&2; exit 1
   fi
-  echo "scan-kit: self-test OK (hostname: clean passes / planted refused; parity: intact passes / stripped refused)"
+  echo "scan-kit: self-test OK (hostname: clean passes / planted refused; rules: intact passes / stripped refused)"
   exit 0
 fi
 

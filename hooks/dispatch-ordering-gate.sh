@@ -3,7 +3,7 @@
 #                             reviewer dispatch at a phase transition and blocks
 #                             out-of-order phase advancement.
 #
-# Hook    : PreToolUse:Agent
+# Event   : subagentStart
 # Mode    : DENY
 # State   : reads docs/hektor/run-status.json
 # Env     : HEKTOR_ORDERING_GATE=off   advisory bypass
@@ -37,22 +37,15 @@
 # 4. Missing / malformed ledger, or no opted-in phases → silent allow.
 set -uo pipefail
 
-_LIB="$(dirname "${BASH_SOURCE[0]}")/lib/audit.sh"
-if [ -f "$_LIB" ]; then . "$_LIB"; else hektor_audit() { :; }; fi
+_DIR="$(dirname "${BASH_SOURCE[0]}")"
+[ -f "$_DIR/lib/audit.sh" ]        && . "$_DIR/lib/audit.sh"        || hektor_audit() { :; }
+[ -f "$_DIR/lib/hook_profile.sh" ] && . "$_DIR/lib/hook_profile.sh" || hektor_hook_enabled() { return 0; }
+[ -f "$_DIR/lib/cursor.sh" ]       && . "$_DIR/lib/cursor.sh"       || exit 0
 
-if [ "${HEKTOR_ORDERING_GATE:-on}" = "off" ]; then
-  hektor_audit "dispatch-ordering-gate bypassed (HEKTOR_ORDERING_GATE=off)"
-  exit 0
-fi
+[ "${HEKTOR_ORDERING_GATE:-on}" = "off" ] && { hektor_audit "dispatch-ordering-gate bypassed (HEKTOR_ORDERING_GATE=off)"; exit 0; }
+hektor_gate_init dispatch-ordering-gate "standard,strict"
 
-JQ="$(command -v jq || true)"
-[ -n "$JQ" ] || exit 0
-
-INPUT=$(cat)
-TOOL_NAME=$(echo "$INPUT" | "$JQ" -r '.tool_name // empty' 2>/dev/null || echo "")
-[ "$TOOL_NAME" = "Agent" ] || exit 0
-
-DESCRIPTION=$(echo "$INPUT" | "$JQ" -r '.tool_input.description // ""' 2>/dev/null || echo "")
+DESCRIPTION="$(hektor_role)"
 [ -n "$DESCRIPTION" ] || exit 0
 
 # Rule 1: reviewers / validators always pass.
@@ -60,25 +53,16 @@ case "$DESCRIPTION" in
   workflow-reviewer-*|phase-validator-*) exit 0 ;;
 esac
 
-GUARD_CWD=$(echo "$INPUT" | "$JQ" -r '.cwd // "."' 2>/dev/null || echo ".")
-REPO_ROOT=$(git -C "$GUARD_CWD" rev-parse --show-toplevel 2>/dev/null || echo "$GUARD_CWD")
+REPO_ROOT="$(hektor_repo_root)"
 LEDGER="$REPO_ROOT/docs/hektor/run-status.json"
 [ -f "$LEDGER" ] || exit 0
-"$JQ" -e '.' "$LEDGER" >/dev/null 2>&1 || exit 0   # malformed -> silent allow
+"$CC_JQ" -e '.' "$LEDGER" >/dev/null 2>&1 || exit 0   # malformed -> silent allow
 
-emit_deny() {
-  "$JQ" -n --arg r "$1" '{
-    "hookSpecificOutput": {
-      "hookEventName": "PreToolUse",
-      "permissionDecision": "deny",
-      "permissionDecisionReason": $r
-    }
-  }'
-}
+emit_deny() { hektor_deny "$1"; }
 
 # Rule 2: transition point — highest-numbered phase that is done (completed|
 # blocked) AND opted into review (has reviewerVerdict) AND not yet approved.
-PENDING_PHASE=$("$JQ" -r '
+PENDING_PHASE=$("$CC_JQ" -r '
   (.phases // {}) | to_entries
   | map(select(
       (.value.status == "completed" or .value.status == "blocked")
@@ -89,7 +73,7 @@ PENDING_PHASE=$("$JQ" -r '
 ' "$LEDGER" 2>/dev/null || echo "")
 
 if [ -n "$PENDING_PHASE" ]; then
-  VERDICT=$("$JQ" -r --arg k "$PENDING_PHASE" '.phases[$k].reviewerVerdict // "pending"' "$LEDGER" 2>/dev/null || echo "pending")
+  VERDICT=$("$CC_JQ" -r --arg k "$PENDING_PHASE" '.phases[$k].reviewerVerdict // "pending"' "$LEDGER" 2>/dev/null || echo "pending")
   emit_deny "[BLOCKED — Hektor dispatch-ordering-gate] Phase ${PENDING_PHASE} is finished but not reviewer-approved (reviewerVerdict: \"${VERDICT}\").
 
 Description: \"${DESCRIPTION}\"
@@ -108,7 +92,7 @@ Bypass (audit the use): HEKTOR_ORDERING_GATE=off."
 fi
 
 # Rule 3: out-of-order — explicit target-phase hint ahead of an unapproved prior.
-CURRENT_PHASE=$("$JQ" -r '.currentPhase // empty' "$LEDGER" 2>/dev/null || echo "")
+CURRENT_PHASE=$("$CC_JQ" -r '.currentPhase // empty' "$LEDGER" 2>/dev/null || echo "")
 case "$CURRENT_PHASE" in ''|*[!0-9]*) exit 0 ;; esac
 
 TARGET_PHASE=$(printf '%s' "$DESCRIPTION" | sed -nE 's/^[[:space:]]*phase-?([0-9]+)[-_:].*/\1/p' | head -1)
@@ -117,9 +101,9 @@ case "$TARGET_PHASE" in ''|*[!0-9]*) exit 0 ;; esac
 if [ "$TARGET_PHASE" -gt "$CURRENT_PHASE" ]; then
   PRIOR=$((TARGET_PHASE - 1))
   # Only enforce if the prior phase opted into review.
-  PRIOR_HAS=$("$JQ" -r --arg k "$PRIOR" '(.phases[$k] // {}) | has("reviewerVerdict")' "$LEDGER" 2>/dev/null || echo "false")
+  PRIOR_HAS=$("$CC_JQ" -r --arg k "$PRIOR" '(.phases[$k] // {}) | has("reviewerVerdict")' "$LEDGER" 2>/dev/null || echo "false")
   if [ "$PRIOR_HAS" = "true" ]; then
-    PRIOR_VERDICT=$("$JQ" -r --arg k "$PRIOR" '.phases[$k].reviewerVerdict // "pending"' "$LEDGER" 2>/dev/null || echo "pending")
+    PRIOR_VERDICT=$("$CC_JQ" -r --arg k "$PRIOR" '.phases[$k].reviewerVerdict // "pending"' "$LEDGER" 2>/dev/null || echo "pending")
     if [ "$PRIOR_VERDICT" != "approved" ]; then
       emit_deny "[BLOCKED — Hektor dispatch-ordering-gate] Out-of-order dispatch — phase ${TARGET_PHASE} cannot start while phase ${PRIOR} is not reviewer-approved.
 

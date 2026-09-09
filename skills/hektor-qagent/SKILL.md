@@ -194,12 +194,13 @@ thin areas.
 
 ## Availability / troubleshooting
 
-- The MCP is registered in **local** scope (`~/.claude.json` for this
-  project), so it is not committed.
-- MCP servers load at **session start**. If the `mcp__qagent__*` tools
-  aren't present, the server was added mid-session — **restart Claude Code**
-  to surface them. Confirm with `claude mcp list` (expect
-  `qagent … ✔ Connected`).
+- The MCP is registered per-project in Cursor's MCP settings
+  (`.cursor/mcp.json`, or the global `~/.cursor/mcp.json`), so the entry is
+  not committed unless you commit that file.
+- MCP servers load at **session start**. If the qagent tools aren't present,
+  the server was added mid-session — **reload the Cursor window**
+  (`Cmd/Ctrl+Shift+P` → *Developer: Reload Window*) to surface them, and
+  confirm the server shows as connected under *Settings → MCP*.
 - If a query errors, re-check `collection_name` against `list_collections`
   (names are Turkish-domain-prefixed, e.g. `arama_`, not `search_`).
 - This is augmentation. If qagent is unavailable, every consuming skill
