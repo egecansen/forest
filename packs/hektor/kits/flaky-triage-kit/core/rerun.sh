@@ -110,7 +110,8 @@ if [ -n "${RERUN_FROM_LOG:-}" ]; then _t="$(mktemp)"; strip < "$RERUN_FROM_LOG" 
 
 TESTS="${1:-}"; TB="${2:-}"
 [ -n "$TESTS" ] && [ -n "$TB" ] || { echo "usage: rerun.sh <fqcn-csv> <tb>" >&2; exit 64; }
-TBN="$(normalize_tb "$TB")" || { echo "I1: tb must be a testbox id (161 or tb161): $TB" >&2; exit 77; }
+TB_RAW="$TB"   # kept for assert_tb_dc below: the data centre lives in the SPELLING, not in $TB
+TBN="$(normalize_tb "$TB")" || { echo "I1: tb must be a testbox id (161, tb161, tbx161 or xtbx161): $TB" >&2; exit 77; }
 TB="$TBN"
 # Round3: strict_match is WHOLE-STRING (unlike line-oriented `grep -qE '^...$'`) — rejects an
 # embedded-newline FQCN-CSV that would otherwise smuggle a metacharacter-laden line past this check.
@@ -124,6 +125,9 @@ JH="${HEKTOR_FK_JAVA_HOME:-$(jq -r '.run.java_home // empty' "$CFG")}"; JH="${JH
 { [ -n "$JH" ] && [ -d "$JH" ]; } || echo "rerun: WARN JAVA_HOME unresolved ('$JH') — set HEKTOR_FK_JAVA_HOME or run.java_home (toolchain needs JDK 17)" >&2
 PROF="$(jq -r '.run.profile' "$CFG")"; LP="$(jq -r '.run.launchpad' "$CFG")"
 DC="${HEKTOR_FK_DATA_CENTER:-$(jq -r '.run.data_center' "$CFG")}"; BR="$(jq -r '.run.browser' "$CFG")"
+# -Dapi.url below is built from $DC, never from the spelling. If the operator named a data centre
+# and it is not this one, the run would go to the wrong box without saying so. Refuse instead.
+assert_tb_dc "$TB_RAW" "$DC" || exit 77
 SEL="$(jq -r '.run.select_flag' "$CFG")"; N="${RERUN_N:-$(jq -r '.run.flaky_confidence_runs' "$CFG")}"   # RERUN_N overrides config (e.g. fast single-pass cross-box check)
 
 # `cleanTest test`, NOT `--rerun-tasks`. Both force the test task to re-execute

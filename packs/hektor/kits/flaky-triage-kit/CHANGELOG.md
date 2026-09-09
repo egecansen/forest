@@ -9,6 +9,36 @@ refactors that change no behaviour are not entries.
 
 ---
 
+## 1.0.11
+
+**Cursor-only.** The kit no longer installs a Claude Code half. `install.sh` takes no
+`--harness` (the flag is accepted and ignored), writes no `AGENTS.md` pointer, and lays
+everything under `.cursor/`:
+
+- `skill/SKILL.md` → `.cursor/skills/hektor-flaky-triage/SKILL.md` — Cursor loads it by
+  description, or you invoke it as `/hektor-flaky-triage`.
+- `gates/` → `.cursor/hooks/`, registered on `beforeShellExecution`, `preToolUse` and `stop`.
+- The source tree is `skill/` + `gates/` where it used to be `adapters/{claude,cursor,_lib}/`.
+  `package.json`'s `files` whitelist follows.
+
+**The delivery gate now runs.** It was Claude-only on the reasoning that Cursor had no
+session-end event. Cursor has `stop`, so I11 and hedge-scan are enforced rather than asked
+for. A `stop` hook cannot veto — it returns a `followup_message`, so "blocks" now means "makes
+the agent take another turn", capped at one by `loop_limit`.
+
+**Self-protection surface** drops the Claude paths and gains the registration file
+(`.cursor/hooks.json`) and the delivery gate. `core/shell-guard.py`, `core/lock-kit.sh`,
+`core/_integrity.sh` and `core/_wiring_repair.sh` follow; the wiring axis is one gate slot plus
+one stop slot instead of a two-harness state machine.
+
+**Known gap, not a regression in the kit itself:** `core/tests/integrity-test.sh` and
+`core/tests/install-guard-test.sh` still build their fixtures in Claude's nested
+`settings.json` shape and assert the two-harness contract, so both suites are red. The
+behaviour they cover is exercised by `self-protection-test.sh` (125 assertions, green) and by
+`delivery-gate-test.sh` (40, green). Porting those two fixture families is outstanding work.
+
+---
+
 ## 1.0.10
 
 ### Fixed

@@ -9,6 +9,7 @@ description: >
   re-audits only skills changed since the last run, so re-audits cost minutes.
   Triggers on "stocktake the skills", "audit the pack", "which skills overlap",
   "are any skills stale". Pairs with `hektor doctor` (structure) — this is content.
+disable-model-invocation: true
 ---
 
 # Hektor skill-stocktake

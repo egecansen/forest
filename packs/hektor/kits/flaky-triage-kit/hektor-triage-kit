@@ -1,8 +1,8 @@
 #!/bin/bash
 # hektor-triage-kit — the kit's command-line entrypoint.
 #
-#   hektor-triage-kit install [--harness all|claude|cursor|agents|both] [--project <dir>] [--no-autoconfig]
-#       Install into a repo and wire EVERY harness (Claude Code + Cursor + AGENTS.md) in one shot, and
+#   hektor-triage-kit install [--project <dir>] [--no-autoconfig]
+#       Install into a repo — engine, skill and both gates, wired into .cursor/ — in one shot, and
 #       auto-detect JDK 17 + source_roots so there is no manual config step. Idempotent.
 #   hektor-triage-kit build
 #       Bump the patch version, then pack the kit into a versioned tarball (npm pack) and
@@ -54,10 +54,10 @@ case "$sub" in
     PROJ="$(pwd)"
     # allow: hektor-triage-kit lock --project <dir>
     [ "${1:-}" = "--project" ] && { PROJ="${2:-$PROJ}"; }
-    LK="$PROJ/.claude/skills/hektor-flaky-triage/core/lock-kit.sh"
+    LK="$PROJ/.cursor/skills/hektor-flaky-triage/core/lock-kit.sh"
     [ -f "$LK" ] || { echo "hektor-triage-kit: kit not installed in $PROJ — run: hektor-triage-kit install" >&2; exit 66; }
     if [ "$sub" = "status" ]; then
-      V="$PROJ/.claude/skills/hektor-flaky-triage/core/.version"
+      V="$PROJ/.cursor/skills/hektor-flaky-triage/core/.version"
       if [ -r "$V" ]; then
         echo "  kit version: $(cut -d' ' -f1 < "$V") (installed $(cut -d' ' -f2 < "$V"))"
       else
@@ -143,7 +143,7 @@ case "$sub" in
     [ "$bad" = 0 ] || { rm -f "$HERE/$TGZ"; echo "hektor-triage-kit: removed the bad artifact" >&2; exit 71; }
     echo "built: $HERE/$TGZ"
     echo "install it with:  npm i -g $HERE/$TGZ   (then: hektor-triage-kit install)"
-    echo "or run directly:  npx $HERE install --harness claude" ;;
+    echo "or run directly:  npx $HERE install" ;;
 
   -V|--version)
     # The SOURCE's version, from the one manifest that carries it. `status` answers

@@ -20,7 +20,8 @@ for t in jq git; do command -v "$t" >/dev/null || { echo "dom-capture: $t requir
 
 URL="${1:-}"; TB="${2:-}"
 [ -n "$URL" ] && [ -n "$TB" ] || { echo "usage: dom-capture.sh <url> <tb>" >&2; exit 64; }
-TBN="$(normalize_tb "$TB")" || { echo "I1: tb must be a testbox id (161 or tb161): $TB" >&2; exit 77; }
+TB_RAW="$TB"   # kept for assert_tb_dc below: the data centre lives in the SPELLING, not in $TB
+TBN="$(normalize_tb "$TB")" || { echo "I1: tb must be a testbox id (161, tb161, tbx161 or xtbx161): $TB" >&2; exit 77; }
 TB="$TBN"
 # I1: url must be a clean http(s) URL — no spaces / shell / gradle-arg metacharacters (this drives a
 # real browser). strict_match (Round3) is WHOLE-STRING — an embedded-newline url that a line-oriented
@@ -33,7 +34,12 @@ WD="$(jq -r '.run.workdir' "$CFG")"
 JH="${HEKTOR_FK_JAVA_HOME:-$(jq -r '.run.java_home // empty' "$CFG")}"; JH="${JH:-${JAVA_HOME:-}}"
 { [ -n "$JH" ] && [ -d "$JH" ]; } || echo "dom-capture: WARN JAVA_HOME unresolved ('$JH') — set HEKTOR_FK_JAVA_HOME (toolchain needs JDK 17)" >&2
 PROF="$(jq -r '.run.profile' "$CFG")"; LP="$(jq -r '.run.launchpad' "$CFG")"
-DC="$(jq -r '.run.data_center' "$CFG")"; BR="$(jq -r '.run.browser' "$CFG")"
+# HEKTOR_FK_DATA_CENTER honoured here as config.json's `_portability` note already promises and
+# rerun.sh already did — without it, assert_tb_dc below would accept a box in rerun.sh and refuse
+# the same box here the moment an operator used the documented override.
+DC="${HEKTOR_FK_DATA_CENTER:-$(jq -r '.run.data_center' "$CFG")}"; BR="$(jq -r '.run.browser' "$CFG")"
+# -Dapi.url is composed from $DC, never from the spelling — refuse a disagreement, never re-aim.
+assert_tb_dc "$TB_RAW" "$DC" || exit 77
 FQCN="$(jq -r '.dom_capture.test_fqcn' "$CFG")"; METH="$(jq -r '.dom_capture.method' "$CFG")"
 [ -n "$FQCN" ] && [ "$FQCN" != "null" ] || { echo "dom-capture: config.dom_capture.test_fqcn missing" >&2; exit 78; }
 # kit-local: the test lives in the KIT and is sourced into gradle via an init script (never in the suite tree)

@@ -1,7 +1,7 @@
 #!/bin/bash
 # commit-gate.sh — Hektor commit / push enforcement.
 #
-# Hook    : PreToolUse:Bash  (filters to git invocations only)
+# Event   : beforeShellExecution  (filters to git invocations only)
 # Mode    : DENY (no WARN path)
 # State   : none
 # Env     : HEKTOR_COMMIT_GATE=off   advisory bypass (document the authorisation)
@@ -15,10 +15,9 @@
 # is denied. Hook-bypass flags (--no-verify / --no-gpg-sign) are denied on
 # every git command as defence-in-depth.
 #
-# Note on scope: PreToolUse:Bash fires only on Bash *tool* calls the model
-# makes. A user running `! git commit` in the session is executed by the
-# harness directly and is NOT gated — so this blocks the agent, not the
-# human.
+# Note on scope: beforeShellExecution fires only on commands the AGENT runs. A
+# command you type in Cursor's own terminal is not routed through the agent and
+# is NOT gated — so this blocks the agent, not you.
 #
 # Ports the enforcement half of Achilles' commit-message-gate.sh, retargeted
 # from coverage-expansion commit conventions to Hektor's manual-commit rule.
@@ -32,35 +31,18 @@
 
 set -uo pipefail
 
-_LIB="$(dirname "${BASH_SOURCE[0]}")/lib/audit.sh"
-if [ -f "$_LIB" ]; then . "$_LIB"; else hektor_audit() { :; }; fi
+_DIR="$(dirname "${BASH_SOURCE[0]}")"
+[ -f "$_DIR/lib/audit.sh" ]        && . "$_DIR/lib/audit.sh"        || hektor_audit() { :; }
+[ -f "$_DIR/lib/hook_profile.sh" ] && . "$_DIR/lib/hook_profile.sh" || hektor_hook_enabled() { return 0; }
+[ -f "$_DIR/lib/cursor.sh" ]       && . "$_DIR/lib/cursor.sh"       || exit 0
 
-if [ "${HEKTOR_COMMIT_GATE:-on}" = "off" ]; then
-  hektor_audit "commit-gate bypassed (HEKTOR_COMMIT_GATE=off)"
-  exit 0
-fi
+[ "${HEKTOR_COMMIT_GATE:-on}" = "off" ] && { hektor_audit "commit-gate bypassed (HEKTOR_COMMIT_GATE=off)"; exit 0; }
+hektor_gate_init commit-gate "minimal,standard,strict"   # hard blocker: all profiles
 
-JQ="$(command -v jq || true)"
-if [ -z "$JQ" ]; then
-  # jq absent: fail-open so the hook never wedges the pipeline.
-  exit 0
-fi
+emit_deny() { hektor_deny "$1"; }
 
-emit_deny() {
-  "$JQ" -n --arg r "$1" '{
-    "hookSpecificOutput": {
-      "hookEventName": "PreToolUse",
-      "permissionDecision": "deny",
-      "permissionDecisionReason": $r
-    }
-  }'
-}
-
-INPUT=$(cat)
-TOOL_NAME=$(echo "$INPUT" | "$JQ" -r '.tool_name // empty' 2>/dev/null || echo "")
-[ "$TOOL_NAME" = "Bash" ] || exit 0
-
-CMD=$(echo "$INPUT" | "$JQ" -r '.tool_input.command // ""' 2>/dev/null || echo "")
+CMD="$(hektor_command)"
+[ -n "$CMD" ] || exit 0
 
 # Strip quoted regions so flags / keywords inside a -m "..." message body
 # don't false-positive. Replace single- and double-quoted spans with a

@@ -1,7 +1,7 @@
 #!/bin/bash
 # destructive-command-gate.sh — block irreversible Bash that can wipe in-progress work.
 #
-# Hook    : PreToolUse:Bash
+# Event   : beforeShellExecution
 # Mode    : DENY
 # State   : none
 # Env     : HEKTOR_DESTRUCTIVE_GATE=off   advisory bypass (document the authorisation)
@@ -21,19 +21,16 @@
 set -uo pipefail
 
 _DIR="$(dirname "${BASH_SOURCE[0]}")"
-if [ -f "$_DIR/lib/audit.sh" ]; then . "$_DIR/lib/audit.sh"; else hektor_audit() { :; }; fi
+[ -f "$_DIR/lib/audit.sh" ]        && . "$_DIR/lib/audit.sh"        || hektor_audit() { :; }
 [ -f "$_DIR/lib/hook_profile.sh" ] && . "$_DIR/lib/hook_profile.sh" || hektor_hook_enabled() { return 0; }
+[ -f "$_DIR/lib/cursor.sh" ]       && . "$_DIR/lib/cursor.sh"       || exit 0
 
 [ "${HEKTOR_DESTRUCTIVE_GATE:-on}" = "off" ] && { hektor_audit "destructive-command-gate bypassed (HEKTOR_DESTRUCTIVE_GATE=off)"; exit 0; }
-hektor_hook_enabled destructive-command-gate "minimal,standard,strict" || exit 0   # hard blocker: all profiles
+hektor_gate_init destructive-command-gate "minimal,standard,strict"   # hard blocker: all profiles
 
-JQ="$(command -v jq || true)"; [ -n "$JQ" ] || exit 0
+CMD="$(hektor_command)"
+[ -n "$CMD" ] || exit 0
 
-INPUT=$(head -c 1048576)
-TOOL_NAME=$(echo "$INPUT" | "$JQ" -r '.tool_name // empty' 2>/dev/null || echo "")
-[ "$TOOL_NAME" = "Bash" ] || exit 0
-
-CMD=$(echo "$INPUT" | "$JQ" -r '.tool_input.command // ""' 2>/dev/null || echo "")
 # Strip quoted regions (so a keyword inside a -m "..." message can't false-positive),
 # then strip a trailing ` # comment` (a commented rm -rf never executes). Quote-strip
 # runs first, so a `#` inside a string is already neutralised.
@@ -59,11 +56,13 @@ fi
 
 [ -n "$WHY" ] || exit 0
 
-"$JQ" -n --arg w "$WHY" --arg c "$CMD" '{
-  "hookSpecificOutput": {
-    "hookEventName": "PreToolUse",
-    "permissionDecision": "deny",
-    "permissionDecisionReason": ("[BLOCKED — Hektor destructive-command-gate] Refusing an irreversible command that could wipe your in-progress work.\n\nDetected: " + $w + "\nCommand:  " + $c + "\n\nThe agent hands the working tree back for you to review and commit — it does not reset or force-delete it. If you truly need this (e.g. cleaning a throwaway dir), run it yourself, or authorise it for this command with:\n  HEKTOR_DESTRUCTIVE_GATE=off <command>")
-  }
-}'
+hektor_deny "[BLOCKED — Hektor destructive-command-gate] Refusing an irreversible command that could wipe your in-progress work.
+
+Detected: ${WHY}
+Command:  ${CMD}
+
+The agent hands the working tree back for you to review and commit — it does not
+reset or force-delete it. If you truly need this (e.g. cleaning a throwaway dir),
+run it yourself, or authorise it for this command with:
+  HEKTOR_DESTRUCTIVE_GATE=off <command>"
 exit 0

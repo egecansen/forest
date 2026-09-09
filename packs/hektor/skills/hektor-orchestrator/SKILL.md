@@ -32,6 +32,7 @@ or `*Layout.java`. Those are owned by `hektor-test-composer`,
 | User intent (plain English) | Entry | Downstream skill |
 |---|---|---|
 | "work <TICKET-KEY>" / "Hektor, do WEBT-XXX" / "automate this ticket" / "write tests for the ticket" | `from-jira` | `hektor-from-jira` (which fetches the ticket, plans, gates, dispatches `hektor-test-composer` in `stop-on-failure` mode, batches `hektor-failure-diagnosis` proposals) |
+| **two or more** ticket keys in one message / "bu 5 ticket" / "her ticket için worktree" / "paralel ticket" | `multi-ticket` | `hektor-multi-ticket` (one provisioned worktree per ticket, waves of 2–3, box-lease-serialised runs, one report table) — it drives `hektor-from-jira` per ticket, so never dispatch that directly for a multi-ticket request |
 | "expand coverage on <journey>" / "add tests for <feature>" | `expand-coverage` | `hektor-journey-mapping` → `hektor-test-composer` |
 | "map the app" / "discover journeys for <domain>" | `journey-mapping-only` | `hektor-journey-mapping` |
 | "write a test for <thing>" (a specific scenario, not a journey) | `single-test` | `hektor-test-composer` directly |
@@ -59,7 +60,7 @@ Don't infer aggressively — wrong dispatch is more expensive than one question.
    command. If the ledger lacks a `testbox` block when a test-running
    skill is about to dispatch, refuse and ask the user for the box
    (single prompt: *"Which testbox? e.g., `tbx161`"*). See
-   `.cursor/rules/hektor.mdc` §"Testbox precondition" for the full
+   `.cursor/rules/hektor-kernel.mdc` §"Testbox precondition" for the full
    contract.
 2. **Working tree clean enough.** `git status` shows no in-flight changes the
    user hasn't acknowledged. If unstaged Java edits exist, ask: "Should I

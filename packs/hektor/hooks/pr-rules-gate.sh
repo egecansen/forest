@@ -2,20 +2,30 @@
 # pr-rules-gate.sh — local mirror of the PR reviewer's deterministic (Katman 1a)
 #                    rule scan, run at write-time on the working tree.
 #
-# Hook    : PreToolUse:Write|Edit
-# Mode    : DENY on reviewer BLOCKERs, WARN (systemMessage) on reviewer WARNINGs
+# Events  : preToolUse   -> DENY on a reviewer BLOCKER
+#           postToolUse  -> advisory note on reviewer WARNINGs
 # State   : none (scans only the content this call adds)
 # Env     : HEKTOR_PR_RULES_GATE=off   advisory bypass (document the authorisation)
 #
 # Why
 # ---
-# The team's PR reviewer runs a regex pass (Katman 1a) over newly added lines
-# and marks the PR "Needs Work" on any BLOCKER. This hook runs the same
-# deterministic checks against the lines *this* Write/Edit adds, so a violation
-# is caught at authoring time instead of on the PR. Two repos are covered:
+# The team's PR reviewer runs a regex pass (Katman 1a) over newly added lines and
+# marks the PR "Needs Work" on any BLOCKER. This gate runs the same deterministic
+# checks against the lines *this* write adds, so a violation is caught at
+# authoring time instead of on the PR. Two repos are covered:
 #   - web-ui-test/       (web-test)      : *Page.java / *Layout.java / *Test.java
 #   - test-data-client/  (resource data) : *ResourceClient.java / AbName.java
 # Detection is by path substring, with a filename fallback.
+#
+# Why two events
+# --------------
+# Cursor's `preToolUse` verdict can deny a write but carries no channel for
+# advisory text; `postToolUse` carries `additional_context` but runs after the
+# write landed. So the gate is registered on both and reads
+# `.hook_event_name` to pick its half: BLOCKERs veto the write up front,
+# WARNINGs come back as a note once it is on disk. One script, no duplicated
+# rule logic. A WARNING-only file is never blocked — matching the reviewer,
+# which leaves those as inline comments.
 #
 # Coverage: the full deterministic Katman 1a set (see the rule sections below),
 # plus two file-wide Katman 1b checks that are cheap to do reliably — unused
@@ -24,79 +34,63 @@
 # skill guidance (hektor-conventions, hektor-resource-client), since they need
 # whole-suite or semantic analysis a shell scan can't do without false positives.
 #
-# Scope: only NEW content is scanned — Write.content or Edit.new_string — so it
-# mirrors the reviewer's diff-based pass and never re-flags pre-existing code.
-# Class-context checks (class-name suffix, extends, @Component) are best-effort:
-# they only fire when the class declaration is itself part of the added text.
+# Scope: only NEW content is scanned, so it mirrors the reviewer's diff-based
+# pass and never re-flags pre-existing code. Class-context checks (class-name
+# suffix, extends, @Component) are best-effort: they only fire when the class
+# declaration is itself part of the added text.
 #
-# Failure -> action
-# -----------------
-# - Any reviewer BLOCKER on the added lines   -> DENY (lists blockers + warnings)
-# - Only reviewer WARNINGs                     -> WARN via systemMessage (allow)
-# - Nothing tripped / non-target file          -> silent allow
-#
-# Like every Hektor gate: input-tolerant, fail-open (missing jq / malformed
-# stdin -> allow), never wedges the pipeline. See .claude/hooks/README.md.
+# Fail-open like every Hektor gate: missing jq / unrecognised payload -> allow.
 set -uo pipefail
 
-_LIB="$(dirname "${BASH_SOURCE[0]}")/lib/audit.sh"
-if [ -f "$_LIB" ]; then . "$_LIB"; else hektor_audit() { :; }; fi
+_DIR="$(dirname "${BASH_SOURCE[0]}")"
+[ -f "$_DIR/lib/audit.sh" ]        && . "$_DIR/lib/audit.sh"        || hektor_audit() { :; }
+[ -f "$_DIR/lib/hook_profile.sh" ] && . "$_DIR/lib/hook_profile.sh" || hektor_hook_enabled() { return 0; }
+[ -f "$_DIR/lib/cursor.sh" ]       && . "$_DIR/lib/cursor.sh"       || exit 0
 
-if [ "${HEKTOR_PR_RULES_GATE:-on}" = "off" ]; then
-  hektor_audit "pr-rules-gate bypassed (HEKTOR_PR_RULES_GATE=off)"
-  exit 0
-fi
+[ "${HEKTOR_PR_RULES_GATE:-on}" = "off" ] && { hektor_audit "pr-rules-gate bypassed (HEKTOR_PR_RULES_GATE=off)"; exit 0; }
+hektor_gate_init pr-rules-gate "minimal,standard,strict"   # hard blocker: all profiles
 
-JQ="$(command -v jq || true)"
-[ -n "$JQ" ] || exit 0   # jq absent -> fail-open
+EVENT="$(hektor_event)"
 
-INPUT=$(cat)
-TOOL_NAME=$(echo "$INPUT" | "$JQ" -r '.tool_name // empty' 2>/dev/null || echo "")
-case "$TOOL_NAME" in Write|Edit) ;; *) exit 0 ;; esac
-
-TARGET=$(echo "$INPUT" | "$JQ" -r '.tool_input.file_path // empty' 2>/dev/null || echo "")
+TARGET="$(hektor_file_path)"
 [ -n "$TARGET" ] || exit 0
 case "$TARGET" in *.java) ;; *) exit 0 ;; esac
 BASENAME="${TARGET##*/}"
 
 # The content this call introduces (the "diff" — mirrors the reviewer's Katman 1a).
-case "$TOOL_NAME" in
-  Write) ADDED=$(echo "$INPUT" | "$JQ" -r '.tool_input.content // empty' 2>/dev/null || echo "") ;;
-  Edit)  ADDED=$(echo "$INPUT" | "$JQ" -r '.tool_input.new_string // empty' 2>/dev/null || echo "") ;;
-esac
+# hektor_added_text covers every form Cursor delivers it in: whole-file content,
+# a code_edit fragment, a search/replace new_string, or afterFileEdit's edits[].
+ADDED="$(hektor_added_text)"
 [ -n "$ADDED" ] || exit 0
 
-# Full proposed file content, for the whole-file (Katman 1b) checks. On Write
-# that's just the content; on Edit we reconstruct it from the on-disk file with
-# a literal index()-based replace (same technique as journey-map-sentinel-gate,
-# NOT awk sub() which is ERE and can mis-reconstruct). If we can't rebuild it
-# (file missing / no old_string), PROPOSED stays empty and the whole-file checks
-# are skipped — better to miss one than to false-flag on partial context.
+# Full proposed file content, for the whole-file (Katman 1b) checks. A whole-file
+# write is already the whole file; a partial edit is reconstructed from disk with
+# a literal index()-based replace (NOT awk sub(), which is ERE and can
+# mis-reconstruct). If it can't be rebuilt, PROPOSED stays empty and the
+# whole-file checks are skipped — better to miss one than to false-flag on
+# partial context.
 PROPOSED=""
-case "$TOOL_NAME" in
-  Write) PROPOSED="$ADDED" ;;
-  Edit)
-    OLD=$(echo "$INPUT" | "$JQ" -r '.tool_input.old_string // empty' 2>/dev/null || echo "")
-    if [ -f "$TARGET" ] && [ -n "$OLD" ]; then
-      NEW=$(echo "$INPUT" | "$JQ" -r '.tool_input.new_string // empty' 2>/dev/null || echo "")
-      # Pass OLD/NEW through the environment (ENVIRON[]), not `-v` — `-v` rejects
-      # a literal newline in the value on BSD/macOS awk, which would silently
-      # fail-open on any multi-line edit.
-      PROPOSED=$(_o="$OLD" _n="$NEW" awk '
-        BEGIN { RS="\0"; o=ENVIRON["_o"]; n=ENVIRON["_n"] }
-        {
-          rest=$0; out="";
-          if (o == "") { printf "%s", rest; next }
-          while ((p=index(rest,o)) > 0) {
-            out = out substr(rest,1,p-1) n;
-            rest = substr(rest, p+length(o));
-          }
-          printf "%s", out rest;
-        }
-      ' "$TARGET" 2>/dev/null || echo "")
-    fi
-    ;;
-esac
+OLD="$(hektor_old_string)"
+if [ -z "$OLD" ]; then
+  PROPOSED="$ADDED"
+elif [ -f "$TARGET" ]; then
+  NEW="$(hektor_new_string)"
+  # Pass OLD/NEW through the environment (ENVIRON[]), not `-v` — `-v` rejects a
+  # literal newline in the value on BSD/macOS awk, which would silently
+  # fail-open on any multi-line edit.
+  PROPOSED=$(_o="$OLD" _n="$NEW" awk '
+    BEGIN { RS="\0"; o=ENVIRON["_o"]; n=ENVIRON["_n"] }
+    {
+      rest=$0; out="";
+      if (o == "") { printf "%s", rest; next }
+      while ((p=index(rest,o)) > 0) {
+        out = out substr(rest,1,p-1) n;
+        rest = substr(rest, p+length(o));
+      }
+      printf "%s", out rest;
+    }
+  ' "$TARGET" 2>/dev/null || echo "")
+fi
 
 # ---- repo / file-type detection --------------------------------------------
 IS_WEBTEST=0; IS_TDC=0
@@ -309,7 +303,8 @@ fi
 # ============================================================================
 [ -z "$BLOCKERS" ] && [ -z "$WARNINGS" ] && exit 0
 
-if [ -n "$BLOCKERS" ]; then
+# --- preToolUse: veto the write on a BLOCKER --------------------------------
+if [ -n "$BLOCKERS" ] && [ "$EVENT" != "postToolUse" ]; then
   REASON="[BLOCKED — Hektor pr-rules-gate] This write trips the PR reviewer's BLOCKER rules (Katman 1a).
 
 Target: ${TARGET}
@@ -327,20 +322,15 @@ hektor-resource-client for the rule and the correct pattern.
 
 Override (only if the user explicitly authorised it, e.g. a knowingly-XPath
 locator): prefix the command's environment with HEKTOR_PR_RULES_GATE=off."
-  "$JQ" -n --arg r "$REASON" '{
-    "hookSpecificOutput": {
-      "hookEventName": "PreToolUse",
-      "permissionDecision": "deny",
-      "permissionDecisionReason": $r
-    }
-  }'
+  hektor_deny "$REASON"
   exit 0
 fi
 
-# WARNINGs only -> advise and allow.
-MSG="[WARN — Hektor pr-rules-gate] ${TARGET} trips PR reviewer WARNING rules (inline comment, non-blocking):${WARNINGS}
+# --- postToolUse: WARNINGs come back as a note ------------------------------
+if [ "$EVENT" = "postToolUse" ] && [ -n "$WARNINGS" ]; then
+  hektor_context "[WARN — Hektor pr-rules-gate] ${TARGET} trips PR reviewer WARNING rules (inline comment, non-blocking):${WARNINGS}
 
 These don't block the write or the merge, but the reviewer leaves an inline
 comment. Fix them in this pass unless there's a documented reason."
-"$JQ" -n --arg m "$MSG" '{ "systemMessage": $m, "suppressOutput": false }'
+fi
 exit 0

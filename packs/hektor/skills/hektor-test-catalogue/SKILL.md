@@ -10,6 +10,7 @@ description: >
   on-demand; never auto-activates during test writing or repair.
   Triggers on "generate the test catalogue", "scenario report", or
   "client-ready catalogue".
+disable-model-invocation: true
 ---
 
 # Hektor test catalogue

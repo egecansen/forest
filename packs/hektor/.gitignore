@@ -19,3 +19,6 @@ docs/hektor/skill-stocktake.json
 # failed there and passed in the original, which reads as a defect in the copy rather than a
 # gap in this line.
 kits/*/*.tgz
+
+# achilles test scratch
+.achilles/

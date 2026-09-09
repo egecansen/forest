@@ -216,17 +216,26 @@ verify() {
   # Cursor axis. Checked only when this run asked for Cursor, so a deliberate
   # `--harness claude` worktree is not failed for a .cursor/ it never wanted.
   # A rule file alone is not enough: without hooks.json nothing is registered,
-  # and without the vendored cursor-compat.sh every gate exits 0 silently.
+  # and without the vendored compat shim every gate exits 0 silently.
+  #
+  # The shim ships under two names across pack versions: it was vendored as
+  # cursor-compat.sh, and the later refactor that folded the adapters/ tree into
+  # hooks/ renamed it cursor.sh. Accept EITHER — pinning the old name alone made
+  # a correctly-wired Cursor worktree report "Cursor cannot route or gate here",
+  # which is worse than not checking, because it sends you fixing what is not broken.
   if [ "$WANT_CURSOR" -eq 1 ]; then
     local c_missing=0 cf
-    for cf in .cursor/hooks.json .cursor/hooks/lib/cursor-compat.sh; do
+    for cf in .cursor/hooks.json; do
       [ -e "$WT_PATH/$cf" ] || c_missing=$((c_missing+1))
     done
+    [ -e "$WT_PATH/.cursor/hooks/lib/cursor.sh" ] \
+      || [ -e "$WT_PATH/.cursor/hooks/lib/cursor-compat.sh" ] \
+      || c_missing=$((c_missing+1))
     local n_rules
     n_rules="$(find "$WT_PATH/.cursor/rules" -maxdepth 1 -name '*.mdc' 2>/dev/null | wc -l | tr -d ' ')"
     [ "$n_rules" -gt 0 ] || c_missing=$((c_missing+1))
     if [ "$c_missing" -eq 0 ]; then echo "PASS cursor   $n_rules rule(s) + hooks.json + compat shim"
-    else echo "FAIL cursor   $c_missing of 3 Cursor essentials missing (rules/*.mdc, hooks.json, hooks/lib/cursor-compat.sh) — Cursor cannot route or gate here"; fails=$((fails+1)); fi
+    else echo "FAIL cursor   $c_missing of 3 Cursor essentials missing (rules/*.mdc, hooks.json, hooks/lib/cursor.sh or cursor-compat.sh) — Cursor cannot route or gate here"; fails=$((fails+1)); fi
   fi
   echo "--- verify: $fails failure(s)"
   return "$fails"

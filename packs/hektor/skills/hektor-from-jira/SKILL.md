@@ -6,9 +6,14 @@ description: >
   acceptance criteria into a minimal scenario list, route each scenario
   to the right existing *Test.java class (or a new one), compose the
   tests, run them, and batch-surface any proposed fixes for human
-  approval before applying. Triggers on "work <TICKET-ID>", "automate
-  WEBT-XXX", "Hektor, do <ticket>", "write tests for the ticket", or
-  when hektor-orchestrator routes a ticket-driven entry.
+  approval before applying. Triggers on ANY prompt that names a single Jira
+  ticket of this org (SHBDN-*, WEBT-*, RAL-*, TDC-*) — including a bare
+  https://jira.sahibinden.com/browse/<KEY> URL on its own, with or without a
+  trailing testbox such as "- tb39" / "tbx39" (that suffix names the reserved
+  box to run on, it does NOT mean flaky-triage). Also "work <TICKET-ID>",
+  "automate WEBT-XXX", "Hektor, do <ticket>", "write tests for the ticket",
+  "<KEY> - tb<NN>", or when hektor-orchestrator routes a ticket-driven entry.
+  A Jira URL always routes here, never to hektor-flaky-triage.
 ---
 
 # Hektor from Jira — ticket-driven test authoring
@@ -29,10 +34,11 @@ ticket → scenario → composer dispatch flow.
 
 ## Required tools
 
-The Atlassian MCP (`mcp-atlassian` by sooperset, configured in Cursor or
-`.mcp.json`) must be available. The package exposes snake_case tool
-names; Claude Code surfaces them prefixed with the server name from the
-MCP config (`Atlassian` in the user's setup). So the callable tools are:
+The Atlassian MCP (`mcp-atlassian` by sooperset) must be registered in
+`.cursor/mcp.json` (or globally in `~/.cursor/mcp.json`). The package exposes
+snake_case tool names; the host surfaces them prefixed with the server name
+from the MCP config (`Atlassian` in the user's setup). So the callable tools
+are:
 
 - `mcp__Atlassian__jira_get_issue` — fetch a ticket by key.
 - `mcp__Atlassian__jira_search` — JQL search (used to follow links when
@@ -43,10 +49,9 @@ MCP config (`Atlassian` in the user's setup). So the callable tools are:
 - `mcp__Atlassian__confluence_search` / `..._get_page` — optional, when
   the ticket references a Confluence design doc.
 
-(Tool names follow the upstream `mcp-atlassian` schema. If your host
-surfaces them with a different prefix — Cursor, for instance, may show
-them under a slightly different namespace than Claude Code — discover
-the actual names from the host's tool list once at session start; the
+(Tool names follow the upstream `mcp-atlassian` schema; the prefix comes from
+whatever you named the server in `mcp.json`. If it differs from `Atlassian`,
+discover the actual names from the tool list once at session start — the
 underlying snake_case names are stable.)
 
 If the MCP isn't loaded, refuse and tell the user to enable it.
@@ -139,8 +144,49 @@ flow). Pull from it:
     they are the manual evidence (the real survey/modal/screen + its
     trigger). Caveat: attachments can be unrelated generic test evidence —
     confirm each actually depicts THIS feature before relying on it.
-  - **Proforma forms** — `jira_get_issue_proforma_forms` if a structured
-    checklist exists.
+  - **Proforma forms** — `jira_get_issue_proforma_forms` *if it works*: on
+    jira.sahibinden.com (Data Center) it returns
+    `Forms API requires a cloud_id`. Treat a failure here as "no forms",
+    not as a blocker.
+
+**ALSO read the ticket's own "Test" tab.** The issue screen carries named
+field tabs — `Field Tab | DevOPS | Time Spent | Test` — and the Test one is a
+first-class scenario source that is easy to miss because it is not the
+description. Fetch it explicitly (the fields are not in the default set):
+
+```
+jira_get_issue(issue_key=<KEY>, use_display_names=true, fields=
+  "customfield_10891,customfield_14420,customfield_18194,customfield_14419,
+   customfield_20090,customfield_16200,customfield_16201,customfield_22418,
+   customfield_21496,customfield_14802,customfield_10070,customfield_17899,
+   customfield_19691,customfield_10908,customfield_21190,customfield_14900,
+   customfield_10894")
+```
+
+- **`Test Document` (`customfield_10891`) is the one that carries weight.**
+  When populated it is a full QA-authored test doc, and it is usually more
+  concrete than the ticket description: an `*On Kosullar*` block (often with
+  the exact DDL/SQL the feature needs), then numbered tests grouped by
+  surface, each with steps and an explicit `*Beklenen:*`. Verified example:
+  SHBDN-232070 — 7 tests split into `ADMIN PANEL TESTLERI` and
+  `FRONTEND TESTLERI (Desktop & Responsive)`, including a fallback case.
+- The siblings (`Test Cases`, `Test Risk Analizi`, `Selenium Tests`,
+  `Resource Tests`, `Test Case Sayısı`, `Manuel test edilsin`, `TestBox`,
+  `Preprod Result Test`, `QA Testers`, `Test Fail Count`) are on the same tab
+  but are empty on most tickets. Read them, don't depend on them.
+- **The Test tab does not replace the `Test Onay` hop, and vice versa.** The
+  Test Document is the *planned* scenario set; the `Test Onay` child is what
+  was *actually run*, with pass/fail per case. Read both when both exist.
+
+How the Test Document's own headings route the work — do not flatten them:
+
+| Section / marker | What it means for this suite |
+|---|---|
+| `ADMIN PANEL TESTLERI` | Admin surface — **not** web-ui-test. Belongs to the Cypress admin suite; report it, don't author a Selenium test for it. |
+| `FRONTEND TESTLERI (Desktop & Responsive)` | Both surfaces get tests: `website` AND `responsivesite`. |
+| `*On Kosullar*` with SQL/DDL | A data precondition. Seed it — exhaust the TDC endpoints and `/functionalTest/*` before any DB write (auto-memory `prefer-endpoint-seeding-over-db-writes`), and never skip-guard the test instead of seeding (`seed-data-over-skip-guard-for-gated-tests`). |
+| A language/`Ingilizce` case | The method needs `@Tag(CommonTag.LANGUAGE)`, or the EN run skips it (auto-memory `en-runs-require-language-tag`); route via `hektor-write-language-test`. |
+| A fallback / empty-value case | Usually the highest-value assertion in the doc and the one most often missing from the suite. Do not drop it as an "edge case". |
 
 Cap at 5 linked issues fetched. If more, list them and ask: "There are
 12 linked issues. Which are load-bearing for the AC?" Don't auto-walk a

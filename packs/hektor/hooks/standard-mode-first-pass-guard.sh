@@ -2,7 +2,7 @@
 # standard-mode-first-pass-guard.sh — first-pass strict-dispatch enforcement
 #                                     for hektor-coverage-expansion.
 #
-# Hook    : PreToolUse:Agent
+# Event   : subagentStart
 # Mode    : DENY (blocks the dispatch before the subagent starts)
 # State   : reads (under the run's repo root)
 #             docs/hektor/coverage-expansion-state.json  (primary: runMode + currentPass)
@@ -11,7 +11,7 @@
 #
 # Rule (single rule — the grouping guard)
 # ---------------------------------------
-# An Agent dispatch whose description starts with `[group]` or `[P3-batch]`
+# A dispatch whose role label starts with `[group]` or `[P3-batch]`
 # is the section-grouped, lower-fidelity dispatch shape. Per
 # hektor-coverage-expansion/SKILL.md §"Modes":
 #
@@ -35,52 +35,36 @@
 # all silent-allow rather than crash the PreToolUse pipeline (no `set -e`).
 set -uo pipefail
 
-_LIB="$(dirname "${BASH_SOURCE[0]}")/lib/audit.sh"
-if [ -f "$_LIB" ]; then . "$_LIB"; else hektor_audit() { :; }; fi
+_DIR="$(dirname "${BASH_SOURCE[0]}")"
+[ -f "$_DIR/lib/audit.sh" ]        && . "$_DIR/lib/audit.sh"        || hektor_audit() { :; }
+[ -f "$_DIR/lib/hook_profile.sh" ] && . "$_DIR/lib/hook_profile.sh" || hektor_hook_enabled() { return 0; }
+[ -f "$_DIR/lib/cursor.sh" ]       && . "$_DIR/lib/cursor.sh"       || exit 0
 
-if [ "${HEKTOR_FIRSTPASS_GUARD:-on}" = "off" ]; then
-  hektor_audit "standard-mode-first-pass-guard bypassed (HEKTOR_FIRSTPASS_GUARD=off)"
-  exit 0
-fi
+[ "${HEKTOR_FIRSTPASS_GUARD:-on}" = "off" ] && { hektor_audit "standard-mode-first-pass-guard bypassed (HEKTOR_FIRSTPASS_GUARD=off)"; exit 0; }
+hektor_gate_init standard-mode-first-pass-guard "standard,strict"
 
-JQ="$(command -v jq || true)"
-[ -n "$JQ" ] || exit 0   # jq absent -> fail-open
-
-INPUT=$(cat)
-TOOL_NAME=$(echo "$INPUT" | "$JQ" -r '.tool_name // empty' 2>/dev/null || echo "")
-[ "$TOOL_NAME" = "Agent" ] || exit 0
-
-DESCRIPTION=$(echo "$INPUT" | "$JQ" -r '.tool_input.description // ""' 2>/dev/null || echo "")
+DESCRIPTION="$(hektor_role)"
 [ -n "$DESCRIPTION" ] || exit 0
 
 # Only the grouped dispatch shapes are gated.
-echo "$DESCRIPTION" | grep -qE '^[[:space:]]*\[(group|P3-batch)\]' || exit 0
+printf '%s' "$DESCRIPTION" | grep -qE '^[[:space:]]*\[(group|P3-batch)\]' || exit 0
 
-GUARD_CWD=$(echo "$INPUT" | "$JQ" -r '.cwd // "."' 2>/dev/null || echo ".")
-REPO_ROOT=$(git -C "$GUARD_CWD" rev-parse --show-toplevel 2>/dev/null || echo "$GUARD_CWD")
+REPO_ROOT="$(hektor_repo_root)"
 COV_STATE="$REPO_ROOT/docs/hektor/coverage-expansion-state.json"
 RUN_STATUS="$REPO_ROOT/docs/hektor/run-status.json"
 
-emit_deny() {
-  "$JQ" -n --arg r "$1" '{
-    "hookSpecificOutput": {
-      "hookEventName": "PreToolUse",
-      "permissionDecision": "deny",
-      "permissionDecisionReason": $r
-    }
-  }'
-}
+emit_deny() { hektor_deny "$1"; }
 
 RUN_MODE="standard"
 CURRENT_PASS=""
 
 if [ -f "$COV_STATE" ]; then
-  RAW_MODE=$("$JQ" -r '.runMode // "standard"' "$COV_STATE" 2>/dev/null || echo "standard")
+  RAW_MODE=$("$CC_JQ" -r '.runMode // "standard"' "$COV_STATE" 2>/dev/null || echo "standard")
   [ "$RAW_MODE" = "depth" ] && RUN_MODE="depth"
-  CURRENT_PASS=$("$JQ" -r '.currentPass // empty' "$COV_STATE" 2>/dev/null || echo "")
+  CURRENT_PASS=$("$CC_JQ" -r '.currentPass // empty' "$COV_STATE" 2>/dev/null || echo "")
   case "$CURRENT_PASS" in ''|*[!0-9]*) CURRENT_PASS="" ;; esac
 elif [ -f "$RUN_STATUS" ]; then
-  RAW_MODE=$("$JQ" -r '.runMode // "standard"' "$RUN_STATUS" 2>/dev/null || echo "standard")
+  RAW_MODE=$("$CC_JQ" -r '.runMode // "standard"' "$RUN_STATUS" 2>/dev/null || echo "standard")
   [ "$RAW_MODE" = "depth" ] && RUN_MODE="depth"
   # Pre-coverage-expansion phases are Pass-1-equivalent (leave CURRENT_PASS empty).
 fi

@@ -20,7 +20,7 @@ import org.springframework.context.annotation.Description;
 /**
  * Hektor flaky-triage KIT TOOL — NOT a coverage test, and NOT part of the suite tree.
  *
- * <p>This file lives entirely in the kit ({@code .claude/skills/hektor-flaky-triage/core/capture-src/})
+ * <p>This file lives entirely in the kit ({@code .cursor/skills/hektor-flaky-triage/core/capture-src/})
  * and is sourced into gradle ONLY at capture time by {@code core/capture.init.gradle} (an
  * {@code --init-script} that adds capture-src as a test source root). Normal CI builds never see it,
  * so it has zero suite footprint; it runs inside the real gradle test JVM, reusing the framework's

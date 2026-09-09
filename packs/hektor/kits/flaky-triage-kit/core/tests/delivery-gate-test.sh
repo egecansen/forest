@@ -2,7 +2,7 @@
 # core/tests/delivery-gate-test.sh — the Stop hook that refuses a session ending on an unproven fix.
 #
 # Two halves, blocking differently on purpose, so the suite is written in two registers:
-#   I11        — a property. Blocks EVERY stop, no stop_hook_active escape, no environment bypass.
+#   I11        — a property. Fires on EVERY stop, no loop-count escape, no environment bypass.
 #   hedge-scan — phrasing. Blocks ONCE; a false positive costs one turn.
 #
 # Two shapes of assertion need care here, because both can pass for the wrong reason:
@@ -18,7 +18,7 @@ HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # gate at core/adapters/, where it is simply absent — and an absent gate prints nothing, which is
 # what half the assertions below are checking for.
 KIT="$(cd "$HERE/../.." && pwd)"
-GATE="$KIT/adapters/claude/flaky-kit-delivery-gate.sh"
+GATE="$KIT/gates/flaky-kit-delivery-gate.sh"
 pass=0; fail=0
 ok()  { pass=$((pass+1)); }
 bad() { fail=$((fail+1)); echo "FAIL: $1" >&2; }
@@ -52,9 +52,9 @@ tx() {  # tx <file> <assistant-text> [<bash-command> ...]
 # docs/hektor/.hook-audit.log under the git toplevel of the CALLER's cwd, so a gate run from inside
 # the checkout writes into the checkout — a hundred lines of test traffic in the repo's real audit
 # trail, in the one file a reader consults to find out what a gate actually did.
-run_in() {  # run_in <gate> <cwd> <transcript> [stop_hook_active]
+run_in() {  # run_in <gate> <cwd> <transcript> [loop_count]
   ( cd "$2" && jq -cn --arg t "$3" --argjson a "${4:-false}" \
-      '{transcript_path:$t, stop_hook_active:$a}' | bash "$1" 2>/dev/null )
+      '{transcript_path:$t, loop_count:(if $a == true then 1 else 0 end), status:"completed"}' | bash "$1" 2>/dev/null )
 }
 audit_home() {  # audit_home <name> -> a scratch git repo whose docs/hektor/ the gate will write to
   local d="$WORK/audit-$1"
@@ -63,10 +63,11 @@ audit_home() {  # audit_home <name> -> a scratch git repo whose docs/hektor/ the
 }
 audit_log() { cat "$1/docs/hektor/.hook-audit.log" 2>/dev/null; }
 MAIN_HOME="$(audit_home main)"           # the scratch repo the unremarkable runs below write into
-run() {  # run <transcript> [stop_hook_active] -> stdout of the gate
+run() {  # run <transcript> [loop_count-nonzero] -> stdout of the gate
   run_in "$GATE" "$MAIN_HOME" "$1" "${2:-false}"
 }
-blocked() { case "$1" in *'"block"'*) return 0 ;; *) return 1 ;; esac; }
+# A stop hook cannot veto — it returns a followup_message, which is what "blocked" means here.
+blocked() { case "$1" in *'followup_message'*) return 0 ;; *) return 1 ;; esac; }
 
 # --- no kit invocation at all: silent. The kit runs standalone; a warning here is noise. --------
 tx "$WORK/t1" "All done."
@@ -100,16 +101,16 @@ jq -n '{clusters:[{id:"c9",status:"selected",title:"t"}],events:[]}' > "$WORK/se
 tx "$WORK/t4s" "Done." "$KIT/core/apply.sh c9" "$KIT/core/ledger.sh cluster-state $WORK/sel.json c9 selected"
 blocked "$(run "$WORK/t4s")" && ok || bad "a selected cluster must block as surely as an applied one"
 
-# --- the hard block has NO stop_hook_active escape --------------------------------------------
+# --- the hard check has NO loop-count escape --------------------------------------------------
 blocked "$(run "$WORK/t4" true)" && ok || bad "I11 must block even on a re-triggered stop"
 
 # --- a block is a VERDICT on stdout, not a failure ---------------------------------------------
 # The harness reads the decision object from stdout of a hook that exited 0; a non-zero exit is how
 # a hook reports its own breakage, and would be a different event entirely.
 OUT="$(run "$WORK/t4")"; RC=$?
-[ "$RC" -eq 0 ] && ok || bad "a block must be delivered by exit 0 with a decision object, not by a non-zero exit (got $RC)"
-printf '%s' "$OUT" | jq -se 'length==1 and (.[0]|type)=="object" and (.[0]|keys)==["decision","reason"] and .[0].decision=="block"' >/dev/null 2>&1 \
-  && ok || bad "stdout must carry exactly one {decision,reason} object and nothing else"
+[ "$RC" -eq 0 ] && ok || bad "a finding must be delivered by exit 0 with a followup object, not by a non-zero exit (got $RC)"
+printf '%s' "$OUT" | jq -se 'length==1 and (.[0]|type)=="object" and (.[0]|keys)==["followup_message"] and (.[0].followup_message|type)=="string"' >/dev/null 2>&1 \
+  && ok || bad "stdout must carry exactly one {followup_message} object and nothing else"
 
 # The reason is read by the agent as instruction. ledger.sh writes its unrelated integrity notice to
 # the same stream as its verdict, and that notice ends in 'core/lock-kit.sh lock (needs sudo)' — a
@@ -139,7 +140,7 @@ tx "$WORK/t4q" "Done." "$KIT/core/apply.sh c1" "\"$KIT/core/ledger.sh\" cluster-
 
 # --- a ledger path with a space in it: fail open, never an inescapable block --------------------
 # The extraction splits on whitespace, so this path cannot be recovered. What matters is which way it
-# fails. Blocking would be UNANSWERABLE: the I11 half has no stop_hook_active escape and no bypass, so
+# fails. Firing would be UNANSWERABLE: the I11 half has no loop-count escape and no bypass, so
 # following the block's own remedy — re-run core/ledger.sh with that path — reproduces the identical
 # block and the session loops with no way out. `mktemp -d` never contains a space, which is precisely
 # why no other fixture here can catch this.
@@ -213,22 +214,22 @@ for _b in bash sed git mkdir date basename uname cat chflags chattr; do
   _p="$(command -v "$_b" 2>/dev/null)" && ln -sf "$_p" "$NOJQ/$_b"
 done
 A_NOJQ="$(audit_home nojq)"
-NOJQ_OUT="$( cd "$A_NOJQ" && printf '{"transcript_path":"%s","stop_hook_active":false}' "$WORK/t4" \
+NOJQ_OUT="$( cd "$A_NOJQ" && printf '{"transcript_path":"%s","loop_count":0,"status":"completed"}' "$WORK/t4" \
              | PATH="$NOJQ" bash "$GATE" 2>/dev/null )"
 [ -z "$NOJQ_OUT" ] && ok || bad "a gate with no jq must fail open, not emit a half-built verdict"
 case "$(audit_log "$A_NOJQ")" in *"no jq"*) ok ;; *) bad "a gate with no jq must leave an audit line — it decided nothing, and that must not read as a clean session" ;; esac
 
 # --- the engine it checks against may be missing: fail open, and SAY so ------------------------
-# The gate ships to <proj>/.claude/hooks/ and the engine to <proj>/.claude/skills/hektor-flaky-
+# The gate ships to <proj>/.cursor/hooks/ and the engine to <proj>/.cursor/skills/hektor-flaky-
 # triage/core/. Rename the kit tree aside and the gate is still registered but has nothing to ask.
 # Blocking there would wedge every stop in the project; passing silently would look like a clean
 # session forever after.
 # Laid out as a real install with the kit tree removed, and nested deeply enough that BOTH paths the
 # gate probes land inside this fixture — a shallower copy would send `../../core` outside $WORK, and
 # the assertion would then depend on what happens to sit next to the temp directory.
-LONE="$WORK/lonely/.claude/hooks"; mkdir -p "$LONE/lib"
+LONE="$WORK/lonely/.cursor/hooks"; mkdir -p "$LONE/lib"
 cp "$GATE" "$LONE/flaky-kit-delivery-gate.sh"
-cp "$KIT/adapters/_lib/audit.sh" "$LONE/lib/audit.sh"
+cp "$KIT/gates/lib/audit.sh" "$LONE/lib/audit.sh"
 A_ENG="$(audit_home engine)"
 [ -z "$(run_in "$LONE/flaky-kit-delivery-gate.sh" "$A_ENG" "$WORK/t4")" ] \
   && ok || bad "a gate that cannot find its engine must fail open, not block"
@@ -259,7 +260,7 @@ OUT="$(run "$WORK/t1")"
 # exception, and the reason it is safe is the same one integrity-test.sh states: there is no value
 # for a caller to hijack, because bash sets it from the path it invoked.
 DG_OWN='BASH_SOURCE ACTIVE CHANGED CMDS CORE COUNTS DETAIL DOCS FOUND_LEDGER HIT INPUT JQ JQ_RC
-KIT_USED L LAST LEDGERS LEDGER_NAMED LINES MSG OPEN RAW RC TRANSCRIPT'
+KIT_USED L LAST LEDGERS LEDGER_NAMED LINES LOOPS MSG OPEN RAW RC TRANSCRIPT'
 # Comments stripped ONCE, and both scans read the stripped text. The assignment check below was
 # written against the raw file first and passed for a name that appeared only inside this gate's own
 # header ("the pack's delivery-gate.sh ships HEKTOR_DELIVERY_GATE=off") — a prose mention standing in

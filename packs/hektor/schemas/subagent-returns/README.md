@@ -4,9 +4,9 @@ Machine-readable contracts for what each Hektor subagent role must return to
 the orchestrator. JSON Schema (draft 2020-12). These are the **single source
 of truth** the schema hooks read:
 
-- `.claude/hooks/subagent-schema-preread-gate.sh` (PreToolUse:Agent) — denies a
+- `.cursor/hooks/subagent-schema-preread-gate.sh` (subagentStart) — denies a
   schema-validated dispatch whose brief doesn't cite its schema filename.
-- `.claude/hooks/subagent-return-schema-guard.sh` (PostToolUse:Agent) — WARNs
+- `.cursor/hooks/subagent-return-schema-guard.sh` (subagentStop) — flags
   when a return is missing a required field or violates a top-level enum.
 
 ## Role-prefix → schema map

@@ -220,7 +220,7 @@ grep -qxF -- "-k" "$SUDO_LOG" && ok \
 
 # --- a realistic install layout: both harnesses' gates + libs, and the out-of-tree record ----------
 # harden_targets() covered core/, [hooks/], SKILL.md, the CLAUDE gate and the kit root. It did NOT
-# cover the CURSOR gate, the Cursor libs, or .claude/hooks/lib/audit.sh — all three declared part of
+# cover the CURSOR gate, the Cursor libs, or .cursor/hooks/lib/audit.sh — all three declared part of
 # the safety surface by SURF_RE, core/shell-guard.py, the CODEOWNERS block and README.md, and
 # installed by install.sh whenever --harness includes cursor. So a Cursor user could run `lock`, read
 # "the safety surface … is owned by root", and still have their ONLY gate user-writable.
@@ -232,36 +232,36 @@ grep -qxF -- "-k" "$SUDO_LOG" && ok \
 # unaffected by the deletion). It is the Stop hook that refuses an unproven session; a user-writable
 # copy at the hardened tier is exactly the gap `lock` claims to have closed.
 : > "$SUDO_LOG"; unset SUDO_CHOWN_FAIL
-PROJ5="$TMP/proj5"; KIT5="$PROJ5/.claude/skills/hektor-flaky-triage"
-mkdir -p "$KIT5/core" "$PROJ5/.claude/hooks/lib" "$PROJ5/.cursor/hooks/lib"
+PROJ5="$TMP/proj5"; KIT5="$PROJ5/.cursor/skills/hektor-flaky-triage"
+mkdir -p "$KIT5/core" "$PROJ5/.cursor/hooks/lib" "$PROJ5/.cursor/hooks/lib"
 git -C "$PROJ5" init -q
 cp "$LOCK" "$KIT5/core/lock-kit.sh"; cp "$HERE/../_integrity.sh" "$KIT5/core/_integrity.sh"
 printf '{}\n' > "$KIT5/core/config.json"; printf 'x\n' > "$KIT5/SKILL.md"; chmod +x "$KIT5/core/lock-kit.sh"
-printf 'x\n' > "$PROJ5/.claude/hooks/flaky-kit-self-protection-gate.sh"
-printf 'x\n' > "$PROJ5/.claude/hooks/flaky-kit-delivery-gate.sh"
-printf 'x\n' > "$PROJ5/.claude/hooks/lib/audit.sh"
 printf 'x\n' > "$PROJ5/.cursor/hooks/flaky-kit-self-protection-gate.sh"
-printf 'x\n' > "$PROJ5/.cursor/hooks/lib/cursor-compat.sh"
+printf 'x\n' > "$PROJ5/.cursor/hooks/flaky-kit-delivery-gate.sh"
+printf 'x\n' > "$PROJ5/.cursor/hooks/lib/audit.sh"
+printf 'x\n' > "$PROJ5/.cursor/hooks/flaky-kit-self-protection-gate.sh"
+printf 'x\n' > "$PROJ5/.cursor/hooks/lib/cursor.sh"
 printf 'x\n' > "$PROJ5/.cursor/hooks/lib/audit.sh"
 export STAT_TARGETS="$KIT5/core:$KIT5"
 H5OUT="$(PATH="$SHIM:$PATH" "$KIT5/core/lock-kit.sh" lock 2>&1)"
 case "$H5OUT" in *"HARDENED "*) ok ;; *) bad "the install-shaped fixture must reach a complete hardened tier — got: $H5OUT" ;; esac
-chown_r_operands | grep -qxF "$PROJ5/.claude/hooks/flaky-kit-self-protection-gate.sh" && ok \
+chown_r_operands | grep -qxF "$PROJ5/.cursor/hooks/flaky-kit-self-protection-gate.sh" && ok \
   || bad "the Claude gate must be a chown operand"
-chown_r_operands | grep -qxF "$PROJ5/.claude/hooks/flaky-kit-delivery-gate.sh" && ok \
+chown_r_operands | grep -qxF "$PROJ5/.cursor/hooks/flaky-kit-delivery-gate.sh" && ok \
   || bad "the delivery gate must be a chown operand — it is the Stop hook that refuses an unproven session, and a user-writable copy at the hardened tier defeats the point of locking"
 chown_r_operands | grep -qxF "$PROJ5/.cursor/hooks/flaky-kit-self-protection-gate.sh" && ok \
   || bad "the CURSOR gate must be a chown operand — install.sh installs it and it is a Cursor user's only gate"
-chown_r_operands | grep -qxF "$PROJ5/.cursor/hooks/lib/cursor-compat.sh" && ok \
+chown_r_operands | grep -qxF "$PROJ5/.cursor/hooks/lib/cursor.sh" && ok \
   || bad "the Cursor gate's vendored compat lib must be a chown operand — SURF_RE declares .cursor/hooks/lib/ part of the surface"
 chown_r_operands | grep -qxF "$PROJ5/.cursor/hooks/lib/audit.sh" && ok \
   || bad "the Cursor audit lib must be a chown operand"
-chown_r_operands | grep -qxF "$PROJ5/.claude/hooks/lib/audit.sh" && ok \
+chown_r_operands | grep -qxF "$PROJ5/.cursor/hooks/lib/audit.sh" && ok \
   || bad "the Claude audit lib must be a chown operand — it is the file that records the unlock"
 # The out-of-tree record: lock must write the tier it achieved, because the gates' shadow check reads
 # exactly this file. Nothing asserted this before, and deleting the write left the whole suite green.
-[ -f "$PROJ5/.claude/hooks/.flaky-kit-expect" ] && ok || bad "lock must mirror the tier OUTSIDE the kit tree in .claude/hooks/.flaky-kit-expect"
-[ "$(cat "$PROJ5/.claude/hooks/.flaky-kit-expect" 2>/dev/null)" = hardened ] && ok \
+[ -f "$PROJ5/.cursor/hooks/.flaky-kit-expect" ] && ok || bad "lock must mirror the tier OUTSIDE the kit tree in .cursor/hooks/.flaky-kit-expect"
+[ "$(cat "$PROJ5/.cursor/hooks/.flaky-kit-expect" 2>/dev/null)" = hardened ] && ok \
   || bad "the out-of-tree record must say 'hardened' after a hardened lock — the gates' shadow check keys off this exact value"
 # status must surface the OUT-OF-TREE paths too: they are hardened targets that live outside $KIT and
 # would otherwise never be reportable, which is how a Cursor user would never learn their gate was missed.
@@ -281,7 +281,7 @@ grep -qxF "chown $(id -un) $KIT5" "$SUDO_LOG" && ok \
   || bad "a hardened unlock must chown the kit ROOT back, non-recursively, mirroring lock"
 grep '^chown -R ' "$SUDO_LOG" | tr ' ' '\n' | grep -qxF "$KIT5" \
   && bad "the kit root must not be an operand of unlock's 'chown -R' either — same source-checkout hazard as lock" || ok
-[ "$(cat "$PROJ5/.claude/hooks/.flaky-kit-expect" 2>/dev/null)" = unlocked ] && ok \
+[ "$(cat "$PROJ5/.cursor/hooks/.flaky-kit-expect" 2>/dev/null)" = unlocked ] && ok \
   || bad "unlock must refresh the out-of-tree record to 'unlocked' — leaving it at 'hardened' makes every legitimate maintenance window look like a shadowed kit to both gates"
 grep -qxF -- "-k" "$SUDO_LOG" && ok || bad "unlock must end its privileged section with 'sudo -k' as well"
 

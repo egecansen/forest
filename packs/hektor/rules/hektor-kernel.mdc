@@ -1,0 +1,123 @@
+---
+description: Hektor QA methodology for the sahibinden Selenium/JUnit suite — the routing table, the testbox contract, and the dispatch conventions the enforcement gates key on. Always applied; the detail lives in the skills it points at.
+alwaysApply: true
+---
+
+# Hektor
+
+QA authoring and triage for `web-test` (`*Page/*Layout/*Test.java`) and
+`test-data-client` (`*ResourceClient/AbName.java`). This rule is the router and
+the cross-cutting facts only — every method lives in a skill, so nothing here is
+restated there.
+
+## Read the kernel before writing Java
+
+Every PR is scanned by a bot that marks it **Needs Work** on a BLOCKER. Two
+skills encode those rules, and they auto-attach when you open a file they govern:
+
+- `hektor-conventions` — `web-ui-test/`. Read before any `*Page.java`,
+  `*Layout.java`, `*Test.java`.
+- `hektor-resource-client` — `test-data-client/`. Read before any
+  `*ResourceClient.java` or `AbName.java`.
+
+Invoke either explicitly with `/hektor-conventions` / `/hektor-resource-client`.
+Don't guess these rules from surrounding code — the suite has drifted in places
+the reviewer still rejects.
+
+## Ticket entry — a Jira link IS the instruction
+
+A prompt that names a ticket of this org (`SHBDN-*`, `WEBT-*`, `RAL-*`, `TDC-*`)
+is a ticket-driven entry, even when it is *only* a bare URL with a box after it:
+
+```
+https://jira.sahibinden.com/browse/SHBDN-254949 - tb39
+```
+
+That shape is the house shorthand for "do this ticket on that box". Route it:
+
+| Prompt names | Skill |
+|---|---|
+| ONE ticket | `hektor-from-jira` |
+| TWO OR MORE tickets | `hektor-multi-ticket` |
+
+Invoke the skill **before** anything else — before fetching the ticket, opening
+files, or asking a clarifying question. The single exception: if the user only
+wants the ticket READ or SUMMARISED and not acted on, answer directly.
+
+A `jira.sahibinden.com` URL is never an s-report URL — it does **not** route to
+`hektor-flaky-triage`. That skill wants a `report-with-elastic-data...` link.
+
+## Testbox hosts are internal — never a public domain
+
+The box URL is built by `build.gradle.kts` as `http://<dc>tb<dc><id>`, and its
+FQDN is `<dc>tb<dc><id>.sahibindenlocal.net`:
+
+```
+tbx39  ->  http://xtbx39        FQDN xtbx39.sahibindenlocal.net
+tby39  ->  http://ytby39        FQDN ytby39.sahibindenlocal.net
+```
+
+**`tb39.sahibinden.com` and anything else under `sahibinden.com` is PRODUCTION,
+not a testbox.** Never construct a box URL from the public domain, never browse
+to one, and when curling a box pin the host on every hop
+(`curl -H "Host: www.sahibinden.com" http://<dc>tb<dc><id>:9081/`) — a redirect
+that loses the pin silently reads production and invalidates the evidence.
+
+A bare `tb<NN>` omits the data centre, so it is NOT yet a usable box. Resolve it
+by asking once — *"tbx39 or tby39?"* — and never assume `x`.
+
+## Testbox precondition
+
+No skill that runs tests may start without a **reserved, named** testbox. Parse
+the user's `tbx<id>` / `tby<id>` once, build the flag string, and store it in
+`docs/hektor/run-status.json` under `testbox`. Every downstream skill pastes
+`testbox.gradleArgs` verbatim — nobody re-assembles it per command.
+
+```
+tbx161 → dataCenter x, id 161
+  targetUrl        http://xtbx161            (build.gradle.kts:628)
+  gradleArgs       -Denv.launchpad=selenoid -Denv.data.center=x -Dui.testbox=161
+  gradleArgsLocal  -Denv.launchpad=local
+```
+
+If the ledger has no `testbox` block when a test-running skill is about to
+dispatch, stop and ask once: *"Which testbox? e.g. `tbx161`"*. Do not guess one,
+and do not fall back to local to avoid asking.
+
+Every `gradle test` also needs `--no-build-cache`, and must be wrapped in a box
+lease when more than one ticket is in flight (`hektor-multi-ticket`).
+
+## Dispatching a subagent
+
+The gates read a role label from the **first line of the task**:
+
+```
+role: composer-j-hybrid-search-istanbul
+<the rest of the brief>
+```
+
+Prefixes: `composer-*`, `probe-*`, `diagnosis-*`, `workflow-reviewer-*`,
+`phase-validator-*`. A brief for one of these must also name its return schema
+(`.cursor/schemas/subagent-returns/*.schema.json`) or the dispatch is denied.
+Full table: `.cursor/agents/README.md`.
+
+## What is enforced, not suggested
+
+Gates in `.cursor/hooks/` veto rather than advise. Live rules:
+
+- The agent never `git commit` / `git push` — you review the tree and commit.
+- Destructive shell (`rm -rf`, `git reset --hard`, `git clean -f`, stash drop) is
+  blocked.
+- A write that trips a PR-reviewer BLOCKER is blocked before it lands.
+- `docs/hektor/journey-map.md` line 1 must be the `<!-- hektor:journey-mapping -->`
+  sentinel.
+- A ledger approval requires a reviewer subagent to have actually run.
+
+Each has its own kill switch (`HEKTOR_COMMIT_GATE=off`, …) for a deliberate,
+documented exception. `HEKTOR_CURSOR_HOOKS=off` disables all of it.
+
+## Never
+
+Weaken an assertion, loosen a locator, `Thread.sleep` to force timing, or
+disable/quarantine a test to go green. A red test with correct code is a
+finding. `@ScheduledDisable` always needs a `reason`.

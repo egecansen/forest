@@ -1,7 +1,7 @@
 {
   "name": "hektor-flaky-triage",
-  "version": "1.0.10",
-  "description": "Flaky-test triage kit: an engine, two enforced gates and a skill, installed into a repo for Claude Code, Cursor or any AGENTS.md-reading agent.",
+  "version": "1.0.11",
+  "description": "Flaky-test triage kit: an engine, two enforced gates and a skill, installed into a repo as native Cursor assets.",
   "bin": {
     "hektor-triage-kit": "./hektor-triage-kit"
   },
@@ -11,14 +11,14 @@
   "files": [
     "core/",
     "core/.gitignore",
-    "adapters/",
+    "skill/",
+    "gates/",
     "install.sh",
     "hektor-triage-kit",
     "README.md",
     "kernel.md",
     "INTEGRATION.md",
     "CHANGELOG.md",
-    "cross-harness.md",
     "enforcement-codeowners.md"
   ],
   "license": "UNLICENSED",
