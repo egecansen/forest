@@ -1,0 +1,16 @@
+# core/.lock-state — written by lock-kit.sh's write_state(). It describes the TREE IT SITS IN
+# (see install.sh's matching fix), never the repo/pack it happens to be committed from. A
+# committed record would travel to every clone or fork, claiming a lock event that never happened
+# to THEIR copy — and at "hardened" that reads back as `mismatch` (_integrity.sh's integrity_tier),
+# which REFUSES every entrypoint. It has never been committed here; this just makes that permanent.
+#
+# This file lives under core/ specifically so it ships WITH the kit: install.sh's
+# `cp -R "$HERE/core/." "$SKILL_DIR/core/"` carries it into every installed project too, so the
+# same protection follows downstream instead of only covering this repo's own copy.
+.lock-state
+
+# .version — written by install.sh into an INSTALLED kit, never present in the
+# source. Listed here as insurance against one being created by hand: a source
+# .version would be copied by install.sh's `cp -R` and would then describe the
+# wrong tree, which is exactly the .lock-state defect above.
+.version

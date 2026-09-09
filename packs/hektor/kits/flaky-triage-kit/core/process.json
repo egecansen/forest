@@ -1,0 +1,146 @@
+{
+  "schema": "hektor-flaky-triage/process@1",
+  "_": [
+    "THE process definition. Phases, cluster statuses, buckets and tiers are CLOSED",
+    "enums owned by the kit; every driver (SKILL.md, the Cursor rule, Hektor Console,",
+    "a terminal session) renders these names and no others.",
+    "",
+    "Why this file exists: these enums used to be restated in each surface, and they",
+    "drifted. `confirm` sat in the ledger's phase list and in no driver's UI, so the",
+    "console silently swallowed every confirm event; `resolved-upstream` was collapsed",
+    "into `green`, which turned 'someone else already fixed this' into 'we proved this",
+    "green'. Buckets never drifted — because kernel.md §5.1 called them a closed enum",
+    "in one place and both sides copied that one place. This file is that one place",
+    "for all four vocabularies.",
+    "",
+    "Consumers: core/ledger.sh validates against the same sets (core/tests/process-",
+    "parity-test.sh proves the two agree); INTEGRATION.md documents them for callers."
+  ],
+
+  "phases": [
+    {
+      "id": "ingest",
+      "order": 1,
+      "label": "Ingest",
+      "summary": "Pin the build by @timestamp and pull its FAILED docs.",
+      "detail": "Anti-stale: build numbers are reused, so the build is resolved by exact name AND timestamp. Ends with a cheap testbox health-check — a broken box invalidates every verdict downstream, so it is checked before anything is clustered."
+    },
+    {
+      "id": "cluster",
+      "order": 2,
+      "label": "Cluster",
+      "summary": "Group the failures by a root cause a human recognises.",
+      "detail": "core/cluster.sh makes a mechanical first cut by exception signature; the driver re-groups it into meaning buckets. Ordered easy-fix first, likely-bug last."
+    },
+    {
+      "id": "pick",
+      "order": 3,
+      "label": "Pick",
+      "summary": "The operator chooses which clusters to take. One decision.",
+      "detail": "The first of only two human gates. Nothing has been rerun yet — this table is built straight from the ingested report."
+    },
+    {
+      "id": "confirm",
+      "order": 4,
+      "label": "Confirm",
+      "summary": "Rerun the picked clusters to separate real failures from flaky ones.",
+      "detail": "Runs before any edit. A test that passes here was never broken — it is dismissed rather than 'fixed'. This is the slowest phase before a fix exists, which is why it is a phase and not a footnote: the operator is watching a testbox run, not a stalled pick."
+    },
+    {
+      "id": "fix",
+      "order": 5,
+      "label": "Fix",
+      "summary": "Apply the fix to the working tree and compile-check it.",
+      "detail": "core/apply.sh writes only inside the configured source roots and never commits; core/compile.sh catches a broken edit before it costs a testbox run."
+    },
+    {
+      "id": "verify",
+      "order": 6,
+      "label": "Verify",
+      "summary": "Green-proof on the testbox: pass^N, graded by core/gate.sh.",
+      "detail": "One green run is not proof — a flaky test passes about half the time, so a single green is the likeliest false 'fixed'. The fixer does not grade its own work: only gate.sh's decision:\"accepted\" counts."
+    },
+    {
+      "id": "report",
+      "order": 7,
+      "label": "Report",
+      "summary": "The round's scoreboard. The operator reviews the diff and commits.",
+      "detail": "The second and last human gate. Converging is not finishing — the operator decides when the triage is over."
+    }
+  ],
+
+  "clusterStatus": {
+    "proposed": {
+      "terminal": false,
+      "to": ["selected", "deferred", "resolved-upstream"],
+      "label": "Proposed",
+      "meaning": "On the table, not yet chosen."
+    },
+    "selected": {
+      "terminal": false,
+      "to": ["applied", "deferred", "flagged", "resolved-upstream"],
+      "label": "Picked",
+      "meaning": "The operator chose it. Work is owed on it — a session may not end here (I11)."
+    },
+    "applied": {
+      "terminal": false,
+      "to": ["green", "flagged", "deferred", "resolved-upstream"],
+      "label": "Fixing",
+      "meaning": "A fix is in the working tree, unproven. A session may not end here either (I11). Carries passes/runs once green-proof starts.",
+      "progressFields": ["passes", "runs"]
+    },
+    "green": {
+      "terminal": true,
+      "reopenable": true,
+      "to": ["selected"],
+      "label": "Green",
+      "meaning": "Fixed and proven: gate.sh accepted it over N runs."
+    },
+    "flagged": {
+      "terminal": true,
+      "reopenable": true,
+      "to": ["selected"],
+      "label": "Suspected bug",
+      "meaning": "The app broke its contract, or the element vanished. Evidence recorded, nothing filed — the kit never opens a ticket."
+    },
+    "deferred": {
+      "terminal": true,
+      "reopenable": true,
+      "to": ["selected"],
+      "label": "Deferred",
+      "meaning": "Not pursued this round. Reversible on purpose: the operator can ask for it back, and parking here is how a turn ends cleanly."
+    },
+    "resolved-upstream": {
+      "terminal": true,
+      "reopenable": false,
+      "to": [],
+      "label": "Already fixed",
+      "meaning": "Current code already handles it — someone else fixed it. NOT the same claim as `green`: nothing was proven on the box. A driver that renders this as green overstates what the run did.",
+      "note": "The one terminal status that does NOT reopen. green/flagged/deferred are decisions about work, and the operator routinely revisits those. This one is an assertion about current code — kernel §6 says don't re-litigate it. A driver must not offer 'reopen' here: ledger.sh refuses the transition, and the operator gets an error they cannot act on. If the assertion was wrong, the failure resurfaces in the next round's re-cluster on its own."
+    }
+  },
+
+  "buckets": [
+    { "id": "easy-fix",   "order": 1, "label": "Easy fix",     "meaning": "A known recipe applies — overlay dismissal, empty-list guard." },
+    { "id": "selector",   "order": 2, "label": "Selector",     "meaning": "The element still exists under a different locator. Re-locate by a robust sibling, never the golden brittle id." },
+    { "id": "vrt",        "order": 3, "label": "Visual diff",  "meaning": "Visual-regression baseline drift. Advisory — a human reviews baseline vs regression." },
+    { "id": "app-change", "order": 4, "label": "App changed",  "meaning": "The app changed intentionally and the test's assumption is stale." },
+    { "id": "infra",      "order": 5, "label": "Infra",        "meaning": "Flaky timing, a per-box confound, or data/flag dependence. Not a code fix." },
+    { "id": "likely-bug", "order": 6, "label": "Likely bug",   "meaning": "The test is self-consistent and the app broke its contract. Flag it, never 'fix' it." }
+  ],
+
+  "tiers": [
+    { "id": 1, "label": "Clean fix",   "meaning": "Test-local, single file, high confidence." },
+    { "id": 2, "label": "Moderate",    "meaning": "Data or assertion resilience, still test-local." },
+    { "id": 3, "label": "Risky",       "meaning": "Touches a shared Page/Layout — green-proof must widen to the blast radius." },
+    { "id": 4, "label": "Investigate", "meaning": "Suspected app-bug, or too ambiguous to call." }
+  ],
+
+  "testStatus": ["red", "green", "skipped"],
+
+  "ledger": {
+    "dir": ".hektor",
+    "filePattern": "ledger-<build>.json",
+    "note": "The kit imposed no path convention, so every caller invented one — two real runs wrote two ledgers for the same build and neither driver could find the other's. `ledger.sh path <build>` resolves this convention; drivers should call it rather than inventing a path."
+  }
+}

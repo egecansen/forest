@@ -1,0 +1,149 @@
+{
+  "version": 1,
+  "pack": "hektor",
+  "description": "Hektor QA skill set — pick skills + kits to load into a Claude session.",
+  "groups": [
+    "core",
+    "discovery",
+    "authoring",
+    "triage",
+    "specialized"
+  ],
+  "skillsets": [
+    {
+      "id": "hektor-bug-discovery",
+      "label": "Bug Discovery",
+      "group": "discovery",
+      "description": "Adversarially probe the sahibinden app for behaviour the existing suite doesn't lock — race conditions, lifecycle edges, gated routes…"
+    },
+    {
+      "id": "hektor-conventions",
+      "label": "Conventions",
+      "group": "core",
+      "description": "The framework-rules kernel for sahibinden/web-test. Use BEFORE writing any *Page.java, *Layout.java, or *Test.java file. Captures the rules from…"
+    },
+    {
+      "id": "hektor-coverage-expansion",
+      "label": "Coverage Expansion",
+      "group": "discovery",
+      "description": "Iteratively expand test coverage across a sahibinden domain (or the whole suite) by walking docs/hektor/journey-map.md in priority order, dispatching…"
+    },
+    {
+      "id": "hektor-distill",
+      "label": "Distill",
+      "group": "specialized",
+      "description": "Mine docs/hektor/observations.jsonl (from the observe.sh hook) + the recent diff via one Haiku pass to PROPOSE MEMORY.md entries — never auto-writes. On-demand memory loop."
+    },
+    {
+      "id": "hektor-edr-contract",
+      "label": "Edr Contract",
+      "group": "specialized",
+      "description": "Lock the Kafka EDR (event-driven reporting) contract between the web app and downstream analytics — event name, action enum, field shape — so a…"
+    },
+    {
+      "id": "hektor-failure-diagnosis",
+      "label": "Failure Diagnosis",
+      "group": "triage",
+      "description": "Diagnose a SINGLE failing JUnit test in web-ui-test via evidence-based triage — Selenoid VNC artefacts, screenshots from web-ui-test/temp/images/…"
+    },
+    {
+      "id": "hektor-from-jira",
+      "label": "From Jira",
+      "group": "authoring",
+      "description": "Ticket-driven test authoring: take a Jira ticket ID, fetch the ticket + one hop of linked tickets via the Atlassian MCP, distil the acceptance…"
+    },
+    {
+      "id": "hektor-journey-mapping",
+      "label": "Journey Mapping",
+      "group": "discovery",
+      "description": "Map user journeys for a sahibinden domain (search / classified posting / classified detail / myaccount / yepy / london / shopping / etc.) BEFORE…"
+    },
+    {
+      "id": "hektor-orchestrator",
+      "label": "Orchestrator",
+      "group": "core",
+      "description": "Root router for the Hektor methodology on the sahibinden/web-test Selenium + JUnit 5 suite. Use when the user invokes Hektor in plain English…"
+    },
+    {
+      "id": "hektor-page-authoring",
+      "label": "Page Authoring",
+      "group": "authoring",
+      "description": "Author or modify *Page.java and *Layout.java files in web-ui-test/src/main/java/com/sahibinden/web/client/. Use BEFORE writing tests that target a…"
+    },
+    {
+      "id": "hektor-qagent",
+      "label": "Qagent",
+      "group": "specialized",
+      "description": "The retrieval kernel for sahibinden's QA corpus — a read-only ChromaDB (Gemini-embedded) semantic index of EVERY existing test (web + Android + iOS)…"
+    },
+    {
+      "id": "hektor-resource-client",
+      "label": "Resource Client",
+      "group": "authoring",
+      "description": "The framework-rules kernel for sahibinden/test-data-client — the sibling repo holding the *ResourceClient beans web-test injects. Use BEFORE writing…"
+    },
+    {
+      "id": "hektor-security-zap",
+      "label": "Security Zap",
+      "group": "specialized",
+      "description": "Drive security probes via the framework's @ZapSecurityTest + OWASP ZAP client (zapClientApiVersion in build.gradle.kts) to lock the surface against…"
+    },
+    {
+      "id": "hektor-skill-stocktake",
+      "label": "Skill Stocktake",
+      "group": "specialized",
+      "description": "Periodic quality audit of the Hektor pack itself — Keep/Improve/Update/Retire/Merge per skill with an mtime quick-scan. On-demand maintenance; pairs with `hektor doctor`."
+    },
+    {
+      "id": "hektor-test-catalogue",
+      "label": "Test Catalogue",
+      "group": "authoring",
+      "description": "Produce a stakeholder-facing inventory of the existing 940-test suite — organised by Kure, domain, surface, and priority — that answers \"what…"
+    },
+    {
+      "id": "hektor-test-composer",
+      "label": "Test Composer",
+      "group": "authoring",
+      "description": "Compose the full test portfolio for ONE journey block from docs/hektor/journey-map.md — happy path, error states, edge cases, mobile variants…"
+    },
+    {
+      "id": "hektor-test-repair",
+      "label": "Test Repair",
+      "group": "triage",
+      "description": "Batch-heal a rotted JUnit test suite by clustering failures by shared root cause and applying fixes per cluster instead of one-by-one. Triggers on…"
+    },
+    {
+      "id": "hektor-verify",
+      "label": "Verify",
+      "group": "core",
+      "description": "Evidence-first single-change verification — run one focused check against the live app or a local dev build and produce an artefact bundle a…"
+    },
+    {
+      "id": "hektor-visual-regression",
+      "label": "Visual Regression",
+      "group": "specialized",
+      "description": "Manage Visual Regression Tracker (VRT) baselines for sahibinden using the framework's @VisualRegressionTest / @ParametrizedVisualRegressionTracker…"
+    },
+    {
+      "id": "hektor-work-summary-deck",
+      "label": "Work Summary Deck",
+      "group": "specialized",
+      "description": "Generate a branded HTML deck (optionally rendered to PDF) summarising Hektor's QA output — new test classes, methods added, coverage growth…"
+    }
+  ],
+  "kits": [
+    {
+      "id": "flaky-triage-kit",
+      "label": "Flaky Triage kit",
+      "path": "kits/flaky-triage-kit"
+    }
+  ],
+  "hooks": {
+    "id": "hektor-gates",
+    "label": "Gate hooks (enforcement)",
+    "description": "Advisory commit / dispatch-ordering / reviewer / schema gates, merged into .claude/settings.local.json. Kill-switch: HEKTOR_HOOKS=off.",
+    "dir": "hooks",
+    "schemas": "schemas",
+    "settings": "settings.hooks.json"
+  }
+}

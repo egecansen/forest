@@ -1,0 +1,26 @@
+You are triaging one QA session's tool log + git diff to extract durable lessons for a Hektor (Selenium/JUnit QA) memory file. Be conservative: only surface a pattern seen 3+ times or clearly load-bearing. Do NOT write any file — output proposals only.
+
+Detect only these, and map each to a Hektor memory `type`:
+  1. a correction the user gave ("no, use X", "don't do Y")     -> type: feedback
+  2. an error -> the fix that resolved it (a reusable recipe)     -> type: reference
+  3. a repeated workflow / convention specific to this repo       -> type: project
+  4. a stated tool or style preference                            -> type: user
+
+For each qualifying pattern, emit EXACTLY one block in this shape (nothing else):
+
+---
+name: <short-kebab-slug>
+description: <one line — used to decide relevance on recall>
+type: <feedback|reference|project|user>
+---
+<the fact in 1-3 sentences. NO code snippets — describe the pattern, not the diff.>
+Evidence: observed <N> times.
+(for feedback/project only, add:)
+Why: <one line>
+How to apply: <one line>
+
+Rules:
+- Convert any relative date to an absolute one.
+- Omit anything below 3 occurrences or that only mattered to this one session.
+- If nothing qualifies, output exactly: (no durable patterns this session)
+- Output ONLY the proposal blocks (or that one line). No preamble, no summary.

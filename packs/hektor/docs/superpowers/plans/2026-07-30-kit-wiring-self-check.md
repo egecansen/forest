@@ -1,0 +1,890 @@
+# Kit Wiring Self-Check Implementation Plan
+
+> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
+
+**Goal:** Make the kit notice when its own gate is not actually wired, and stop an agent from silently deleting the registration that wires it.
+
+**Architecture:** A second axis alongside the existing lock tier. `integrity_wiring` answers "will the gate actually run?" from the harness settings files and the gate file on disk; `integrity_report` takes both axes and refuses only when a `hardened` tier has lost its wiring. The gates gain the settings files as surface — asymmetrically, because Write/Edit can inspect the proposed outcome and Bash cannot.
+
+**Tech Stack:** bash 3.2-compatible shell, `jq`, POSIX `stat`, the kit's plain-bash test suites (`core/tests/*.sh`, `ok()`/`bad()` counters, exit on `$fail -eq 0`).
+
+**Spec:** `docs/superpowers/specs/2026-07-30-kit-wiring-self-check-design.md` (commit `06b9f05`)
+
+## Global Constraints
+
+- **bash 3.2 compatible** — macOS system bash. No associative arrays, no `${var^^}`.
+- **`_integrity.sh` must never wedge a caller.** Every function returns 0 and prints its answer; a broken check must not break the kit. `jq` unavailable, unreadable settings, or a non-installed layout all resolve to `absent` and print nothing.
+- **stderr only.** Four entrypoints (`rerun`, `gate`, `ledger`, `summary`) emit a machine-read contract on stdout.
+- **`stat` is not portable:** BSD/macOS `stat -f %u`, GNU `stat -c %u`. `integrity_owner_uid` already branches on `uname -s` — reuse it, do not re-implement.
+- **No environment override may enter `_integrity.sh`.** `core/tests/integrity-test.sh` greps the file to prove it: a variable that lets a caller fake the answer is a skeleton key to this very check. Test seams run through function boundaries.
+- **Do NOT run `core/lock-kit.sh lock`/`unlock`** against the real kit, and never without `HEKTOR_FK_NO_SUDO=1` — a bare `lock` shells out to `sudo chown -R root` and will hang on a password prompt you cannot answer. Use `mktemp -d` fixtures.
+- **Run `core/tests/lock-tier-test.sh` unmodified** — a blanket `HEKTOR_FK_NO_SUDO=1` over the whole file breaks its own PATH-shimmed-sudo section and yields spurious failures. Five people have hit this.
+- **No bare `git stash`** — the stash stack is shared across worktrees and sessions.
+- **Commit messages carry no AI trailers** — no `Co-Authored-By`, no "Generated with", no session link.
+- **All 461 existing assertions must stay green.** Derive and state your own totals rather than adopting a number from this plan; four earlier tasks corrected the author's arithmetic and all four were right.
+- **Mutation is the only accepted evidence for a new security assertion.** Eight assertions in the preceding lock work passed without testing what they named — every one found by mutation, none by reading, and two were introduced by the fix wave correcting the others. For each assertion you add, break what it names and show the suite goes red.
+
+---
+
+## File Structure
+
+| File | Status | Responsibility |
+|---|---|---|
+| `core/_integrity.sh` | modify | Add `integrity_project_root`, `integrity_wiring`, the two per-harness helpers, the worse-wins combiner; extend `integrity_report` to two axes; compose both axes in `integrity_guard` |
+| `core/tests/integrity-test.sh` | modify | Fixtures for all six wiring values, the tier × wiring matrix, the fixture-reaches-non-absent control, the no-override grep (already present — keep it passing) |
+| `install.sh` (kit) | modify | Record the `--harness` selection in `core/.harness`, inside the protected surface, so the wiring check requires exactly the harnesses the kit was installed for |
+| `adapters/claude/flaky-kit-self-protection-gate.sh` | modify | Settings files in `SURF_RE`/`match_surface` (Bash branch); outcome inspection in the Write/Edit branch |
+| `adapters/cursor/flaky-kit-self-protection-gate.sh` | modify | The same two changes, byte-identical patterns |
+| `core/shell-guard.py` | modify | Settings files in its own `SURF` — it is the primary Bash decision path, not the gates' grep |
+| `core/tests/self-protection-test.sh` | modify | Bash-branch and Write/Edit-branch assertions for the settings files |
+| `core/README.md`, `kernel.md`, `core/lock-kit.sh` header | modify | Describe the second axis and what it does not cover |
+
+---
+
+## Task 1: `integrity_wiring` and its fixtures
+
+**Files:**
+- Modify: `kits/flaky-triage-kit/core/_integrity.sh`
+- Modify: `kits/flaky-triage-kit/core/tests/integrity-test.sh`
+- Modify: `kits/flaky-triage-kit/install.sh`
+
+**Interfaces:**
+- Produces: `integrity_project_root <kit_root>` → the project root, or empty when the kit is not in an installed layout. Always returns 0.
+- Produces: `integrity_wiring <kit_root> <tier>` → one of `wired|unregistered|dangling|foreign|partial|absent`. Always returns 0.
+- Produces: `core/.harness` — one line, the `--harness` value the kit was installed with (`all|both|claude|cursor|agents`). Written by `install.sh`, read by `integrity_wiring`.
+- Consumes: `integrity_owner_uid` (already in the file).
+- Task 2 composes both into `integrity_guard`.
+
+- [ ] **Step 1: Write the failing tests**
+
+Append to `core/tests/integrity-test.sh`, before its final `echo`:
+
+```bash
+# --- integrity_project_root: verify the SHAPE, never a level count -------------------
+PR="$(mktemp -d)"
+mkdir -p "$PR/proj/.claude/skills/hektor-flaky-triage/core"
+[ "$(integrity_project_root "$PR/proj/.claude/skills/hektor-flaky-triage")" = "$PR/proj" ] \
+  && ok || bad "project root must be derived from an installed layout"
+mkdir -p "$PR/wrong/skills/hektor-flaky-triage"
+[ -z "$(integrity_project_root "$PR/wrong/skills/hektor-flaky-triage")" ] \
+  && ok || bad "a layout whose grandparent is not .claude must yield no project root"
+mkdir -p "$PR/nope/.claude/plugins/hektor-flaky-triage"
+[ -z "$(integrity_project_root "$PR/nope/.claude/plugins/hektor-flaky-triage")" ] \
+  && ok || bad "a layout whose parent is not skills must yield no project root"
+[ -z "$(integrity_project_root "$PR/proj/.claude/skills")" ] \
+  && ok || bad "a directory not named hektor-flaky-triage must yield no project root"
+[ -z "$(integrity_project_root)" ] && ok || bad "no argument must yield no project root, not an error"
+
+# --- integrity_wiring: one fixture builder, six outcomes ----------------------------
+# wire_fixture <dir> — an installed layout with both harnesses correctly registered.
+wire_fixture() {
+  local d="$1" k="$1/.claude/skills/hektor-flaky-triage"
+  mkdir -p "$k/core" "$d/.claude/hooks" "$d/.cursor/hooks"
+  printf 'x\n' > "$d/.claude/hooks/flaky-kit-self-protection-gate.sh"
+  printf 'x\n' > "$d/.cursor/hooks/flaky-kit-self-protection-gate.sh"
+  cat > "$d/.claude/settings.json" <<'JSON'
+{"hooks":{"PreToolUse":[
+  {"matcher":"Write|Edit","hooks":[{"type":"command","command":"\"$CLAUDE_PROJECT_DIR/.claude/hooks/flaky-kit-self-protection-gate.sh\""}]},
+  {"matcher":"Bash","hooks":[{"type":"command","command":"\"$CLAUDE_PROJECT_DIR/.claude/hooks/flaky-kit-self-protection-gate.sh\""}]}
+]}}
+JSON
+  cat > "$d/.cursor/hooks.json" <<'JSON'
+{"version":1,"hooks":{
+  "beforeShellExecution":[{"command":".cursor/hooks/flaky-kit-self-protection-gate.sh"}],
+  "preToolUse":[{"command":".cursor/hooks/flaky-kit-self-protection-gate.sh","matcher":"Write|Edit"}]
+}}
+JSON
+  echo "$k"
+}
+W="$(mktemp -d)"; K1="$(wire_fixture "$W/a")"
+
+# CONTROL, required: prove the fixture actually reaches a non-absent state. `absent` silences every
+# assertion below, so a fixture that quietly fails to look installed would make them all vacuously
+# pass — which is exactly how C1's "the fixture was too kind" defect survived a full review.
+[ "$(integrity_wiring "$K1" degraded)" != absent ] \
+  && ok || bad "CONTROL: the fixture must reach a non-absent wiring state, or every assertion below is vacuous"
+[ "$(integrity_wiring "$K1" degraded)" = wired ] && ok || bad "a correctly registered fixture must be wired"
+
+# dangling: registered, file gone — the case observed live in a web-test worktree
+K2="$(wire_fixture "$W/b")"; rm -f "$W/b/.claude/hooks/flaky-kit-self-protection-gate.sh"
+[ "$(integrity_wiring "$K2" degraded)" = dangling ] && ok || bad "a registration pointing at a missing file must be dangling"
+
+# unregistered: settings present, no registration for the kit's gate
+K3="$(wire_fixture "$W/c")"; printf '{"hooks":{"PreToolUse":[]}}\n' > "$W/c/.claude/settings.json"
+printf '{"version":1,"hooks":{}}\n' > "$W/c/.cursor/hooks.json"
+[ "$(integrity_wiring "$K3" degraded)" = unregistered ] && ok || bad "settings with no kit registration must be unregistered"
+
+# partial: one matcher registered, the other dropped
+K4="$(wire_fixture "$W/d")"
+jq '.hooks.PreToolUse |= map(select(.matcher != "Bash"))' "$W/d/.claude/settings.json" > "$W/d/s" && mv "$W/d/s" "$W/d/.claude/settings.json"
+rm -f "$W/d/.cursor/hooks.json"
+[ "$(integrity_wiring "$K4" degraded)" = partial ] && ok || bad "one matcher registered and one missing must be partial"
+
+# absent: an installed layout with no harness settings at all — terminal-only use, NOT a defect
+K5="$(wire_fixture "$W/e")"; rm -f "$W/e/.claude/settings.json" "$W/e/.cursor/hooks.json"
+[ "$(integrity_wiring "$K5" degraded)" = absent ] && ok || bad "no harness settings at all must be absent, not a defect"
+
+# foreign: hardened tier, gate file present but NOT root-owned — it cannot be the kit's gate.
+# Below hardened the same tree is `wired`, because ownership proves nothing there.
+K6="$(wire_fixture "$W/f")"
+[ "$(integrity_wiring "$K6" hardened)" = foreign ] && ok || bad "at hardened, a non-root-owned gate file must be foreign"
+[ "$(integrity_wiring "$K6" degraded)" = wired ] && ok || bad "below hardened, ownership proves nothing — the same tree is wired"
+
+# worse-value-wins across harnesses: a working half must not hide a broken half
+K7="$(wire_fixture "$W/g")"; rm -f "$W/g/.cursor/hooks/flaky-kit-self-protection-gate.sh"
+[ "$(integrity_wiring "$K7" degraded)" = dangling ] && ok || bad "a dangling Cursor gate must not be masked by a wired Claude gate"
+
+# not an installed layout -> absent, silent. Running the suite from the source tree must not warn.
+[ "$(integrity_wiring "$W" degraded)" = absent ] && ok || bad "a non-installed layout must be absent"
+rm -rf "$PR" "$W"
+```
+
+- [ ] **Step 2: Run it and watch it fail**
+
+Run: `bash core/tests/integrity-test.sh`
+Expected: FAIL — `integrity_project_root: command not found`
+
+- [ ] **Step 3: Implement in `core/_integrity.sh`**
+
+Add below `integrity_owner_uid`:
+
+```bash
+# integrity_project_root <kit_root> -> the project root, or empty when this is not an installed kit.
+#
+# Verifies the SHAPE of the installed layout — <proj>/.claude/skills/hektor-flaky-triage — rather
+# than counting three levels up. Counting is a proxy that happens to be right for one layout; the
+# shape is the property being asked about. It also means running the suite from the source tree
+# (kits/flaky-triage-kit) yields nothing and the wiring check stays silent there, instead of
+# accidentally resolving to some unrelated directory.
+integrity_project_root() {
+  local kit="${1:-}" k s c
+  [ -n "$kit" ] || return 0
+  k="$(cd "$kit" 2>/dev/null && pwd -P)" || return 0
+  [ -n "$k" ] || return 0
+  [ "$(basename "$k")" = "hektor-flaky-triage" ] || return 0
+  s="$(dirname "$k")"; [ "$(basename "$s")" = "skills" ] || return 0
+  c="$(dirname "$s")"; [ "$(basename "$c")" = ".claude" ] || return 0
+  dirname "$c"
+  return 0
+}
+
+# _wiring_want <kit_root> <project_root> -> "<claude> <cursor>", each 1 if that harness is required.
+#
+# The install-time record decides. `--harness` was previously a flag that vanished after the run, so
+# the check had to infer a requirement from "a settings file exists" — which flags a project that
+# carries a .cursor/hooks.json from some unrelated tool while the kit was only ever installed for
+# Claude. The record is written into core/, which harden_targets already chowns, so at the hardened
+# tier an agent cannot rewrite it to require nothing.
+#
+# No record means the kit predates this file: fall back to the old inference rather than silently
+# requiring nothing, which would turn every existing install into a green "wired".
+_wiring_want() {
+  local kit="${1:-}" root="${2:-}" h c=0 u=0
+  h="$(cat "$kit/core/.harness" 2>/dev/null)"
+  case "$h" in
+    all|both) echo "1 1"; return 0 ;;
+    claude)   echo "1 0"; return 0 ;;
+    cursor)   echo "0 1"; return 0 ;;
+    agents)   echo "0 0"; return 0 ;;
+  esac
+  { [ -r "$root/.claude/settings.json" ] || [ -r "$root/.claude/settings.local.json" ]; } && c=1
+  [ -r "$root/.cursor/hooks.json" ] && u=1
+  echo "$c $u"
+  return 0
+}
+
+# _wiring_gate_claude <settings-file> <matcher> -> the command string registered for that matcher, or
+# empty. Returns the COMMAND, not a yes/no: the harness runs whatever path that string names, so the
+# existence check must land on it. Asking "does some command mention the gate?" and then stat-ing the
+# path this kit would have installed are two different questions, and a settings.json copied between
+# machines answers the first yes while the gate never runs.
+_wiring_gate_claude() {
+  jq -r --arg m "$2" '
+    (.hooks.PreToolUse // [])
+    | map(select(.matcher == $m))
+    | map((.hooks // []) | map(.command // "")) | flatten
+    | map(select(test("flaky-kit-self-protection-gate\\.sh")))
+    | first // ""
+  ' "$1" 2>/dev/null
+}
+
+# _wiring_gate_cursor <hooks-file> <event> -> the command string registered for that event, or empty.
+_wiring_gate_cursor() {
+  jq -r --arg e "$2" '
+    ((.hooks[$e]) // []) | map(.command // "")
+    | map(select(test("flaky-kit-self-protection-gate\\.sh")))
+    | first // ""
+  ' "$1" 2>/dev/null
+}
+
+# _wiring_resolve <command-string> <project_root> -> an absolute path, or empty.
+#
+# Read `install.sh` for the exact strings both harnesses are registered with — that file is the
+# authority on the format, not this comment — and handle at minimum: surrounding quotes, a
+# $CLAUDE_PROJECT_DIR or ${CLAUDE_PROJECT_DIR} prefix, an absolute path, and a path relative to the
+# project root. Trailing arguments after the script path are dropped.
+#
+# Known limitation, to be stated rather than hidden: a registered path containing spaces resolves to
+# its first token.
+_wiring_resolve() {
+  local cmd="${1:-}" root="${2:-}" p
+  [ -n "$cmd" ] || return 0
+  p="$(printf '%s' "$cmd" | tr -d '"'\''')"
+  p="${p%%[[:space:]]*}"
+  # Parameter expansion, not sed. An unescaped $root in a sed replacement makes `&` mean "the whole
+  # match", so a project directory named `R&D` splices the literal `$CLAUDE_PROJECT_DIR` into the
+  # middle of the resolved path; a `|` in the path closes the delimiter and sed errors to stderr.
+  # Both fail closed — `dangling` on a correctly wired install — which is how it would survive a
+  # review that only asked whether the check can be fooled into passing.
+  p="${p//\$\{CLAUDE_PROJECT_DIR\}/$root}"
+  p="${p//\$CLAUDE_PROJECT_DIR/$root}"
+  case "$p" in
+    '') : ;;
+    /*) printf '%s' "$p" ;;
+    *)  printf '%s' "$root/$p" ;;
+  esac
+  return 0
+}
+
+# _wiring_one <gate-file> <tier> <registered-count> <expected-count> -> a wiring value for one harness
+_wiring_one() {
+  local gate="$1" tier="$2" got="$3" want="$4"
+  [ "$got" -eq 0 ] && { echo unregistered; return 0; }
+  [ "$got" -lt "$want" ] && { echo partial; return 0; }
+  [ -f "$gate" ] || { echo dangling; return 0; }
+  # Identity comes free from the tier: harden_targets chowns the gate, and a replacement cannot be
+  # root-owned without the password. `stale` is included because it means the tree IS root-owned and
+  # only the record disagrees — keying on the record here while integrity_report keys on ownership
+  # would split one property across two conditions. Below those, ownership proves nothing, so
+  # existence is all there is to check; claiming more would be the overclaim this kit keeps retracting.
+  case "$tier" in
+    hardened|stale)
+      if [ "$(integrity_owner_uid "$gate")" != "0" ]; then echo foreign; return 0; fi ;;
+  esac
+  echo wired
+  return 0
+}
+
+# _wiring_rank <value> -> a severity rank. Higher is worse. `absent` ranks 0 — it means "nothing is
+# configured here", so it loses to every real value and never drags down a harness that is wired.
+_wiring_rank() {
+  case "${1:-}" in
+    wired) echo 1 ;; partial) echo 2 ;; dangling) echo 3 ;;
+    unregistered) echo 4 ;; foreign) echo 5 ;; *) echo 0 ;;
+  esac
+}
+
+# _wiring_worse <a> <b> -> whichever of the two is worse. The seed is `absent`, so the `absent` arm of
+# _wiring_rank is on the live path and a mutation to it changes a public answer — which is the point:
+# a rank branch no call can reach is a claim no test can check.
+_wiring_worse() {
+  if [ "$(_wiring_rank "${2:-}")" -gt "$(_wiring_rank "${1:-}")" ]; then echo "${2:-}"; else echo "${1:-}"; fi
+  return 0
+}
+
+# integrity_wiring <kit_root> <tier> -> wired|unregistered|dangling|foreign|partial|absent
+#
+# The SECOND axis, deliberately separate from integrity_tier. A hardened install can be miswired and
+# a never-locked one can be wired perfectly; folding them into one vocabulary would repeat the
+# collapse that once reported a plainly-writable fresh install as "degraded — read-only".
+#
+# Every failure mode resolves to `absent` and prints nothing: no jq, unreadable settings, or a
+# layout that is not an installed kit. Not knowing is not the same as broken, and a check that
+# cannot run must not wedge the caller.
+integrity_wiring() {
+  local kit="${1:-}" tier="${2:-}" root f m e cmd g gate got want out=absent wc wu
+  root="$(integrity_project_root "$kit")"
+  [ -n "$root" ] || { echo absent; return 0; }
+  command -v jq >/dev/null 2>&1 || { echo absent; return 0; }
+
+  # Which harnesses this kit was installed for. Every loop variable is declared local above: this
+  # file is sourced by ten entrypoints and `m` and `e` are already globals in core/rerun.sh, so an
+  # undeclared one is a collision waiting for someone to reorder two lines.
+  set -- $(_wiring_want "$kit" "$root")
+  wc="${1:-0}"; wu="${2:-0}"
+
+  # Claude: a registration in EITHER settings file counts — requiring both would fail every project
+  # that uses only one. Both matchers are required, because half a registration is half the gate.
+  if [ "$wc" = 1 ]; then
+    got=0; want=2; gate=''
+    for m in 'Write|Edit' 'Bash'; do
+      for f in "$root/.claude/settings.json" "$root/.claude/settings.local.json"; do
+        [ -r "$f" ] || continue
+        cmd="$(_wiring_gate_claude "$f" "$m")"
+        [ -n "$cmd" ] || continue
+        got=$((got+1))
+        g="$(_wiring_resolve "$cmd" "$root")"
+        # Prefer a path that is missing. If either matcher points somewhere that does not exist, the
+        # gate does not run for that tool call, and `dangling` is the honest answer for the pair.
+        if [ ! -f "$g" ] || [ -z "$gate" ]; then gate="$g"; fi
+        break
+      done
+    done
+    out="$(_wiring_worse "$out" "$(_wiring_one "$gate" "$tier" "$got" "$want")")"
+  fi
+
+  # Cursor: one file, two events.
+  if [ "$wu" = 1 ]; then
+    got=0; want=2; gate=''
+    for e in beforeShellExecution preToolUse; do
+      cmd="$(_wiring_gate_cursor "$root/.cursor/hooks.json" "$e")"
+      [ -n "$cmd" ] || continue
+      got=$((got+1))
+      g="$(_wiring_resolve "$cmd" "$root")"
+      if [ ! -f "$g" ] || [ -z "$gate" ]; then gate="$g"; fi
+    done
+    out="$(_wiring_worse "$out" "$(_wiring_one "$gate" "$tier" "$got" "$want")")"
+  fi
+
+  echo "$out"
+  return 0
+}
+```
+
+And in `install.sh`, alongside the existing engine/skill copy, record the selection inside the protected surface:
+
+```bash
+# The wiring check must require exactly the harnesses this kit was installed for. Written under
+# core/, which harden_targets already chowns, so at the hardened tier an agent cannot rewrite it to
+# require nothing.
+printf '%s\n' "$HARNESS" > "$SKILL_DIR/core/.harness"
+```
+
+- [ ] **Step 4: Run the tests**
+
+Run: `bash core/tests/integrity-test.sh`
+Expected: PASS, all assertions green. State the file's new total.
+
+- [ ] **Step 5: Prove each new assertion is load-bearing**
+
+For each mutation below, apply it to a **scratch copy outside the repo**, run `integrity-test.sh`, and record which assertion failed. Every one must fail something:
+
+| Mutation | Must fail |
+|---|---|
+| `integrity_project_root` returns `dirname` of three levels without checking names | the two shape assertions |
+| `_wiring_one` skips the `[ -f "$gate" ]` check | dangling |
+| `_wiring_one` ignores `$tier` and never returns `foreign` | the hardened/foreign assertion |
+| `_wiring_rank` returns 1 for `absent` | the worse-wins assertion (absent would outrank nothing, but a configured harness would be masked — check which fires and record it) |
+| `_wiring_one` treats `got -lt want` as `wired` | partial |
+
+If any mutation fails nothing, that assertion is decoration — fix the assertion, not the mutation.
+
+- [ ] **Step 6: Commit**
+
+```bash
+git add kits/flaky-triage-kit/core/_integrity.sh kits/flaky-triage-kit/core/tests/integrity-test.sh
+git commit -m "kit: integrity_wiring — does the gate actually run?
+
+A second axis beside the lock tier. The kit protected its files and owned
+them as root but never checked that the registration making any of it run
+still points at a file that exists — the case seen live in a worktree
+carrying a pre-relocation path. absent is kept distinct from broken so
+terminal-only use raises nothing."
+```
+
+---
+
+## Task 2: Two axes through `integrity_report`
+
+**Files:**
+- Modify: `kits/flaky-triage-kit/core/_integrity.sh` (`integrity_report`, `integrity_guard`)
+- Modify: `kits/flaky-triage-kit/core/tests/integrity-test.sh`
+
+**Interfaces:**
+- Consumes: `integrity_wiring` and `integrity_tier`.
+- Produces: `integrity_report <tier> <wiring>` → 0 or 76. **Both arguments required.**
+- Produces: `integrity_guard <kit_root>` → 0 or 76, unchanged signature, so the 13 call sites stay byte-identical.
+
+- [ ] **Step 1: Write the failing tests**
+
+Append to `core/tests/integrity-test.sh`:
+
+```bash
+# --- tier x wiring: refuse only when a HARDENED tier has lost its wiring ------------
+rep2()    { integrity_report "$1" "$2" >/dev/null 2>&1; echo $?; }
+rep2_out(){ integrity_report "$1" "$2" 2>&1; }
+
+# Refusal keys on ROOT OWNERSHIP, which `stale` has as surely as `hardened` — integrity_report
+# already tells a stale tree it is being "treated as hardened", and the shadow-record argument for
+# refusing does not care what the state file claims.
+for t in hardened stale; do
+  for w in wired absent; do
+    [ "$(rep2 "$t" "$w")" = 0 ] && ok || bad "$t + $w must proceed"
+  done
+  for w in unregistered dangling foreign partial; do
+    [ "$(rep2 "$t" "$w")" = 76 ] && ok || bad "$t + $w must refuse — the shadow detector went with the gate"
+    case "$(rep2_out "$t" "$w")" in *WIRING*) ok ;; *) bad "$t + $w must name the wiring problem" ;; esac
+  done
+done
+for t in degraded unprotected unlocked; do
+  for w in unregistered dangling foreign partial; do
+    [ "$(rep2 "$t" "$w")" = 0 ] && ok || bad "$t + $w must warn and proceed — there is no wall to have lost"
+  done
+  case "$(rep2_out "$t" dangling)" in *WIRING*) ok ;; *) bad "$t + dangling must still say so" ;; esac
+done
+# absent is silent at EVERY tier: no harness configured is not a defect.
+for t in hardened degraded unprotected unlocked; do
+  case "$(rep2_out "$t" absent)" in *WIRING*) bad "absent must never mention wiring (tier: $t)" ;; *) ok ;; esac
+done
+# mismatch still refuses regardless of wiring, and still names the tier problem.
+[ "$(rep2 mismatch wired)" = 76 ] && ok || bad "a tier mismatch must refuse even when the wiring is fine"
+# Nothing may reach stdout: four entrypoints emit a contract there.
+for t in hardened degraded unprotected unlocked stale mismatch; do
+  for w in wired dangling absent; do
+    [ -z "$(integrity_report "$t" "$w" 2>/dev/null)" ] || bad "integrity_report must never write to stdout ($t/$w)"
+  done
+done; ok
+# Both arguments are required — a default that turned a missing wiring argument into `absent` would
+# silently stop checking wiring, which is the quiet-default shape this codebase keeps being bitten by.
+# Both arguments are required. Assert the BEHAVIOUR, not the spelling: a grep for `wiring="${2:-}"`
+# passes happily against `wiring="${2:-absent}"`, which is the exact default the constraint names, so
+# it proves only that the pattern matches itself. This file runs under `set -u`, so a one-argument
+# call dies on the unbound $2. Verify that empirically before relying on it; if the shell does not
+# behave that way here, say so and fall back to a grep widened to `wiring="\$\{2[:-]`.
+( integrity_report hardened ) >/dev/null 2>&1
+[ $? -ne 0 ] && ok || bad "integrity_report must not accept a single argument — a defaulted wiring silently stops checking wiring"
+
+# No environment override may enter this file, under ANY name. Naming prefixes is the same failure one
+# step out: `${FK_TIER:-}` reinstates the hole while a HEKTOR|INTEGRITY pattern stays green. Match the
+# SHAPE — any uppercase parameter read outside a comment. The `[^\\]` guard lets _wiring_resolve's
+# escaped \$CLAUDE_PROJECT_DIR literals through, because those are text substituted into a registered
+# command string, not a read of the caller's environment.
+grep -v '^[[:space:]]*#' "$HERE/../_integrity.sh" | grep -qE '(^|[^\\])\$\{?[A-Z][A-Z0-9_]*' \
+  && bad "no environment override may enter _integrity.sh — a caller who can set a variable silences the guard" || ok
+
+# The pre-existing INTEGRITY_FAKE_UID assertion keeps its original breadth. It was narrowed to require
+# a `$` prefix so that a comment naming the variable in prose would pass; the comment is what should
+# have moved out of scope, not the check. Stripping comments restores `INTEGRITY_FAKE_UID=0`,
+# `export INTEGRITY_FAKE_UID` and `printenv INTEGRITY_FAKE_UID` to the net.
+grep -v '^[[:space:]]*#' "$HERE/../_integrity.sh" | grep -q 'INTEGRITY_FAKE_UID' \
+  && bad "no environment override may remain in _integrity.sh — it silences the guard for anyone who can set a variable" || ok
+```
+
+- [ ] **Step 2: Run it and watch it fail**
+
+Run: `bash core/tests/integrity-test.sh`
+Expected: FAIL — the `hardened + dangling` cases return 0, because `integrity_report` ignores its second argument.
+
+- [ ] **Step 3: Implement**
+
+Replace `integrity_report`'s signature line and add the wiring branch before the final `return 0`:
+
+```bash
+integrity_report() {
+  local tier="$1" wiring="$2" rc=0
+```
+
+Then, after the existing tier `case ... esac` (capture its outcome instead of returning directly — change each `return 0` in the tier case to `rc=0` and the `mismatch` arm's `return 76` to `rc=76`), add:
+
+```bash
+  # The wiring axis. `absent` is silent at every tier: the kit runs standalone from a terminal, so
+  # "no gate configured" and "a gate that should be here and isn't" are different facts, and warning
+  # on the first would train the reader to ignore the second.
+  case "$wiring" in
+    wired|absent) : ;;
+    *)
+      echo "integrity: WIRING $wiring — the kit's self-protection gate is not going to run as registered." >&2
+      case "$wiring" in
+        dangling)     echo "integrity: a harness registration points at a gate file that does not exist (a pre-relocation path, or the file was removed)." >&2 ;;
+        unregistered) echo "integrity: a harness settings file exists but carries no registration for the kit's gate." >&2 ;;
+        partial)      echo "integrity: only one of the two required registrations is present, so half the surface is unguarded." >&2 ;;
+        foreign)      echo "integrity: the registered gate file is not root-owned at the hardened tier, so it is not the file this kit installed." >&2 ;;
+      esac
+      echo "integrity: re-run the kit installer against this project to repair it." >&2
+      case "$tier" in
+        hardened|stale)
+          echo "integrity: refusing — the tree is root-owned, and the gate also carries the out-of-tree shadow record, so losing it means losing the only detector for a replaced kit tree. That is weaker than the protection actually in place." >&2
+          rc=76 ;;
+      esac ;;
+  esac
+  return "$rc"
+}
+```
+
+Then the guard:
+
+```bash
+# integrity_guard <kit_root> -> 0 to proceed, 76 to refuse.
+# The composition of both axes. It reads NO environment: every answer is recomputed from the
+# filesystem on every call. An earlier draft cached the computed result in an exported variable to
+# spare a triage the two extra evaluations its execs cost. That cache is indistinguishable from a
+# forgery — the environment belongs to whoever launches the entrypoint — so it would have restored
+# the INTEGRITY_FAKE_UID hole this kit removed, under a new name and past a name-specific test.
+# Recomputing costs at most three jq calls per entrypoint. That is the price of the check being real.
+integrity_guard() {
+  local kit="${1:-}" tier wiring
+  tier="$(integrity_tier "$(integrity_owner_uid "$kit/core")" "$(integrity_state "$kit")")"
+  wiring="$(integrity_wiring "$kit" "$tier")"
+  integrity_report "$tier" "$wiring"
+}
+```
+
+- [ ] **Step 4: Run the tests**
+
+Run: `bash core/tests/integrity-test.sh`
+Expected: PASS.
+
+- [ ] **Step 5: Update the 13 entrypoints' expectations and run the whole suite**
+
+The call sites do not change — `integrity_guard "$HERE/.."` is unchanged. But confirm it, because a silent signature drift here disables the guard everywhere:
+
+Run: `grep -c 'integrity_guard "' core/*.sh`
+Expected: 13
+
+Run: `for t in core/tests/*.sh; do bash "$t"; done`
+Expected: every file green. State the suite total.
+
+- [ ] **Step 6: Prove no variable can forge the guard's answer, and prove the assertion that says so**
+
+First the property itself. Both invocations must reach the same verdict as a bare call, because nothing in the file consults the environment:
+
+```bash
+# A fixture whose tier/wiring the guard must decide for itself. Any pair of names may be tried; these
+# two are the ones an attacker would reach for first.
+HEKTOR_FK_GUARD_LATCH="hardened:wired" bash -c '. core/_integrity.sh; integrity_guard /nonexistent; echo rc=$?'
+INTEGRITY_FAKE_UID=0                   bash -c '. core/_integrity.sh; integrity_guard /nonexistent; echo rc=$?'
+```
+Expected: both print the same `rc` as the unset call — the variables are dead names.
+
+Then the mutation, because a grep that matches nothing passes whether or not the property holds (a zero-replacement `sed` once read as proof of a defect in this kit; assert the file actually changed):
+
+```bash
+cp core/_integrity.sh /tmp/_integrity.bak
+sed -i '' 's|local kit="${1:-}" tier wiring|local kit="${1:-}" tier="${HEKTOR_FK_TIER:-}" wiring|' core/_integrity.sh
+diff -q /tmp/_integrity.bak core/_integrity.sh >/dev/null && echo "MUTATION DID NOT APPLY — the result below proves nothing"
+bash core/tests/integrity-test.sh   # expected: RED on the no-override assertion
+cp /tmp/_integrity.bak core/_integrity.sh && rm /tmp/_integrity.bak
+```
+
+Record in the report that the guard now evaluates once per entrypoint rather than once per process tree, so the degraded/wiring notice prints up to three times in a triage that execs `ingest` and `cluster`. That deferred minor stays deferred: silencing a repeated warning is worth less than a check no variable can forge.
+
+- [ ] **Step 7: Commit**
+
+```bash
+git add kits/flaky-triage-kit/core/_integrity.sh kits/flaky-triage-kit/core/tests/integrity-test.sh
+git commit -m "kit: report both axes, refuse only when hardened loses its wiring
+
+integrity_report takes tier and wiring, neither optional — a default would
+silently stop checking. Refusal is tier-coupled: at hardened the gate also
+carries the shadow record, so losing it is weaker than recorded; below
+hardened there is no wall to have lost, so it warns. absent is silent at
+every tier.
+
+integrity_guard recomputes both axes on every call and reads no environment.
+A per-process cache of the answer was designed and dropped: the environment
+belongs to whoever launches the entrypoint, so a cache is indistinguishable
+from a forgery, and the assertion guarding against exactly this named one
+variable rather than the shape. It now catches the shape."
+```
+
+---
+
+## Task 3: The settings files on the Bash surface
+
+**Files:**
+- Modify: `kits/flaky-triage-kit/core/shell-guard.py` (its own `SURF` — the primary Bash decision path)
+- Modify: `kits/flaky-triage-kit/adapters/claude/flaky-kit-self-protection-gate.sh` (`SURF_RE`, `match_surface`)
+- Modify: `kits/flaky-triage-kit/adapters/cursor/flaky-kit-self-protection-gate.sh` (the same two, byte-identical)
+- Modify: `kits/flaky-triage-kit/core/tests/self-protection-test.sh`
+
+**Interfaces:** none new. This widens three existing patterns that must stay in step — the suite already asserts the two gates' `SURF_RE` are byte-identical, and a drift test covers the python/bash pair.
+
+**Why all three files:** the gates' bash `SURF_RE` is only the *degraded fallback* used when python3 is unavailable; `shell-guard.py`'s `SURF` is the primary decision. Updating the gates alone leaves the real engine blind — that exact omission shipped a live bypass once already in this kit.
+
+- [ ] **Step 1: Write the failing tests**
+
+Append to `core/tests/self-protection-test.sh`:
+
+```bash
+# --- the settings files are surface for Bash MUTATIONS, reads still pass -------------
+for s in ".claude/settings.json" ".claude/settings.local.json" ".cursor/hooks.json"; do
+  assert_claude_bash_deny  "sed -i '' $s"        "Bash mutation of $s must be denied"
+  assert_claude_bash_deny  "rm -f $s"            "removing $s must be denied"
+  assert_claude_bash_allow "cat $s"              "reading $s must be allowed"
+  assert_claude_bash_allow "jq . $s"             "inspecting $s must be allowed"
+done
+# The registration is what makes every other protection run; unregistering it must cost as much as
+# editing the gate itself.
+assert_claude_bash_deny "printf '{}' > .claude/settings.json" "truncating settings.json must be denied"
+```
+
+If the fixture has no `assert_claude_bash_deny`/`allow` helper, add them next to the existing
+`assert_claude_edit_deny`/`allow` pair, built on the same `bash_json`/`claude_denied` primitives the
+file already uses for its Bash cases.
+
+- [ ] **Step 2: Run it and watch it fail**
+
+Run: `bash core/tests/self-protection-test.sh`
+Expected: FAIL — the settings paths are not on the surface, so the mutations are allowed.
+
+- [ ] **Step 3: Add the settings files to `core/shell-guard.py`'s `SURF`**
+
+Extend the default alternation (keep the `_SURF_ROOT` override additive, as it already is):
+
+```python
+                     r'|\.(claude|cursor)/settings(\.local)?\.json'
+                     r'|\.cursor/hooks\.json'
+```
+
+- [ ] **Step 4: Add them to both gates' `SURF_RE` — and to nothing else**
+
+`SURF_RE` gains the same alternatives, byte-identical between the two gates.
+
+**Do not touch `match_surface`.** It is the Write/Edit branch's matcher, and a path matching it is denied outright with no look at the payload. That is the negation of what Task 4 must build, not a coarse first approximation of it: the spec's rule for that branch is *deny only when the kit's registration would not survive*, so an edit that changes permissions, env or model has to pass. Adding settings paths here would also delete the only assertions that a settings file stays editable, which is precisely the property Task 4 is supposed to turn red before it turns green.
+
+Leave every Write/Edit-branch assertion in `core/tests/self-protection-test.sh` exactly as it is, including the two `edit_allow` assertions on `.claude/settings.json`. Task 4 owns them.
+
+Cursor has no project-level `settings.json` and no `.local` variant. Do not carry an alternative for either in `SURF` or `SURF_RE` — a pattern for a file that cannot exist is a claim nothing can check, and it invites a later reader to "restore" the matching Write/Edit arm for symmetry.
+
+- [ ] **Step 5: Verify directly, not only through the suite**
+
+```bash
+printf '%s' "sed -i '' .claude/settings.json" | HEKTOR_FK_CWD=/tmp python3 core/shell-guard.py; echo "expect 0 (deny): $?"
+printf '%s' "cat .claude/settings.json"       | HEKTOR_FK_CWD=/tmp python3 core/shell-guard.py; echo "expect 1 (allow): $?"
+```
+
+- [ ] **Step 6: Check for new false positives**
+
+The kit's own installer must not trip its own gate. Confirm:
+
+```bash
+printf '%s' "./install.sh --project /tmp/x" | HEKTOR_FK_CWD=/tmp python3 core/shell-guard.py; echo "expect 1 (allow): $?"
+```
+The command string carries no settings path and the installer's `jq` pipeline runs in a subprocess the gate never sees. Report the result either way.
+
+- [ ] **Step 7: Run the whole suite and commit**
+
+```bash
+git add kits/flaky-triage-kit/core/shell-guard.py kits/flaky-triage-kit/adapters kits/flaky-triage-kit/core/tests/self-protection-test.sh
+git commit -m "kit: harness settings are surface for Bash mutations
+
+Deleting the registration is what turns every other protection off, and it
+was allowed and unaudited. All three patterns move together — the gates'
+SURF_RE is only the fallback, shell-guard.py's SURF is the primary Bash
+decision, and updating the gates alone once shipped a live bypass here."
+```
+
+---
+
+## Task 4: Write/Edit inspects the outcome, not the text
+
+**Files:**
+- Modify: `kits/flaky-triage-kit/adapters/claude/flaky-kit-self-protection-gate.sh` (Write/Edit branch)
+- Modify: `kits/flaky-triage-kit/adapters/cursor/flaky-kit-self-protection-gate.sh` (the same)
+- Modify: `kits/flaky-triage-kit/core/tests/self-protection-test.sh`
+
+**Interfaces:** none new.
+
+**The point:** blanket-denying Write/Edit on the settings files would make the kit block unrelated permission, env and model edits in every project it installs into — heavy for a component that claims to be standalone. The branch has the proposed content, so it can answer the real question instead: *with this change applied, is the kit's gate still registered?* Matching "the gate command string appears in the payload" would be a textual proxy for that property, and proxies standing in for properties have now caused three separate defects in this kit.
+
+- [ ] **Step 1: Write the failing tests**
+
+Append to `core/tests/self-protection-test.sh`:
+
+```bash
+# --- Write/Edit on settings: deny only when the registration would not survive -------
+SJ="$PROJ/.claude/settings.json"
+REG='{"hooks":{"PreToolUse":[{"matcher":"Write|Edit","hooks":[{"type":"command","command":"\"$CLAUDE_PROJECT_DIR/.claude/hooks/flaky-kit-self-protection-gate.sh\""}]},{"matcher":"Bash","hooks":[{"type":"command","command":"\"$CLAUDE_PROJECT_DIR/.claude/hooks/flaky-kit-self-protection-gate.sh\""}]}]}}'
+printf '%s\n' "$REG" > "$SJ"
+
+# A Write that drops the registration -> DENY
+assert_claude_write_deny "$SJ" '{"hooks":{"PreToolUse":[]}}' \
+  "a Write that leaves the kit unregistered must be denied"
+# A Write that keeps the registration and changes something unrelated -> ALLOW
+KEEP="$(printf '%s' "$REG" | jq '.permissions = {"allow":["Bash(ls:*)"]}')"
+assert_claude_write_allow "$SJ" "$KEEP" \
+  "a Write that keeps the registration must be allowed even though it touches settings.json"
+# Unparseable proposed JSON -> DENY (survival cannot be verified, and writing broken settings is
+# itself a defect — the pack's run-status-write-gate sets this precedent)
+assert_claude_write_deny "$SJ" '{"hooks":' \
+  "a Write of unparseable JSON must be denied"
+# An Edit whose old_string carries the registration away -> DENY
+assert_claude_edit_str_deny "$SJ" \
+  '"matcher":"Bash","hooks":[{"type":"command","command":"\"$CLAUDE_PROJECT_DIR/.claude/hooks/flaky-kit-self-protection-gate.sh\""}]' '' \
+  "an Edit that removes the Bash registration must be denied"
+# An Edit that touches an unrelated key -> ALLOW
+assert_claude_edit_str_allow "$SJ" '"hooks"' '"hooks"' \
+  "a no-op Edit that preserves the registration must be allowed"
+# When the file is NOT currently registered, the gate has nothing to protect -> ALLOW
+printf '{"hooks":{"PreToolUse":[]}}\n' > "$SJ"
+assert_claude_write_allow "$SJ" '{"hooks":{"PreToolUse":[]}}' \
+  "with no registration present there is nothing to lose, so the write must be allowed"
+printf '%s\n' "$REG" > "$SJ"
+```
+
+Add the three helpers next to the existing assertion helpers, built on the same primitives:
+`assert_claude_write_deny <path> <content> <label>`, `assert_claude_write_allow`, and
+`assert_claude_edit_str_deny/allow <path> <old> <new> <label>` — each constructs the tool-call JSON
+with `tool_input.content` or `tool_input.old_string`/`new_string` and asserts on `claude_denied`.
+
+- [ ] **Step 2: Run it and watch it fail**
+
+Run: `bash core/tests/self-protection-test.sh`
+Expected: FAIL — after Task 3 the settings files are surface, so the Write/Edit branch denies **all**
+of these, including the two that must be allowed.
+
+- [ ] **Step 3: Implement the outcome check in both gates' Write/Edit branch**
+
+Insert before the existing `match_surface` decision, so a settings target is decided by outcome
+rather than by path:
+
+```bash
+# Settings files are surface for Bash (no content to inspect there) but decided by OUTCOME here,
+# where the payload is available: deny only when the kit's registration would not survive. Blanket-
+# denying would make this kit block unrelated permission/env/model edits in every project it is
+# installed into. `test(...)` on the gate filename, not on a whole command string, because we are
+# asking whether the REGISTRATION exists — not whether some text happens to appear.
+#
+# Survival is measured per slot by the TOOLS A SLOT COVERS, not as a count over a flattened list and
+# not by the matcher's literal spelling. A slot is an event plus the set of tools its matcher names:
+# split the matcher on `|`, and treat `*` as covering everything. The change is a survival only when
+# every tool covered by a registered slot today is still covered by some registered slot afterwards.
+#
+# Keying on the matcher STRING would deny an edit that widens `Write|Edit` to `Write|Edit|MultiEdit` —
+# a change that leaves the registration strictly better than it found it. That is the same
+# over-denial the branch forbids, arriving through string identity instead of a path match.
+#
+# An earlier draft asked `… | length > 0` over every command in the file, and it contradicted this
+# task's own test payload: removing only the `"matcher":"Bash"` element leaves the `Write|Edit` arm
+# still naming the gate, so the count stays positive and the change reads as a survival — while the
+# assertion above requires it denied, and rightly, since that payload unwires exactly the branch
+# Task 3 closed. It is also the Task 1 defect's shape: `length > 0` asks "does some command mention
+# the gate?", which is a proxy for the property rather than the property. And `integrity_wiring`
+# already calls half a registration `partial` and treats it as a defect, so a count here would have
+# the kit calling one state broken on one axis and fine on the other.
+_reg_slots() {  # $1 = a JSON document -> the slots whose registered command names the kit's gate
+case "$(canon_path "$TARGET")" in
+  */.claude/settings.json|*/.claude/settings.local.json|*/.cursor/hooks.json)
+    [ -r "$TARGET" ] || exit 0                     # nothing registered yet -> nothing to lose
+    _before="$(_reg_slots "$TARGET")"
+    [ -n "$_before" ] || exit 0                    # not currently registered -> nothing to lose
+    _prop="$(mktemp)"
+    if [ "$TOOL_NAME" = Write ]; then
+      echo "$INPUT" | "$JQ" -r '.tool_input.content // ""' > "$_prop"
+    else
+      OLD=$(echo "$INPUT" | "$JQ" -r '.tool_input.old_string // ""')
+      NEW=$(echo "$INPUT" | "$JQ" -r '.tool_input.new_string // ""')
+      # `replace_all` is a first-class Edit parameter. Reconstructing with a single replacement while
+      # the tool replaces every occurrence means judging a document that is not the one being
+      # written — and a decoy mention of the gate filename, plantable by an edit this gate allows,
+      # turns that gap into a two-step removal of both registrations.
+      ALL=$(echo "$INPUT" | "$JQ" -r '.tool_input.replace_all // false')
+      python3 - "$TARGET" "$OLD" "$NEW" "$ALL" > "$_prop" <<'PY' || cp "$TARGET" "$_prop"
+import sys
+src, old, new, all_ = open(sys.argv[1]).read(), sys.argv[2], sys.argv[3], sys.argv[4] == "true"
+sys.stdout.write(src if not old else src.replace(old, new) if all_ else src.replace(old, new, 1))
+PY
+    fi
+    if "$JQ" -e . "$_prop" >/dev/null 2>&1; then
+      # Survives only if every tool covered today is still covered. Added coverage is fine.
+      if _slots_kept "$_before" "$(_reg_slots "$_prop")"; then rm -f "$_prop"; exit 0; fi
+      SURFACE="harness settings — this change would leave the kit's gate unregistered"
+    else
+      SURFACE="harness settings — the proposed content is not parseable JSON, so the registration's survival cannot be verified"
+    fi
+    rm -f "$_prop" ;;
+  *)
+    if match_surface "$(canon_path "$TARGET")"; then :; elif match_surface "$TARGET"; then :; else exit 0; fi ;;
+esac
+```
+
+- [ ] **Step 4: Run the tests**
+
+Run: `bash core/tests/self-protection-test.sh`
+Expected: PASS.
+
+- [ ] **Step 5: Prove the allow-path is not just a hole**
+
+Mutate a scratch copy so the survival test always passes — `_slots_kept` returning 0 unconditionally,
+and separately `_reg_slots` returning the full slot set for any input — and confirm the
+`drops the registration` assertions fail in each case. If they do not, they are not testing survival.
+
+An allow that would pass no matter what the payload said is indistinguishable from no check at all,
+so this step is the one that decides whether this task shipped a control or a decoration. Also
+confirm each `.cursor/hooks.json` slot is reachable by some assertion: an arm no test can enter is a
+claim nothing checks.
+
+- [ ] **Step 6: Run the whole suite and commit**
+
+```bash
+git add kits/flaky-triage-kit/adapters kits/flaky-triage-kit/core/tests/self-protection-test.sh
+git commit -m "kit: on Write/Edit, deny a settings change only if the registration dies
+
+The branch has the payload, so it can answer whether the registration
+survives instead of matching text that resembles it. Blanket-denying would
+make the kit block unrelated permission and env edits in every project it
+installs into; a textual proxy for the property has caused three defects
+here already."
+```
+
+---
+
+## Task 5: Say what it does, and what it still does not
+
+**Files:**
+- Modify: `kits/flaky-triage-kit/core/README.md` (module table + the protection prose)
+- Modify: `kits/flaky-triage-kit/kernel.md` (P4 row)
+- Modify: `kits/flaky-triage-kit/core/lock-kit.sh` (the residual list in its header)
+
+**Why a task and not a footnote:** this kit's governing rule is that a documented claim the mechanism does not deliver is a defect equal to a broken mechanism. New behaviour that nothing describes is the same failure with the sign flipped — a reader cannot rely on what they cannot find.
+
+- [ ] **Step 1: Add the second axis to `core/README.md`'s module table**
+
+Amend the `_integrity` row so it names both axes rather than only the tier:
+
+```
+| `_integrity` *(sourced)* | kit root → tier (`hardened`/`unlocked`/`degraded`/`unprotected`/`mismatch`/`stale`) **and** wiring (`wired`/`unregistered`/`dangling`/`foreign`/`partial`/`absent`) | **P4** both are asserted at every entrypoint, not assumed. Refuses (76) when protection is weaker than recorded — a tier mismatch, or a hardened tier whose gate registration no longer resolves |
+```
+
+- [ ] **Step 2: Extend `kernel.md`'s P4 row**
+
+Append to the Status cell, keeping the existing text:
+
+```
+**2026-07-30:** the gate's own WIRING is now checked too. A registration pointing at a path the kit no longer installs to made every tool call emit a non-blocking "No such file" while nothing stated the protection was off (observed in a web-test worktree carrying a pre-relocation path), and deleting that registration was allowed outright. The harness settings files are now surface — by outcome on Write/Edit (deny only if the registration would not survive, so unrelated permission/env edits still pass) and as mutation targets on Bash, where no content is available to inspect. Residual, stated rather than implied: the settings files are protected against EDITS, but their parent directories stay user-owned, so they can still be replaced wholesale. The guard reads nothing from the environment — a per-process cache of its verdict was designed and rejected, because a cache of the answer is indistinguishable from a forgery of it.
+```
+
+- [ ] **Step 3: Add two items to `lock-kit.sh`'s STILL NOT COVERED list**
+
+```
+#   6. The harness settings files are protected against edits, but their parents stay user-owned, so
+#      a settings file can be replaced rather than edited. Same shape as residual 1, one level down.
+#   7. The wiring check reads the settings files an agent can also read. It proves the registration
+#      is present and points at a file this kit owns; it cannot prove the harness will honour it.
+#      A harness-level disable is outside anything this kit can see.
+```
+
+- [ ] **Step 4: Sweep for claims this change makes untrue**
+
+Apply the criterion this kit settled on — *does any sentence say something untrue about what protects what?* — to every file mentioning the gate's registration or the settings files:
+
+```bash
+grep -rln 'settings.json\|registration\|registered' kits/flaky-triage-kit/ | grep -v '\.achilles'
+```
+
+Read every mention in each file returned and record it in your report, including the ones you judge
+fine. Four rounds of the preceding documentation task each ended with a survivor because the sweep
+was narrower than the claim; enumerate files, not phrases.
+
+- [ ] **Step 5: Run the whole suite and commit**
+
+```bash
+git add kits/flaky-triage-kit/core/README.md kits/flaky-triage-kit/kernel.md kits/flaky-triage-kit/core/lock-kit.sh
+git commit -m "kit: describe the wiring axis and the two residuals it leaves
+
+New behaviour nothing documents is the same defect as a claim nothing
+delivers, sign flipped. Names what the settings protection covers, and
+states plainly that the files are protected against edits while their
+parents are not, and that a present registration is not proof the harness
+will honour it."
+```
+
+---
+
+## Self-Review
+
+**Spec coverage:** §1 two axes and the six values → Task 1. Identity-from-tier → Task 1's `_wiring_one`. `absent` distinct and silent → Tasks 1 and 2. Tier coupling → Task 2. Both arguments required → Task 2 (with a grep assertion so it cannot regress). Installed-shape derivation → Task 1. Per-harness inference and worse-wins → Task 1. The rejected cache and the broadened no-override assertion → Task 2. §3 asymmetric settings protection → Tasks 3 (Bash) and 4 (Write/Edit outcome). §4 failure handling → Task 1's `absent` fallbacks and Task 4's unparseable-JSON deny. §5 testing, including the fixture-reaches-non-absent control and `mktemp -d` isolation → Tasks 1-4. §6 out-of-scope items are not implemented, and Task 5 records the residuals. No gaps.
+
+**Name consistency:** `integrity_project_root`, `integrity_wiring`, `_wiring_reg_claude`, `_wiring_reg_cursor`, `_wiring_one`, `_wiring_rank`, `integrity_report <tier> <wiring>`, `integrity_guard <kit_root>` are defined in Tasks 1-2 and used under those exact names throughout. The six wiring values are spelled identically everywhere. Exit code 76 is the only refusal code, matching the existing guard contract.
+
+**Ordering:** Task 2 needs Task 1. Task 4 needs Task 3 (it changes the branch Task 3 makes reachable for settings paths). Task 5 is last, because it describes what Tasks 1-4 actually built.

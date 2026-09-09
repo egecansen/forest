@@ -1,0 +1,49 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "hektor.flaky.verifier.v1",
+  "title": "Hektor verifier-result",
+  "description": "Deterministic pass^N verdict emitted by core/gate.sh (adapted from ECC examples/evaluator-rag-prototype/verifier-result.json). One `candidate` per re-run test; a green fix is 'fixed' only if it is `accepted` here AND an independent reviewer approves (two-key rule).",
+  "type": "object",
+  "required": ["schema_version", "candidates", "summary", "all_accepted"],
+  "properties": {
+    "schema_version": { "const": "hektor.flaky.verifier.v1" },
+    "generated_at": { "type": "string" },
+    "build": { "type": ["string", "null"], "description": "pinned @timestamp of the build under test, for traceability" },
+    "tb": { "type": ["string", "null"], "description": "testbox id (the oracle)" },
+    "runs_requested": { "type": "integer", "description": "N — the pass^N target (config.flaky_confidence_runs)" },
+    "runs": { "type": "integer" },
+    "read_only": { "const": true },
+    "box_health": { "type": ["object", "null"] },
+    "untrustworthy": { "type": "boolean", "description": "true when broken_box_suspected or run_anomalous — the oracle is in doubt, so no candidate can be accepted" },
+    "candidates": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["candidate_id", "decision", "reasons"],
+        "properties": {
+          "candidate_id": { "type": "string", "description": "the FQ test (or cluster label)" },
+          "decision": { "enum": ["accepted", "rejected", "inconclusive"] },
+          "score": { "type": ["number", "null"], "description": "= rerun confidence pass/(pass+fail)" },
+          "runs": { "type": "integer" },
+          "runs_requested": { "type": "integer" },
+          "fail": { "type": "integer" },
+          "reasons": { "type": "array", "items": { "type": "string" }, "minItems": 1 },
+          "rollback": { "type": "string", "description": "how to reverse this candidate's change (evaluator-rag 'reversible' rule)" }
+        }
+      }
+    },
+    "summary": {
+      "type": "object",
+      "required": ["accepted", "rejected", "inconclusive"],
+      "properties": {
+        "accepted": { "type": "integer" },
+        "rejected": { "type": "integer" },
+        "inconclusive": { "type": "integer" }
+      }
+    },
+    "all_accepted": {
+      "type": "boolean",
+      "description": "true iff every candidate is accepted and there is >=1 — the deterministic half of the two-key 'fixed' decision"
+    }
+  }
+}

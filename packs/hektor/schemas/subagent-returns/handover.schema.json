@@ -1,0 +1,23 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "hektor/subagent-returns/handover.schema.json",
+  "title": "Handover block",
+  "description": "Shared block every Hektor subagent return must carry. Tells the orchestrator who ran, how it ended, and what happens next.",
+  "type": "object",
+  "additionalProperties": true,
+  "required": ["role", "status", "next-action"],
+  "properties": {
+    "role": {
+      "type": "string",
+      "description": "The dispatch role-prefix this subagent ran as, e.g. composer-j-map-search."
+    },
+    "status": {
+      "type": "string",
+      "enum": ["blocked", "skipped", "complete", "new-tests-landed", "covered-exhaustively", "bugs-found", "no-bugs", "diagnosed"]
+    },
+    "next-action": {
+      "type": "string",
+      "description": "What the orchestrator should do next, e.g. 'dispatch workflow-reviewer-pass-1'."
+    }
+  }
+}

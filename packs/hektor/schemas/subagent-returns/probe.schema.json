@@ -1,0 +1,44 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "hektor/subagent-returns/probe.schema.json",
+  "title": "Probe return",
+  "description": "Return shape for hektor-bug-discovery dispatches (description prefix probe-<j-slug>:). A confirmed app bug must become either a regression test or a @ScheduledDisable entry with a ticket.",
+  "type": "object",
+  "additionalProperties": true,
+  "required": ["handover", "journey", "findings-count", "confirmed-bugs", "summary"],
+  "properties": {
+    "handover": { "$ref": "handover.schema.json" },
+    "journey": { "type": "string", "pattern": "^j-[a-z0-9-]+$" },
+    "findings-count": { "type": "integer", "minimum": 0 },
+    "confirmed-bugs": {
+      "type": "integer",
+      "minimum": 0,
+      "description": "Findings that reproduced and are genuine app bugs (not test issues)."
+    },
+    "highest-severity": {
+      "type": "string",
+      "enum": ["none", "low", "medium", "high", "critical"]
+    },
+    "regression-tests-added": {
+      "type": "integer",
+      "minimum": 0,
+      "description": "Tests added to lock confirmed bugs that have a fix."
+    },
+    "disabled-tickets": {
+      "type": "array",
+      "items": { "type": "string" },
+      "description": "Ticket IDs for bugs parked behind @ScheduledDisable awaiting a product fix."
+    },
+    "findings-ledger": {
+      "type": "string",
+      "description": "Path to docs/hektor/adversarial-findings.md where findings were recorded."
+    },
+    "summary": { "type": "string" }
+  },
+  "allOf": [
+    {
+      "if": { "properties": { "confirmed-bugs": { "minimum": 1 } }, "required": ["confirmed-bugs"] },
+      "then": { "required": ["findings-ledger"] }
+    }
+  ]
+}

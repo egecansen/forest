@@ -1,0 +1,37 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "hektor/subagent-returns/diagnosis.schema.json",
+  "title": "Diagnosis return",
+  "description": "Return shape for hektor-failure-diagnosis dispatches (description prefix diagnosis-<...>:). Classifies a single failing test into one of the four root-cause buckets.",
+  "type": "object",
+  "additionalProperties": true,
+  "required": ["handover", "test", "classification", "recommended-action"],
+  "properties": {
+    "handover": { "$ref": "handover.schema.json" },
+    "test": {
+      "type": "string",
+      "description": "FQCN.method of the failing test."
+    },
+    "classification": {
+      "type": "string",
+      "enum": ["flake", "stale-selector", "behaviour-change", "app-bug"],
+      "description": "The four root-cause buckets from hektor-failure-diagnosis."
+    },
+    "evidence": {
+      "type": "array",
+      "items": { "type": "string" },
+      "description": "Artefact paths backing the classification: Selenoid VNC, temp/images screenshots, WebDriver logs, page source, stack trace."
+    },
+    "recommended-action": { "type": "string" },
+    "bug-ticket": {
+      "type": "string",
+      "description": "Ticket ID when classification is app-bug."
+    }
+  },
+  "allOf": [
+    {
+      "if": { "properties": { "classification": { "const": "app-bug" } } },
+      "then": { "required": ["bug-ticket"] }
+    }
+  ]
+}

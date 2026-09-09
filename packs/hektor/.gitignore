@@ -1,0 +1,21 @@
+# macOS
+.DS_Store
+
+# Hektor runtime state (written into installed projects, not the pack)
+docs/hektor/.hook-audit.log
+docs/hektor/.cursor-hook-payload.log
+docs/hektor/observations.jsonl
+docs/hektor/memory-proposals.md
+docs/hektor/skill-stocktake.json
+
+# Build artifacts from `hektor-triage-kit build`. npm pack writes into the directory
+# it runs in, which for the kit is this tracked one — and README tells maintainers to
+# run it there. The zip was retired (kernel §7/§12) exactly to stop a stale binary
+# being committed and drifting from the source; committing a .tgz instead would just
+# trade one stale artifact for another. Build it, install it, throw it away.
+# Any kit directory, not only the one that existed when this rule was written: a copy taken
+# to work on the next version (kits/flaky-triage-kit-next) falls outside a hardcoded name, so
+# the guard install-guard-test.sh enforces stopped covering the very tree being edited — it
+# failed there and passed in the original, which reads as a defect in the copy rather than a
+# gap in this line.
+kits/*/*.tgz

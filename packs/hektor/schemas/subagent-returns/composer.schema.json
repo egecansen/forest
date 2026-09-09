@@ -1,0 +1,53 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "hektor/subagent-returns/composer.schema.json",
+  "title": "Composer return",
+  "description": "Return shape for hektor-test-composer dispatches (description prefix composer-<j-slug>:). review.md requires green on Selenoid AND local before a test is done, so both results are reported.",
+  "type": "object",
+  "additionalProperties": true,
+  "required": ["handover", "journey", "surface", "selenoid-result", "local-result", "summary"],
+  "properties": {
+    "handover": { "$ref": "handover.schema.json" },
+    "journey": {
+      "type": "string",
+      "pattern": "^j-[a-z0-9-]+$",
+      "description": "Journey slug from journey-map.md, e.g. j-map-search."
+    },
+    "surface": {
+      "type": "string",
+      "enum": ["website", "responsivesite", "both"]
+    },
+    "pass": { "type": "integer", "minimum": 1 },
+    "tests-added": { "type": "integer", "minimum": 0 },
+    "selenoid-result": {
+      "type": "string",
+      "enum": ["green", "red", "not-run"],
+      "description": "Outcome of the run on Selenoid against the reserved testbox."
+    },
+    "local-result": {
+      "type": "string",
+      "enum": ["green", "red", "not-run"],
+      "description": "Outcome of the local-launchpad run (or not-run when DB/VPN-gated)."
+    },
+    "summary": { "type": "string" },
+    "blocked-reason": { "type": "string" },
+    "skip-authorisation": {
+      "type": "string",
+      "description": "Verbatim user quote when handover.status is skipped. Self-imposed reasons are not authorisation."
+    }
+  },
+  "allOf": [
+    {
+      "if": { "properties": { "handover": { "properties": { "status": { "const": "blocked" } } } } },
+      "then": { "required": ["blocked-reason"] }
+    },
+    {
+      "if": { "properties": { "handover": { "properties": { "status": { "const": "skipped" } } } } },
+      "then": { "required": ["skip-authorisation"] }
+    },
+    {
+      "if": { "properties": { "handover": { "properties": { "status": { "const": "new-tests-landed" } } } } },
+      "then": { "required": ["tests-added"] }
+    }
+  ]
+}

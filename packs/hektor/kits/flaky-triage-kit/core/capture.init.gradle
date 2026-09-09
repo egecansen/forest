@@ -1,0 +1,21 @@
+// capture.init.gradle — Hektor flaky-triage kit, DOM-capture wiring.
+//
+// Injects the kit-local DOM-capture test (capture-src/) as a TEST source root at capture time, so it
+// compiles + runs inside the real gradle test JVM — reusing the framework's proven Selenoid/testbox
+// driver wiring — WITHOUT ever living in the suite tree (kernel N2). Passed via --init-script by
+// core/dom-capture.sh; the dir comes from -Ddomcap.srcDir. No-op if that property is absent, so this
+// script is inert for any build that doesn't opt in.
+def srcDir = System.getProperty('domcap.srcDir')
+def resDir = System.getProperty('domcap.resDir')   // optional: kit resources (the dump-on-failure service file)
+if (srcDir) {
+  gradle.projectsEvaluated {
+    def p = gradle.rootProject
+    if (p.plugins.hasPlugin('java')) {
+      p.sourceSets.test.java.srcDir(srcDir)
+      if (resDir) { p.sourceSets.test.resources.srcDir(resDir) }
+      p.logger.lifecycle("hektor dom-capture: sourced kit test dir -> ${srcDir}" + (resDir ? " (+res ${resDir})" : ""))
+    } else {
+      p.logger.warn("hektor dom-capture: root project has no java plugin; cannot source ${srcDir}")
+    }
+  }
+}
