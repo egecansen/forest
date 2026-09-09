@@ -468,7 +468,22 @@ SERIAL-tagged tests that mutate.
 
 For data that REST exposes, the resource client lives at the
 `com.sahibinden.client.*` namespace and is injected via `@AutowiredBean` on
-the test class (typically via `TestDataResource`).
+the test class (typically via `TestDataResource`). For data that SQL exposes,
+the DAO lives in **test-dao** and is injected the same way (`classifiedDAO`,
+`promotionsDAO`, …).
+
+**Reuse an existing TDC/DAO method.** Grep the sibling **source**
+(`…/test-data-client/src`, `…/test-dao/src`) before adding anything. If the
+method exists, call it. If it does not, load **`hektor-resource-client`**
+(REST → branch `tech/TDC-<n>`) or **`hektor-test-dao`** (SQL → branch
+`tech/DAO-<n>`), wait for `reused` / `authored`, then continue.
+
+**Never author the helper in web-test.** `PromotionWizardClient extends
+AbstractService` under `web-ui-test/util/doping/` (WEBT-255458) is the banned
+shape — `pr-rules-gate` denies `extends AbstractService`, `extends AbstractDAO`,
+`*ResourceClient.java`, and `*DAO.java` in `web-ui-test/`. A new `@AutowiredBean`
+field on `AbstractTestDataResource` is the only web-test edit this path allows
+(injection site, not the implementation).
 
 ### `loginByPass` does NOT navigate
 
@@ -640,8 +655,15 @@ When running tests as part of a Hektor phase, ALWAYS:
 29. `sleepSecond(n)` used as a wait where a generated wait or `waitForPageLoad()
     ` would do. Fixed sleeps only when nothing observable marks the transition,
     and then with a comment saying why. **(WARNING)**
+30. A class in `web-ui-test/` that `extends AbstractService`, is named
+    `*ResourceClient`, or is a REST/HTTP client util (WEBT-255458
+    `PromotionWizardClient`). REST helpers belong in test-data-client.
+    **(BLOCKER)**
+31. A class in `web-ui-test/` that `extends AbstractDAO` or is named `*DAO` /
+    `*DAOImpl`, or SQL inlined in a `*Test.java`. SQL helpers belong in
+    test-dao. **(BLOCKER)**
 
-Items 1–16 are reviewer **BLOCKERs** — refuse to commit code that trips one.
+Items 1–16 and 30–31 are reviewer **BLOCKERs** — refuse to commit code that trips one.
 Items 17–29 (and 9 above where inline) are reviewer **WARNINGs**: they don't
 block the merge, but the bot leaves an inline comment, so fix them in the same
 pass unless there's a documented reason. If you catch any BLOCKER in code the
@@ -652,13 +674,14 @@ tree at write-time.
 
 ---
 
-## Sibling repo: test-data-client (resource clients)
+## Sibling repos: test-data-client and test-dao
 
-The resource clients you inject with `@AutowiredBean` (e.g.
-`UserResourceClient`) live in the **test-data-client** repo, which the same PR
-reviewer polices with its own rule set. When you author or edit a
-`*ResourceClient` there, load **`hektor-resource-client`** for the full
-workflow — but the headline rules are:
+Search sibling **source** first and reuse. If a helper is missing, load
+**`hektor-resource-client`** (REST, branch `tech/TDC-<n>`) or
+**`hektor-test-dao`** (SQL, branch `tech/DAO-<n>`). Do not implement either
+in `web-ui-test/`.
+
+Resource-client headline rules (full set in `hektor-resource-client`):
 
 | Rule | Severity |
 |---|---|
@@ -676,11 +699,11 @@ workflow — but the headline rules are:
 ## Pointers
 
 - `review.md` — the team's PR review checklist. **The** kernel.
-- `hektor-resource-client` — the sibling skill for authoring test-data-client
-  `*ResourceClient` code (the reviewer's second rule set).
+- `hektor-resource-client` — REST helpers in test-data-client (`tech/TDC-<n>`).
+- `hektor-test-dao` — SQL helpers in test-dao (`tech/DAO-<n>`).
 - `hektor-write-language-test` — the language-test authoring rule: one method,
   both `-Dtest.lang` runs, `LanguageText.pick` constants, `CommonTag.LANGUAGE`.
-- `.claude/hooks/pr-rules-gate.sh` — the local diff-scanner that runs the
+- `.cursor/hooks/pr-rules-gate.sh` — the local diff-scanner that runs the
   reviewer's deterministic (Katman 1a) regex checks against your working tree
   at write-time, so a violation is caught before the PR. Kill switch:
   `HEKTOR_PR_RULES_GATE=off`.

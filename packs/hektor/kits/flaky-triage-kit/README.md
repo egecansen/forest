@@ -1,258 +1,251 @@
 # Hektor Flaky-Triage Kit
 
-Triage a flaky **testbox** run for a Selenium/JUnit suite: take an s-report URL + a testbox, re-run the
-report's failing tests on that box, present **one** easy-fix→likely-bug clusters table, the user picks,
-then fix the picked ones end-to-end — verified green (pass^N), flagging suspected app-bugs. **Testbox-only.
-Never commits, files tickets, or disables tests.**
+Bir Selenium/JUnit paketinin flaky **testbox** koşusunu triage edin: bir s-report URL'si + bir testbox
+alın, raporun başarısız testlerini o box üzerinde yeniden koşun, **tek bir** kolay-düzeltme→muhtemel-bug
+küme tablosu sunun, kullanıcı seçsin, sonra seçilenleri baştan sona düzeltin — yeşil olduğu doğrulanmış
+(pass^N), şüpheli uygulama bug'ları işaretlenmiş halde. **Yalnızca testbox. Asla commit atmaz, ticket
+açmaz, test devre dışı bırakmaz.**
 
-The engine is plain shell, so it runs from **any** terminal — with an agent driving it or a human. The
-kit's agent-facing half (the skill Cursor loads, and the gates that stop that agent editing the kit's own
-safety surface or ending a session unproven) targets Cursor.
+Motor düz shell olduğu için **her** terminalden çalışır — onu süren bir ajanla ya da bir insanla. Kitin
+ajana bakan yarısı (Cursor'ın yüklediği beceri ve o ajanın kitin kendi güvenlik yüzeyini düzenlemesini
+ya da oturumu kanıtsız bitirmesini engelleyen kapılar) Cursor'ı hedefler.
 
-## Requirements
-`bash` · `jq` · `curl` · `python3` · `gradle` (+ JDK 17 for the suite). Network access to your ES report
-host and the testbox.
+## Gereksinimler
+`bash` · `jq` · `curl` · `python3` · `gradle` (+ paket için JDK 17). ES rapor sunucunuza ve testbox'a
+ağ erişimi.
 
-## Install — one command
+## Kurulum — tek komut
 
-Drop this `flaky-triage-kit/` folder anywhere and run the command:
+Bu `flaky-triage-kit/` klasörünü herhangi bir yere bırakın ve şu komutu çalıştırın:
 
 ```bash
 ./hektor-triage-kit install --project /path/to/your/repo
-# from anywhere after putting it on PATH:
-./hektor-triage-kit link            # symlink onto ~/.local/bin
+# PATH'e koyduktan sonra her yerden:
+./hektor-triage-kit link            # ~/.local/bin altına symlink
 hektor-triage-kit install --project /path/to/your/repo
 ```
 
-`install` auto-configures everything — **no manual config step**: it auto-detects **JDK 17** (writes
-`run.java_home`) and **source_roots** (your `src/test/java`), then wires the gates. Other subcommands:
-`hektor-triage-kit lock|unlock|status` (the OS-level protection tier — **hardened** when `sudo` is
-available, chmod-only **degraded** otherwise; see `core/lock-kit.sh`'s header), `link` (put it on PATH),
-`build` (below), and `--version` — which reports *this source checkout's* version, while `status` reports
-which version a given *project* was installed from. (`./install.sh` still works directly if you prefer.)
+`install` her şeyi otomatik yapılandırır — **elle yapılandırma adımı yok**: **JDK 17**'yi otomatik
+bulur (`run.java_home` yazar) ve **source_roots**'u (sizin `src/test/java`'nız) tespit eder, sonra
+kapıları bağlar. Diğer alt komutlar: `hektor-triage-kit lock|unlock|status` (OS düzeyindeki koruma
+kademesi — `sudo` varken **hardened**, yoksa yalnızca-chmod **degraded**; bkz. `core/lock-kit.sh`'in
+başlığı), `link` (PATH'e koyar), `build` (aşağıda) ve `--version` — bu, *bu kaynak checkout'unun*
+sürümünü bildirir; `status` ise verilen bir *projenin* hangi sürümden kurulduğunu bildirir. (İsterseniz
+`./install.sh` doğrudan da çalışır.)
 
-One install lays down:
-- **the engine + skill** at `.cursor/skills/hektor-flaky-triage/` — Cursor loads the skill by
-  description, or you invoke it as `/hektor-flaky-triage`.
-- **the self-protection gate**, registered on `beforeShellExecution` + `preToolUse`.
-- **the delivery gate**, registered on `stop`.
-- **Bare terminal / human** — the engine just runs; nothing else needed.
+Tek bir kurulum şunları yerleştirir:
+- **motor + beceri**: `.cursor/skills/hektor-flaky-triage/` — Cursor beceriyi açıklamasıyla yükler ya
+  da `/hektor-flaky-triage` ile çağırırsınız.
+- **kendini koruma kapısı**, `beforeShellExecution` + `preToolUse` üzerine kayıtlı.
+- **teslim kapısı**, `stop` üzerine kayıtlı.
+- **Yalın terminal / insan** — motor öylece çalışır; başka bir şey gerekmez.
 
-It's **idempotent** (re-runnable, no duplicate registrations, preserves the rest of your hooks.json).
-**Reload the Cursor window** so the skill and hooks load; the engine works from a terminal immediately.
+**Idempotent**tir (yeniden çalıştırılabilir, yinelenen kayıt yapmaz, hooks.json'ınızın geri kalanını
+korur). Beceri ve hook'ların yüklenmesi için **Cursor penceresini yeniden yükleyin**; motor terminalden
+hemen çalışır.
 
-**Check the exit status if you script it.** `0` is a clean install and the only status that ends with
-`install: done`. `74` means the install FINISHED but the delivery gate's `stop` registration could not
-be merged into `.cursor/hooks.json` (almost always: `.hooks.stop` exists and is not an array) — the
-engine, the skill and every other registration are in place, the ending says `install: INCOMPLETE`, and
-it deliberately does **not** print the "harden next" step. Do not run `core/lock-kit.sh lock` in that
-state: `core/.harness` still records the `stop` capability on purpose, so the wiring axis reads
-`unregistered`, which is a warning while the tree is yours and **rc 76 from every entrypoint** once it
-is root-owned — where the remedy it prints (re-run the installer) is itself refused with `75`. Fix
-`.hooks.stop`, re-run the installer, *then* lock. (`64` bad arguments, `66` no such project, `69` no
-`jq`, `75` the target kit is already root-owned — unlock first.)
+**Betikliyorsanız çıkış durumunu kontrol edin.** `0` temiz kurulumdur ve `install: done` ile biten tek
+durumdur. `74`, kurulumun BİTTİĞİ ama teslim kapısının `stop` kaydının `.cursor/hooks.json` içine
+birleştirilemediği anlamına gelir (neredeyse her zaman: `.hooks.stop` var ve bir dizi değil) — motor,
+beceri ve diğer bütün kayıtlar yerindedir, sonuç `install: INCOMPLETE` der ve "sırada sertleştirme"
+adımını bilinçli olarak **yazmaz**. Bu durumda `core/lock-kit.sh lock` çalıştırmayın: `core/.harness`
+`stop` yeteneğini bilerek kaydetmeye devam eder, dolayısıyla bağlantı ekseni `unregistered` okur; ağaç
+sizindeyken bu bir uyarı, root'a geçtiğinde ise **her giriş noktasından rc 76**'dır — orada yazdırdığı
+çare (kurucuyu yeniden çalıştırmak) da `75` ile reddedilir. `.hooks.stop`'u düzeltin, kurucuyu yeniden
+çalıştırın, *sonra* kilitleyin. (`64` hatalı argüman, `66` böyle bir proje yok, `69` `jq` yok, `75`
+hedef kit zaten root'a ait — önce kilidi açın.)
 
-## Building a distributable
+## Dağıtılabilir paket üretme
 
     hektor-triage-kit build
 
-Packs the kit into `hektor-flaky-triage-<version>.tgz` and verifies it: no
-`.lock-state`, no dev cruft, and a packed `install.sh` identical to the source's.
-A failed check deletes the artifact rather than leaving a bad one on disk.
-Packing is gated on `scripts/scan-kit.sh`, which refuses a tree carrying internal
-hostnames outside `core/config.json` and `kernel.md`; if it refuses, `build` prints
-the scan's own line — file and line number — rather than a summary.
+Kiti `hektor-flaky-triage-<version>.tgz` içine paketler ve doğrular: `.lock-state`
+yok, geliştirme artığı yok, paketlenen `install.sh` kaynaktakiyle birebir aynı.
+Başarısız bir denetim, diskte bozuk bir artefakt bırakmak yerine onu siler.
+Paketleme `scripts/scan-kit.sh`'e bağlıdır; bu betik `core/config.json` ve
+`kernel.md` dışında iç hostname taşıyan bir ağacı reddeder; reddederse `build`
+özet yerine taramanın kendi satırını — dosya ve satır numarası — yazar.
 
-`npm pack` writes into the directory it runs in, so the `.tgz` lands here, in a
-tracked directory. It is git-ignored on purpose: build it, install it, throw it
-away. Two artifacts means one goes stale, which is why the zip was retired.
+`npm pack` çalıştığı dizine yazar, dolayısıyla `.tgz` buraya, izlenen bir dizine
+düşer. Bilerek git-ignore'ludur: üretin, kurun, atın. İki artefakt demek birinin
+bayatlaması demektir; zip'in emekliye ayrılma sebebi budur.
 
-Run `build` from **this source checkout**. An unpacked tarball has `package.json`
-but not `scripts/` — packaging tooling is deliberately outside the `files`
-whitelist — so a packaged kit cannot repack itself, and `build` says so (exit 66).
+`build`'i **bu kaynak checkout'undan** çalıştırın. Açılmış bir tarball'da
+`package.json` vardır ama `scripts/` yoktur — paketleme araçları bilinçli olarak
+`files` beyaz listesinin dışındadır — bu yüzden paketlenmiş bir kit kendini
+yeniden paketleyemez ve `build` bunu söyler (çıkış 66).
 
-Install it anywhere:
+Her yere kurun:
 
     npm i -g ./hektor-flaky-triage-1.0.0.tgz && hektor-triage-kit install
     npx /path/to/kits/flaky-triage-kit install
 
-Both forms reach the CLI through a symlink — that is how npm's `bin` works, with no
-opt-out — so the CLI resolves its own symlink chain before locating `install.sh`.
-`npx <tarball>` is **not** a form that works: npx cannot resolve a `bin` from a
-tarball spec. Use `npx <directory>` or `npm i -g <tarball>`.
+Her iki biçim de CLI'a bir symlink üzerinden ulaşır — npm'in `bin`'i böyle
+çalışır, devre dışı bırakılamaz — bu yüzden CLI, `install.sh`'i bulmadan önce
+kendi symlink zincirini çözer. `npx <tarball>` çalışan bir biçim **değildir**:
+npx bir tarball spec'inden `bin` çözemez. `npx <dizin>` ya da
+`npm i -g <tarball>` kullanın.
 
-## Configure (the only edit needed for a same-infra team)
-Edit `<repo>/.cursor/skills/hektor-flaky-triage/core/config.json`:
-- `source_roots` — your test/page packages (where `apply` is allowed to write). **Required.**
-- `run.workdir` — the Gradle module (default `web-ui-test`).
-- `es.host` (+ add it to `es.host_allowlist`) / `qagent` / `jira` — already point at the shared org
-  infra; change only if yours differs. **No secrets in this file** (it's the config seam, kernel §10).
+## Yapılandırma (aynı altyapıdaki bir ekip için gereken tek düzenleme)
+`<repo>/.cursor/skills/hektor-flaky-triage/core/config.json` dosyasını düzenleyin:
+- `source_roots` — test/page paketleriniz (`apply`'ın yazmasına izin verilen yer). **Zorunlu.**
+- `run.workdir` — Gradle modülü (varsayılan `web-ui-test`).
+- `es.host` (+ `es.host_allowlist`'e ekleyin) / `qagent` / `jira` — zaten paylaşılan kurum altyapısını
+  gösterir; yalnızca sizinki farklıysa değiştirin. **Bu dosyada sır tutulmaz** (burası yapılandırma
+  dikişidir, kernel §10).
 
-Set the JDK once: `export HEKTOR_FK_JAVA_HOME=/path/to/jdk-17`.
+JDK'yı bir kez ayarlayın: `export HEKTOR_FK_JAVA_HOME=/path/to/jdk-17`.
 
-## Run
-The LLM drives the loop in `SKILL.md` by calling the engine:
+## Çalıştırma
+LLM, `SKILL.md` içindeki döngüyü motoru çağırarak sürer:
 ```bash
 KIT=.cursor/skills/hektor-flaky-triage/core
-"$KIT/ingest.sh"  "<s-report-url>"   > fails.json     # validates + pins the build; strips smuggled text
-"$KIT/cluster.sh" < fails.json       > clusters.json  # root-cause clusters (bounds-capped)
-"$KIT/rerun.sh"   "<fqcn-csv>" <tb>                    # the verification oracle (RERUN_EARLY_EXIT=0 = full N)
-echo '{"file":"…","old":"…","new":"…"}' | "$KIT/apply.sh"   # working-tree edit, confined to source_roots
-"$KIT/summary.sh" < ledger.json                        # convergence report (structured tokens only)
+"$KIT/ingest.sh"  "<s-report-url>"   > fails.json     # doğrular + build'i sabitler; kaçak metni ayıklar
+"$KIT/cluster.sh" < fails.json       > clusters.json  # kök-neden kümeleri (üst sınırlı)
+"$KIT/rerun.sh"   "<fqcn-csv>" <tb>                    # doğrulama oracle'ı (RERUN_EARLY_EXIT=0 = tam N)
+echo '{"file":"…","old":"…","new":"…"}' | "$KIT/apply.sh"   # çalışma ağacı düzenlemesi, source_roots ile sınırlı
+"$KIT/summary.sh" < ledger.json                        # yakınsama raporu (yalnızca yapılandırılmış token'lar)
 ```
 
-## Delivery gate
-The delivery gate — installed to `.cursor/hooks/flaky-kit-delivery-gate.sh` (source:
-`gates/flaky-kit-delivery-gate.sh`) — runs at session **stop** and refuses to let a session
-end unproven. It carries two checks, deliberately at different hardness:
+## Teslim kapısı
+Teslim kapısı — `.cursor/hooks/flaky-kit-delivery-gate.sh` konumuna kurulur (kaynak:
+`gates/flaky-kit-delivery-gate.sh`) — oturum **stop**'unda çalışır ve bir oturumun kanıtsız bitmesine
+izin vermez. İki denetim taşır, bilinçli olarak farklı sertliklerde:
 
-- **I11** — derives the ledger path(s) straight out of the transcript and runs
-  `core/ledger.sh validate <ledger> --final` on each (that argument order: the file first, the flag
-  after — reversed, the command exits 65 "not a ledger" rather than I11's own 67). This fires on **every** stop
-  while any cluster is still `selected`/`applied`: no loop-count escape, and **no environment
-  bypass** — the remedy is entirely in the agent's hands (move each cluster to green/flagged/deferred
-  and finish again). A session that ran `core/apply` or `core/rerun` and left no ledger at all is
-  caught the same way; a session that only `ingest`ed or `cluster`ed passes with no check; a session
-  that never touched the kit is silent.
+- **I11** — defter (ledger) yolunu/yollarını doğrudan transkriptten türetir ve her biri için
+  `core/ledger.sh validate <ledger> --final` çalıştırır (bu argüman sırası: önce dosya, sonra bayrak —
+  tersi olursa komut I11'in kendi 67'si yerine 65 "ledger değil" ile çıkar). Herhangi bir küme hâlâ
+  `selected`/`applied` iken **her** stop'ta ateşlenir: loop-count kaçışı yok ve **ortam değişkeniyle
+  atlatma yok** — çare tamamen ajanın elindedir (her kümeyi green/flagged/deferred'a taşıyıp yeniden
+  bitirmek). `core/apply` ya da `core/rerun` çalıştırıp hiç defter bırakmayan bir oturum da aynı şekilde
+  yakalanır; yalnızca `ingest` ya da `cluster` yapmış bir oturum denetimsiz geçer; kite hiç dokunmamış
+  bir oturumda kapı sessizdir.
 
-  **The no-ledger half has a one-token escape, and it is deliberate.** It fires only when the
-  transcript names no `core/ledger` at all. A session that ran `core/apply` and also mentions the
-  token — `true # core/ledger` is enough — takes the fail-open arm instead: audited, not blocked
-  (verified: `core/apply.sh c3` alone blocks; the same session plus that one command passes). That
-  arm exists because a ledger path containing a space cannot be resolved by a transcript scan that
-  splits on whitespace, and firing there would be unanswerable — the I11 half has no
-  loop-count escape, so following the gate's own printed remedy reproduces the finding and the
-  session loops with no way out. A false stop with no exit is worse than a hole that leaves an audit
-  line, so the hole stays and is named here rather than left for a reader to find. **The
-  open-cluster half above has no such escape**: it reads the ledger's state, not the transcript's
-  wording.
-- **hedge-scan** — re-runs the same scan `SKILL.md` already asks the agent to pipe its own summary
-  through, this time over the session's last assistant message. This fires **once** (it stands down
-  as soon as `loop_count` is non-zero, and `hooks.json` caps it with `loop_limit: 1`): a false
-  positive costs one extra turn, not the rest of the session.
+  **Defter-yok yarısının tek-token'lık bir kaçışı vardır ve bu bilinçlidir.** Yalnızca transkript
+  hiçbir yerde `core/ledger` adını geçirmiyorsa ateşlenir. `core/apply` çalıştırmış ve bu token'ı da
+  anan bir oturum — `true # core/ledger` yeter — bunun yerine fail-open koluna girer: denetim kaydı
+  düşer, engellenmez (doğrulandı: tek başına `core/apply.sh c3` engelliyor; aynı oturum artı o tek
+  komut geçiyor). Bu kol var, çünkü içinde boşluk olan bir defter yolu, boşluğa göre bölen bir
+  transkript taramasıyla çözülemez ve orada ateşlenmek yanıtlanamaz olurdu — I11 yarısının loop-count
+  kaçışı yoktur, dolayısıyla kapının kendi yazdırdığı çareyi izlemek bulguyu yeniden üretir ve oturum
+  çıkışsız bir döngüye girer. Çıkışı olmayan yanlış bir durdurma, denetim satırı bırakan bir delikten
+  daha kötüdür; bu yüzden delik duruyor ve okurun bulmasına bırakılmak yerine burada adlandırılıyor.
+  **Yukarıdaki açık-küme yarısının böyle bir kaçışı yoktur**: o, transkriptin ifadesini değil defterin
+  durumunu okur.
+- **hedge-scan** — `SKILL.md`'nin zaten ajandan kendi özetini geçirmesini istediği taramanın aynısını,
+  bu kez oturumun son asistan mesajı üzerinde yeniden çalıştırır. **Bir kez** ateşlenir (`loop_count`
+  sıfırdan farklı olur olmaz geri çekilir ve `hooks.json` onu `loop_limit: 1` ile sınırlar): yanlış bir
+  pozitif, oturumun geri kalanına değil yalnızca bir ekstra tura mal olur.
 
-Every path the gate can't evaluate — no `jq`, an unreadable transcript, the engine not found, a
-`validate --final` that exits something other than a verdict — fails open and writes one audit line;
-it never wedges a caller and never fails silently.
+Kapının değerlendiremediği her yol — `jq` yok, okunamayan bir transkript, motorun bulunamaması, bir
+verdict dışında bir şeyle çıkan bir `validate --final` — fail-open davranır ve tek bir denetim satırı
+yazar; hiçbir zaman çağıranı kilitlemez ve hiçbir zaman sessizce başarısız olmaz.
 
-Note on the verdict shape: a `stop` hook cannot veto — by the time it runs the agent has already
-stopped. It returns a `followup_message` instead, which puts the finding in front of the agent and
-makes it take another turn. "Blocks" throughout this section means exactly that.
+Verdict biçimi hakkında not: bir `stop` hook'u veto edemez — çalıştığı anda ajan zaten durmuştur.
+Bunun yerine bir `followup_message` döndürür; bu, bulguyu ajanın önüne koyar ve bir tur daha atmasını
+sağlar. Bu bölümdeki "engeller" tam olarak bunu demektir.
 
-## Self-protection
-The kit guards its own `core/` · `SKILL.md` — plus its own protection gate at
-`.cursor/hooks/flaky-kit-self-protection-gate.sh`, the delivery gate beside it at
-`.cursor/hooks/flaky-kit-delivery-gate.sh`, that gate's vendored `lib/`, the Cursor gate and
-libs under `.cursor/hooks/`, the out-of-tree `.flaky-kit-expect` tier record, and both hook
-directories as `mv`/`rm` operands. The gate is installed OUTSIDE this tree deliberately, so renaming
-the tree can't take the detector with it. It denies agent writes to any of that unless
-`HEKTOR_FLAKYKIT_UNLOCK=1` — real denials, honored by the CLI, but a heuristic string match all the
-same: friction and an audit trail, not a wall.
+## Kendini koruma
+Kit kendi `core/` · `SKILL.md` dosyalarını korur — ayrıca
+`.cursor/hooks/flaky-kit-self-protection-gate.sh` konumundaki kendi koruma kapısını, yanındaki
+`.cursor/hooks/flaky-kit-delivery-gate.sh` teslim kapısını, o kapının vendor'ladığı `lib/`'i,
+`.cursor/hooks/` altındaki Cursor kapısını ve lib'leri, ağaç dışındaki `.flaky-kit-expect` kademe
+kaydını ve `mv`/`rm` işlenenleri olarak her iki hook dizinini de. Kapı bu ağacın DIŞINA bilerek kurulur,
+böylece ağacı yeniden adlandırmak dedektörü de götüremez. `HEKTOR_FLAKYKIT_UNLOCK=1` olmadıkça bunların
+hiçbirine ajanın yazmasına izin vermez — gerçek retlerdir, CLI tarafından da uygulanır, ama yine de
+sezgisel bir dizgi eşleşmesidir: bir duvar değil, sürtünme ve denetim izi.
 
-**The harness settings files are on that surface too** — `.cursor/hooks.json`,
-`.cursor/hooks.json` and `.cursor/hooks.json` — because unregistering the gate is cheaper
-than editing it, and everything above is downstream of that one registration existing. The two tool
-branches ask different questions about them, deliberately:
+**Harness ayar dosyaları da bu yüzeydedir** — `.cursor/hooks.json`, `.cursor/hooks.json` ve
+`.cursor/hooks.json` — çünkü kapıyı kayıttan düşürmek düzenlemekten ucuzdur ve yukarıdakilerin tamamı
+o tek kaydın var olmasına bağlıdır. İki araç dalı onlara bilerek farklı sorular sorar:
 
-- **Bash — any mutation is denied**, whether or not it would actually change the registration. No
-  file content is available there, so the rule is a path-plus-verb match. Expect these to be denied
-  even though they look harmless: `cp .cursor/hooks.json /tmp/x` (a *copy out* still names a
-  mutating verb), and `rm -f .cursor/hooks.json.bak` (the pattern has no end-of-token boundary, so
-  any path merely *beginning* with a settings path matches — a known imprecision, erring toward
-  flagging). Reads pass: `cat` / `jq .` on those files are untouched.
-- **Write/Edit — decided by outcome.** The payload is available, so the gate asks whether the kit's
-  registration survives the change and denies only when it would not. Editing permissions, env or
-  model is allowed; so is *widening* the registration (`Write|Edit` → `Write|Edit|MultiEdit`, or both
-  matchers collapsed into one `*`). Narrowing it, dropping a matcher, or proposing unparseable JSON is
-  denied. A settings file that carries no registration today is not this kit's business at all.
+- **Bash — her mutasyon reddedilir**, kaydı gerçekten değiştirip değiştirmeyeceğine bakılmaksızın.
+  Orada dosya içeriği mevcut olmadığı için kural bir yol-artı-fiil eşleşmesidir. Zararsız göründükleri
+  hâlde şunların reddedilmesini bekleyin: `cp .cursor/hooks.json /tmp/x` (bir *dışarı kopyalama* da
+  mutasyon fiili anar) ve `rm -f .cursor/hooks.json.bak` (kalıbın token-sonu sınırı yoktur, dolayısıyla
+  bir ayar yoluyla *yalnızca başlayan* her yol eşleşir — bilinen bir kabalık, işaretleme yönünde hata
+  yapar). Okumalar geçer: bu dosyalarda `cat` / `jq .` dokunulmadan kalır.
+- **Write/Edit — sonuca göre karar verilir.** Yük mevcut olduğu için kapı, değişiklikten sonra kitin
+  kaydının hayatta kalıp kalmadığını sorar ve yalnızca kalmayacaksa reddeder. İzinleri, ortamı ya da
+  modeli düzenlemek serbesttir; kaydı *genişletmek* de öyle (`Write|Edit` → `Write|Edit|MultiEdit` ya
+  da her iki matcher'ın tek bir `*` içinde birleştirilmesi). Daraltmak, bir matcher'ı düşürmek ya da
+  ayrıştırılamaz JSON önermek reddedilir. Bugün hiç kayıt taşımayan bir ayar dosyası bu kitin hiç işi
+  değildir.
 
-The delivery gate's `stop` registration is a slot of that same model, so a `del(.hooks.stop)` that
-leaves `preToolUse` untouched is denied exactly as dropping a `preToolUse` matcher is — the two
-controls are unregistered by the same edit and cost the same. A hooks.json that carries no `stop`
-registration (any install predating the delivery gate) does not start needing one: the rule is
-"would lose what it has", never "must always end registered".
+Teslim kapısının `stop` kaydı aynı modelin bir slot'udur; bu yüzden `preToolUse`'a dokunmayan bir
+`del(.hooks.stop)`, bir `preToolUse` matcher'ını düşürmekle tam olarak aynı şekilde reddedilir — iki
+denetim de aynı düzenlemeyle kayıttan düşer ve aynı maliyeti taşır. `stop` kaydı taşımayan bir
+hooks.json (teslim kapısından önceki her kurulum) birdenbire ona ihtiyaç duymaya başlamaz: kural
+"sahip olduğunu kaybeder mi", asla "her zaman kayıtlı bitmeli" değildir.
 
-`core/_integrity.sh` asks the second question — *will the gate actually run?* — from the same slot
-model, so the two never disagree about what a valid registration is. Since 2026-07-31 it also REPAIRS
-what it finds broken (`core/_wiring_repair.sh`, called between detection and reporting) — but only at a
-tier that lets the run **proceed**: the registration is rewritten additively — `unregistered`,
-`partial`, and `dangling` alike, with the same jq merge `install.sh` itself performs — and the gate
-FILE is restored from the engine's own vendored copy; `foreign` is never touched either way. **At every
-tier that REFUSES — `hardened`, `stale` and `mismatch` — nothing is written at all, not the gate file
-and not the registration.** An
-earlier version repaired the registration there too, on the theory that a rewritten registration
-doesn't arm the session that wrote it, so the refusal would hold anyway. Measured, that held for
-exactly one call: `integrity_guard` recomputes both axes from the filesystem every time, so the next
-entrypoint read the registration it had just written, saw `wired`, and returned 0 — one call refusing,
-every call after it silently unprotected. `mismatch` was missed by the first correction, which said
-"where the tree is root-owned" and so reached the other two but not the one tier whose whole meaning is
-a recorded root ownership the tree does *not* have — measured there, the repair copied the gate script
-out of a tree the same run declares untrustworthy into the kit's own protection-hook path, and flipped
-the axis from `dangling` to `wired`. Corrected: at all three the guard detects, says what is
-wrong, and writes nothing, so the refusal (exit 76) holds on every entrypoint because nothing on disk
-ever changes. The printed advice there is still to unlock, reinstall, and lock — the only path that
-actually changes anything at that tier.
+`core/_integrity.sh` ikinci soruyu sorar — *kapı gerçekten çalışacak mı?* — aynı slot modelinden,
+böylece ikisi geçerli bir kaydın ne olduğu konusunda asla anlaşmazlığa düşmez. 2026-07-31'den beri
+bulduğu bozuklukları ONARIR da (`core/_wiring_repair.sh`, tespitle raporlama arasında çağrılır) — ama
+yalnızca koşunun **devam etmesine** izin veren bir kademede: kayıt eklemeli olarak yeniden yazılır —
+`unregistered`, `partial` ve `dangling`, hepsi `install.sh`'in kendi yaptığı aynı jq birleştirmesiyle —
+ve kapı DOSYASI motorun kendi vendor'ladığı kopyasından geri yüklenir; `foreign` hiçbir şekilde
+ellenmez. **REDDEDEN her kademede — `hardened`, `stale` ve `mismatch` — hiçbir şey yazılmaz, ne kapı
+dosyası ne de kayıt.** Daha eski bir sürüm orada kaydı da onarıyordu; gerekçesi, yeniden yazılan bir
+kaydın onu yazan oturumu zaten silahlandırmadığı, dolayısıyla reddin yine de tutacağıydı. Ölçüldüğünde
+bu tam olarak bir çağrı boyunca tuttu: `integrity_guard` her seferinde iki ekseni de dosya sisteminden
+yeniden hesaplar, dolayısıyla bir sonraki giriş noktası az önce yazdığı kaydı okudu, `wired` gördü ve 0
+döndürdü — bir çağrı reddediyor, ondan sonraki her çağrı sessizce korumasız. `mismatch`, "ağacın root'a
+ait olduğu yerde" diyen ilk düzeltmenin gözünden kaçtı; o düzeltme diğer ikisine ulaştı ama tüm anlamı
+ağacın sahip *olmadığı* kayıtlı bir root mülkiyeti olan bu tek kademeye ulaşmadı — orada ölçüldüğünde
+onarım, aynı koşunun güvenilmez ilan ettiği bir ağaçtan kapı betiğini kitin kendi koruma-hook yoluna
+kopyaladı ve ekseni `dangling`'den `wired`'a çevirdi. Düzeltildi: üçünde de muhafız tespit eder, neyin
+yanlış olduğunu söyler ve hiçbir şey yazmaz; böylece disk üzerinde hiçbir şey değişmediği için ret
+(çıkış 76) her giriş noktasında tutar. Orada yazdırılan tavsiye hâlâ kilidi açmak, yeniden kurmak ve
+kilitlemektir — o kademede gerçekten bir şeyi değiştiren tek yol budur.
 
-It announces a repair only where one actually happened. The repair re-merges **every** slot whenever
-the axis reports any failure, so on a mixed state (one control broken, another already fine) each
-merge that had nothing to add is an idempotent no-op — and *"REPAIRED — the … registration has been
-rewritten"* is a claim about a state change, false when no state changed. Both registrars
-(`preToolUse`/`beforeShellExecution`, and `stop`) therefore report three outcomes rather than two — landed
-and changed, landed and changed nothing, did not land — and only the first is announced, by name, per
-control. Silence from one of them means it had nothing to do, never that it was skipped: a merge that
-does not land says so on stderr instead.
+Bir onarımı yalnızca gerçekten olduğu yerde duyurur. Onarım, eksen herhangi bir başarısızlık bildirdiğinde
+**her** slot'u yeniden birleştirir; dolayısıyla karışık bir durumda (bir denetim bozuk, bir diğeri zaten
+iyi) ekleyecek şeyi olmayan her birleştirme idempotent bir no-op'tur — ve *"REPAIRED — the … registration
+has been rewritten"* bir durum değişikliği iddiasıdır, hiçbir durum değişmediğinde yanlıştır. Bu yüzden
+her iki kaydedici de (`preToolUse`/`beforeShellExecution` ve `stop`) iki değil üç sonuç bildirir — indi ve
+değiştirdi, indi ve hiçbir şey değiştirmedi, inmedi — ve yalnızca ilki, denetim başına adıyla duyurulur.
+Birinden gelen sessizlik, yapacak işi olmadığı anlamına gelir; asla atlandığı anlamına gelmez: inmeyen bir
+birleştirme bunu stderr'de söyler.
 
-The wall, where there is one, is underneath: `lock-kit.sh` reaches for an OS-level tier. **hardened** —
-`core/**`, `SKILL.md`, the gate scripts, the vendored libs and the kit root itself chown'd to root, so
-reopening needs a password — holds in every harness, because the kernel enforces it rather than a hook.
-Without `sudo` it **degrades** to a chmod-only read-only bit the same user (and therefore an agent
-running as them) can reverse — friction, not a wall. `lock-kit.sh status` names the tier actually in
-effect and prints the OWNER of every surface path, which is the only way to spot a `chown` that applied
-to some paths and not others. **Read `core/lock-kit.sh`'s header before calling a kit protected:** it
-is the authoritative, living list of what the hardened tier does not cover — that file, not this page,
-is the one to trust for the current count. What follows is a copy for this page's convenience, kept in
-step by hand and not a substitute for the header; if the two ever disagree, the header wins:
+Duvar, varsa, altta: `lock-kit.sh` OS düzeyinde bir kademeye uzanır. **hardened** — `core/**`,
+`SKILL.md`, kapı betikleri, vendor'lanan lib'ler ve kit kökünün kendisi root'a chown'lanır, böylece
+yeniden açmak parola ister — her harness'ta tutar, çünkü onu bir hook değil çekirdek uygular. `sudo`
+olmadan, aynı kullanıcının (ve dolayısıyla o kullanıcı olarak koşan bir ajanın) geri alabileceği
+yalnızca-chmod salt-okunur bit'ine **düşer** — duvar değil, sürtünme. `lock-kit.sh status` yürürlükteki
+kademeyi adlandırır ve her yüzey yolunun SAHİBİNİ yazar; bazı yollara uygulanıp bazılarına uygulanmamış
+bir `chown`'u fark etmenin tek yolu budur. **Bir kiti korunuyor saymadan önce `core/lock-kit.sh`'in
+başlığını okuyun:** hardened kademenin kapsamadıklarının otoriter ve yaşayan listesi odur — bu sayfa
+değil, o dosya güncel sayı için güvenilecek yerdir. Aşağıdaki, bu sayfanın kolaylığı için tutulan bir
+kopyadır; elle güncel tutuluyor ve başlığın yerini tutmaz; ikisi çelişirse başlık kazanır:
 
-1. **Shadowing** — `mv` the kit dir aside and replace it. Detected via the out-of-tree record, not prevented.
-2. **That record is itself deletable** — its directory must stay user-owned, so the same actor can erase the expectation.
-3. **Every out-of-tree surface path** (all three gate scripts — both self-protection gates and the delivery gate — and the vendored libs) is protected against *edit*, not against *replacement*: their parents stay user-owned.
-4. **Social engineering** a human into running the unlock.
-5. **Anything after the password is typed** — `lock`/`unlock` end with `sudo -k`, but the window between the prompt and the end of the privileged section remains.
-6. **Partial hardening** — a `chown` can succeed on some operands and fail on others; the tier is sampled from `core/` alone. Announced and diagnosable, not prevented.
-7. **`.cursor/hooks.json` is not chown'd at any tier**, hardened included — Cursor keeps editing it for its own reasons. Its only protection is the preToolUse gate described above, which covers the delivery gate's `stop` registration as well as the self-protection gate's own: a heuristic policy layer with no ownership floor under it. It denies only a change that would *lose* a registration the file carries today, never "must always end registered".
-8. **The wiring check reads the same hooks.json an agent can write.** It proves a registration is present and, where the tree is root-owned, that it points at a file this kit still owns. It cannot prove the harness will *honour* that registration at any tier.
-9. **A bare `.cursor` operand matches no surface pattern**, so removing the whole directory is allowed — and at the hardened tier that unlinks the root-owned self-protection gate, the root-owned delivery gate, the audit lib, `.flaky-kit-expect` and both registrations. Pre-existing and scheduled as separate work: widening the pattern to a bare `.cursor` changes the surface from "the kit's files" to "Cursor's entire configuration tree" and needs its own design round.
-10. **A repair arms on the next session, never the one that made it.** The harness reads hook config at startup, so between the repair and a restart the gate is registered and not running.
-11. **The kit repairs its own registration only.** A neighbouring pack's stale registration is not the kit's to fix and is not fixed.
-12. **Below a root-owned tree the restore source has no more protection than anything else** — a poisoned `core/gate-src` restores a poisoned gate. That is what the lower tiers already mean.
-13. **The registration repair is purely additive, never a purge.** `install.sh` drops a pre-relocation registration before merging; the repair does not, so a dead command it finds stays registered forever alongside whatever the repair adds. It does not block convergence — the relocated path sorts ahead of the pre-relocation one *within one settings file* (not guaranteed split across `settings.json`/`settings.local.json`: `integrity_wiring` concatenates each file's `unique` output in file order and `_wiring_cover` takes the first line, so there is no cross-file sort. Measured with the dead entry in `settings.json` and the relocated one in `settings.local.json`, the cover for `beforeShellExecution` is the *pre-relocation* command and the verdict is `dangling`). The repair still converges there, because it always writes into `settings.json`, which is read first — measured, `dangling` on the read before and `wired` on the read after a single repair call. So once the relocated gate file exists the axis reads `wired` while a harness that runs every registered hook, not only the one this axis checks, still attempts the dead command on every matching call: the original symptom, now invisible to the axis that used to catch it. Re-running the installer, which does purge it, is the actual fix.
-14. **The delivery gate's reach** — a `stop` hook prompts another turn rather than vetoing, so I11 and hedge-scan
-remain what they were before this change: prose the agent is trusted to honour.
-15. **The gate reads the transcript the harness wrote, not the session itself** — it proves what
-was recorded, not what happened; a ledger the agent never named on a command line is invisible to it.
-16. **`core/apply`/`core/rerun` is the dividing line for "work was done"** — a session that changed
-things some other way and left no ledger is not caught.
-17. **The delivery gate's own protection is entirely second-order.** It is a `stop` hook: it runs
-once, at end-of-session, and observes no tool call, so it can never deny the call that removes it.
-Everything that does deny that call — the surface match on its file, and the outcome test that
-refuses an edit dropping its `stop` registration — lives in the *preToolUse self-protection gate*.
-Defeat that gate first (residual 7's escape classes, or residual 9's bare `.cursor`) and the delivery
-gate falls with no further friction. Root-owning its file buys less here than residual 3 concedes:
-the registration is not chown'd at any tier, and unregistering is cheaper than editing. Detected
-afterwards by the wiring axis — but only on the *next* entrypoint, and a session whose whole goal is
-to stop never runs one.
-18. **The no-ledger check has a one-token escape, by design** — see the delivery-gate section above
-for what it is, why it is there, and why it audits instead of firing.
+1. **Gölgeleme** — kit dizinini `mv` ile kenara alıp yerine başkasını koymak. Ağaç dışı kayıt üzerinden tespit edilir, önlenmez.
+2. **O kayıt da silinebilir** — dizininin kullanıcıya ait kalması gerekir, dolayısıyla aynı aktör beklentiyi silebilir.
+3. **Ağaç dışındaki her yüzey yolu** (üç kapı betiği de — her iki kendini koruma kapısı ve teslim kapısı — ve vendor'lanan lib'ler) *düzenlemeye* karşı korunur, *değiştirilmeye* karşı değil: ebeveynleri kullanıcıya ait kalır.
+4. Bir insanı unlock'u çalıştırmaya ikna etmek — **sosyal mühendislik**.
+5. **Parola yazıldıktan sonraki her şey** — `lock`/`unlock` `sudo -k` ile biter, ama komut istemiyle ayrıcalıklı bölümün sonu arasındaki pencere kalır.
+6. **Kısmi sertleştirme** — bir `chown` bazı işlenenlerde başarılı, bazılarında başarısız olabilir; kademe yalnızca `core/`'dan örneklenir. Duyurulur ve teşhis edilebilir, önlenmez.
+7. **`.cursor/hooks.json` hiçbir kademede chown'lanmaz**, hardened dahil — Cursor onu kendi sebepleriyle düzenlemeye devam eder. Tek koruması yukarıda anlatılan preToolUse kapısıdır; bu kapı, kendini koruma kapısının kendi kaydı gibi teslim kapısının `stop` kaydını da kapsar: altında mülkiyet zemini olmayan sezgisel bir politika katmanı. Yalnızca dosyanın bugün taşıdığı bir kaydı *kaybettirecek* bir değişikliği reddeder, asla "her zaman kayıtlı bitmeli" demez.
+8. **Bağlantı denetimi, bir ajanın yazabildiği hooks.json'ın aynısını okur.** Bir kaydın mevcut olduğunu ve — ağaç root'a aitse — hâlâ bu kite ait bir dosyayı gösterdiğini kanıtlar. Harness'ın o kaydı *onurlandıracağını* hiçbir kademede kanıtlayamaz.
+9. **Yalın bir `.cursor` işleneni hiçbir yüzey kalıbıyla eşleşmez**, dolayısıyla tüm dizini silmek serbesttir — ve hardened kademede bu, root'a ait kendini koruma kapısını, root'a ait teslim kapısını, denetim lib'ini, `.flaky-kit-expect`'i ve her iki kaydı birden siler. Önceden var olan bir durum ve ayrı bir iş olarak planlandı: kalıbı yalın `.cursor`'a genişletmek yüzeyi "kitin dosyaları"ndan "Cursor'ın tüm yapılandırma ağacı"na çevirir ve kendi tasarım turunu gerektirir.
+10. **Bir onarım bir sonraki oturumda devreye girer, onu yapan oturumda asla.** Harness hook yapılandırmasını başlangıçta okur, dolayısıyla onarımla yeniden başlatma arasında kapı kayıtlıdır ama çalışmaz.
+11. **Kit yalnızca kendi kaydını onarır.** Komşu bir paketin bayat kaydı kitin düzelteceği bir şey değildir ve düzeltilmez.
+12. **Root'a ait bir ağacın altında geri yükleme kaynağının başka her şeyden fazla koruması yoktur** — zehirli bir `core/gate-src` zehirli bir kapı geri yükler. Alt kademeler zaten bunu demektir.
+13. **Kayıt onarımı tamamen eklemelidir, asla bir temizleme değil.** `install.sh` birleştirmeden önce yer-değişikliği-öncesi kaydı düşürür; onarım düşürmez, dolayısıyla bulduğu ölü bir komut, onarımın eklediğinin yanında sonsuza dek kayıtlı kalır. Yakınsamayı engellemez — yer değişikliği sonrası yol, *tek bir ayar dosyası içinde* yer değişikliği öncesi olanın önüne sıralanır (`settings.json`/`settings.local.json` arasına bölündüğünde bu garanti değildir: `integrity_wiring` her dosyanın `unique` çıktısını dosya sırasıyla birleştirir ve `_wiring_cover` ilk satırı alır, yani dosyalar arası bir sıralama yoktur. Ölü girdi `settings.json`'da, yer değişikliği sonrası olan `settings.local.json`'da iken ölçüldü: `beforeShellExecution` için cover *yer-değişikliği-öncesi* komuttur ve verdict `dangling`'dir). Onarım orada yine de yakınsar, çünkü her zaman ilk okunan `settings.json`'a yazar — ölçüldü: tek bir onarım çağrısından önceki okumada `dangling`, sonrakinde `wired`. Yani yer değişikliği sonrası kapı dosyası var olduğunda eksen `wired` okur; oysa yalnızca bu eksenin denetlediğini değil kayıtlı her hook'u çalıştıran bir harness, eşleşen her çağrıda ölü komutu denemeye devam eder: özgün semptom, artık onu yakalayan eksene görünmez halde. Asıl çözüm, onu gerçekten temizleyen kurucuyu yeniden çalıştırmaktır.
+14. **Teslim kapısının erişimi** — bir `stop` hook'u veto etmek yerine bir tur daha ister, dolayısıyla I11 ve hedge-scan bu değişiklikten önce ne idiyse o kalır: ajanın uyacağına güvenilen düzyazı.
+15. **Kapı, oturumun kendisini değil harness'ın yazdığı transkripti okur** — ne olduğunu değil, neyin kaydedildiğini kanıtlar; ajanın bir komut satırında hiç anmadığı bir defter ona görünmezdir.
+16. **"İş yapıldı"nın sınırı `core/apply`/`core/rerun`'dur** — bir şeyleri başka bir yolla değiştirip defter bırakmayan bir oturum yakalanmaz.
+17. **Teslim kapısının kendi koruması tamamen ikinci derecedendir.** O bir `stop` hook'udur: oturum sonunda bir kez çalışır ve hiçbir araç çağrısını gözlemlemez, dolayısıyla kendisini kaldıran çağrıyı asla reddedemez. O çağrıyı reddeden her şey — dosyasına yapılan yüzey eşleşmesi ve `stop` kaydını düşüren bir düzenlemeyi reddeden sonuç testi — *preToolUse kendini koruma kapısında* yaşar. Önce o kapıyı alt edin (artık 7'nin kaçış sınıfları ya da artık 9'un yalın `.cursor`'ı) ve teslim kapısı hiçbir ek sürtünme olmadan düşer. Dosyasını root'a vermek burada artık 3'ün kabul ettiğinden daha az kazandırır: kayıt hiçbir kademede chown'lanmaz ve kayıttan düşürmek düzenlemekten ucuzdur. Sonradan bağlantı ekseni tarafından tespit edilir — ama yalnızca *bir sonraki* giriş noktasında ve tüm amacı durmak olan bir oturum hiç giriş noktası çalıştırmaz.
+18. **Defter-yok denetiminin tasarım gereği tek-token'lık bir kaçışı vardır** — ne olduğu, neden orada olduğu ve neden ateşlenmek yerine denetim kaydı düştüğü için yukarıdaki teslim kapısı bölümüne bakın.
 ```bash
-core/lock-kit.sh lock        # hardens (chown to root) when sudo is available; degrades to a
-                              # chmod-only read-only bit otherwise. Ends with `sudo -k`, so the
-                              # credential it just cached does not leave a no-prompt reopen window.
-core/lock-kit.sh status      # per-path mode + OWNER + the effective tier
+core/lock-kit.sh lock        # sudo varsa sertleştirir (root'a chown); yoksa yalnızca-chmod
+                              # salt-okunur bit'ine düşer. `sudo -k` ile biter, böylece az önce
+                              # önbelleklediği kimlik bilgisi parolasız bir yeniden açma penceresi bırakmaz.
+core/lock-kit.sh status      # yol başına mod + SAHİP + yürürlükteki kademe
 HEKTOR_FLAKYKIT_UNLOCK=1 core/lock-kit.sh unlock
 ```
 
-## Manual hook registration (if you skip install.sh)
-Add to `.cursor/hooks.json`:
+## Elle hook kaydı (install.sh'i atlarsanız)
+`.cursor/hooks.json` dosyasına ekleyin:
 
 ```json
 {
@@ -270,16 +263,17 @@ Add to `.cursor/hooks.json`:
 }
 ```
 
-Ensure `.cursor/hooks/lib/cursor.sh` and `.cursor/hooks/lib/audit.sh` are present — both are vendored
-by install.sh, and each gate exits 0 (allowing everything) if it cannot load them.
+`.cursor/hooks/lib/cursor.sh` ve `.cursor/hooks/lib/audit.sh` dosyalarının mevcut olduğundan emin olun
+— ikisi de install.sh tarafından vendor'lanır ve her kapı, onları yükleyemezse 0 ile çıkar (her şeye
+izin verir).
 
-## What's in here
+## Burada ne var
 ```
-core/         engine: ingest·cluster·rerun·apply·summary·compile·dom-capture / shell-guard·sanitize·lock-kit / config.json
-skill/        SKILL.md — what Cursor loads
-gates/        the self-protection + delivery gates, and the libs they vendor
-install.sh    the installer (idempotent)
-kernel.md · enforcement-codeowners.md    the spec + VCS-layer hardening
+core/         motor: ingest·cluster·rerun·apply·summary·compile·dom-capture / shell-guard·sanitize·lock-kit / config.json
+skill/        SKILL.md — Cursor'ın yüklediği
+gates/        kendini koruma + teslim kapıları ve vendor'ladıkları lib'ler
+install.sh    kurucu (idempotent)
+kernel.md · enforcement-codeowners.md    spesifikasyon + VCS katmanı sertleştirmesi
 ```
 
-Spec: [`kernel.md`](./kernel.md). Engine contracts: `core/README.md`.
+Spesifikasyon: [`kernel.md`](./kernel.md). Motor sözleşmeleri: `core/README.md`.

@@ -54,7 +54,11 @@ the one rule worth stating up front, because a PR that breaks it is marked
 have hektor-conventions && CTX="${CTX}
 - \`web-ui-test/\` (\`*Page.java\`, \`*Layout.java\`, \`*Test.java\`) → \`/hektor-conventions\`"
 have hektor-resource-client && CTX="${CTX}
-- \`test-data-client/\` (\`*ResourceClient.java\`, \`AbName.java\`) → \`/hektor-resource-client\`"
+- \`test-data-client/\` (\`*ResourceClient.java\`, \`AbName.java\`) → \`/hektor-resource-client\`
+- a missing REST helper while writing a web-test → \`/hektor-resource-client\` (reuse first; else \`tech/TDC-<n>\` — never a client in web-ui-test)"
+have hektor-test-dao && CTX="${CTX}
+- \`test-dao/\` (\`*DAO.java\`, \`*DAOImpl.java\`) → \`/hektor-test-dao\`
+- a missing SQL helper while writing a web-test → \`/hektor-test-dao\` (reuse first; else \`tech/DAO-<n>\`)"
 
 ROUTING="$(
   line hektor-orchestrator      "the router — start here for \"test this feature end to end\""
@@ -62,6 +66,8 @@ ROUTING="$(
   line hektor-journey-mapping   "map a domain's user journeys before covering it"
   line hektor-test-composer     "one journey's whole test portfolio"
   line hektor-page-authoring    "a missing Page/Layout object"
+  line hektor-resource-client   "a missing ResourceClient — reuse TDC source, or tech/TDC-<n>"
+  line hektor-test-dao          "a missing DAO method — reuse test-dao source, or tech/DAO-<n>"
   line hektor-coverage-expansion "walk the journey map and expand coverage"
   line hektor-failure-diagnosis "one failing test"
   line hektor-test-repair       "a rotted suite, clustered by root cause"

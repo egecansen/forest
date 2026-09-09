@@ -1,17 +1,17 @@
 # Hektor
 
 sahibinden Selenium/JUnit paketi için paylaşılabilir bir QA metodoloji paketi;
-**Cursor** için yapılmıştır. `*Page/*Layout/*Test.java` (web-test) ve
-`*ResourceClient/AbName.java` (test-data-client) dosyalarını **otomatik PR
-inceleyicisinden ilk seferde geçecek** şekilde yazmanıza yardım eden beceriler ve
-uygulama kapıları; ayrıca yolculuk haritalama, kapsam genişletme, flaky triage,
-EDR/VRT/güvenlik iş akışları.
+**Cursor** için yapılmıştır. `*Page/*Layout/*Test.java` (web-test),
+`*ResourceClient/AbName.java` (test-data-client) ve `*DAO/*DAOImpl.java`
+(test-dao) dosyalarını **otomatik PR inceleyicisinden ilk seferde geçecek**
+şekilde yazmanıza yardım eden beceriler ve uygulama kapıları; REST/SQL
+yardımcıları web-test içinde yazılmaz (`tech/TDC-<n>` / `tech/DAO-<n>`).
 
 ## Kurulum (ekip arkadaşları: buradan başlayın)
 
 > Forest kullanıyorsanız bu bölüme gerek yok: paket forest'ın içinde
-> (`packs/hektor`) yaşar ve `web-test` ile `test-data-client` worktree'lerine
-> oluşturulurken ve her başlatmada otomatik kurulur. Aşağısı forest olmadan,
+> (`packs/hektor`) yaşar ve `web-test`, `test-data-client` ve `test-dao`
+> worktree'lerine oluşturulurken ve her başlatmada otomatik kurulur. Aşağısı forest olmadan,
 > elle kurulum içindir.
 
 `hektor/` dizinini deponuza ekleyin (klonlayın ya da kopyalayın), sonra depodan
@@ -47,7 +47,7 @@ hektor package install
 
 `install` aslında `install.sh` betiğini çalıştırır; onu doğrudan da
 çağırabilirsiniz (`./install.sh --project /path/to/repo`). Çalıştığınız her
-depoya kurun (`web-test`, `test-data-client`, …).
+depoya kurun (`web-test`, `test-data-client`, `test-dao`, …).
 
 ## Ne elde edersiniz
 
@@ -66,9 +66,11 @@ Her şey projenin `.cursor/` dizinine iner; Cursor'ın okuduğu tek ağaç budur
   kapsamlıdır; yönettikleri bir dosyayı açtığınızda kendiliğinden bağlanır:
   - `hektor-conventions` — her **web-test** PR-inceleyici kuralı
     (BLOCKER/WARNING) doğru kalıbıyla. `web-ui-test/**/*.java` üzerinde bağlanır.
-  - `hektor-resource-client` — **test-data-client** kuralları (`extends
-    AbstractService`, `@Component`, `clients.*` URL biçimi, `@Slf4j`, enum
-    büyük/küçük harfi). `*ResourceClient.java` / `AbName.java` üzerinde bağlanır.
+  - `hektor-resource-client` — **test-data-client** kuralları + web-test'ten
+    REST helper handoff'u (önce mevcut metodu kullan, yoksa `tech/TDC-<n>`).
+    `*ResourceClient.java` / `AbName.java` üzerinde bağlanır.
+  - `hektor-test-dao` — **test-dao** SQL helper handoff'u (önce mevcut metodu
+    kullan, yoksa `tech/DAO-<n>`). `*DAO.java` / `*DAOImpl.java` üzerinde bağlanır.
 
   Başka her yerde `/hektor-orchestrator` ile başlayın ya da görevi anlatın.
 

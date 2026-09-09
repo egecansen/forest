@@ -6,9 +6,11 @@ description: >
   variants, EDR/contract assertions, parameterised data variants. Writes one
   *Test.java class (or extends the existing one) at the suggested Java target
   path, dispatches hektor-page-authoring if a needed layout doesn't exist,
-  runs the new tests on Selenoid AND locally, and verifies coverage of every
-  Test expectation in the journey block. Triggers when the user asks "write
-  tests for j-X" or when hektor-coverage-expansion dispatches per-journey.
+  dispatches hektor-resource-client / hektor-test-dao if a REST or SQL helper
+  is missing (never writes those helpers in web-test), runs the new tests on
+  Selenoid AND locally, and verifies coverage of every Test expectation in the
+  journey block. Triggers when the user asks "write tests for j-X" or when
+  hektor-coverage-expansion dispatches per-journey.
 ---
 
 # Hektor test composer
@@ -56,17 +58,20 @@ Selenoid video URL (if applicable) so the caller can pass them to
 
 ## Mandatory stages
 
-In order, in your own context. Don't return until all five complete.
+In order, in your own context. Don't return until all six complete.
 
 1. **Load context** (§1) — read the journey block + its sub-journeys + the
    conventions skill.
 2. **Page/layout readiness** (§2) — dispatch `hektor-page-authoring` for
    any missing or incomplete layout method.
-3. **Compose** (§3) — write the test methods (one class or
+3. **Data-layer readiness** (§2b) — reuse an existing TDC/DAO method, or
+   dispatch `hektor-resource-client` / `hektor-test-dao`. Never write a
+   client or DAO in web-test.
+4. **Compose** (§3) — write the test methods (one class or
    class-extension), matching the framework conventions.
-4. **Stabilise** (§4) — run on Selenoid, then locally; fix flakes; re-run
+5. **Stabilise** (§4) — run on Selenoid, then locally; fix flakes; re-run
    until 100% pass.
-5. **Coverage verification** (§5) — map every `Test expectations:` bullet
+6. **Coverage verification** (§5) — map every `Test expectations:` bullet
    to a test method; loop back to §3 if any bullet is uncovered.
 
 ---
@@ -134,6 +139,38 @@ listing exactly which methods you need. Wait for that subagent to return
 `page-authored` and verify `gradle build -x test` passes before continuing.
 
 Do not write the test methods until every layout method you need exists.
+
+---
+
+## §2b Data-layer readiness
+
+For every REST or SQL helper the scenario needs, search the **sibling
+source** first — not the published JAR, not `web-ui-test/`.
+
+```bash
+PRIMARY="$(git worktree list --porcelain | awk '/^worktree /{print $2; exit}')"
+ROOT="$(dirname "$PRIMARY")"
+grep -r "<method-or-endpoint>" "$ROOT/test-data-client/src/main/java" --include='*.java'
+grep -r "<method-or-sql-intent>" "$ROOT/test-dao/src/main/java" --include='*DAO*.java'
+```
+
+Also check `AbstractTestDataResource` for an already-injected
+`*ResourceClient` / `*DAO` field.
+
+| Result | Action |
+|---|---|
+| Matching TDC method exists | Call it (`dopingResourceClient.getClassifiedPromotionWizard(...)`). |
+| Matching DAO method exists | Call it (`classifiedDAO.getExpireClassifiedVehicleCategoryOneYearsOld()`). |
+| REST helper missing | STOP. Dispatch `hektor-resource-client` with `ticket-context` and the method brief. Wait for `reused` or `authored`. |
+| SQL helper missing | STOP. Dispatch `hektor-test-dao` the same way. |
+
+Do **not** write `*Client.java`, `extends AbstractService`, `extends AbstractDAO`,
+`*DAO.java`, RestAssured, or inline JDBC under `web-ui-test/` — that is the
+WEBT-255458 `PromotionWizardClient` failure. `pr-rules-gate` denies it.
+
+Do not write the test methods until every data helper exists in TDC/DAO (reused
+or just authored). If a helper was authored, the next gradle run needs
+`--refresh-dependencies`.
 
 ---
 
@@ -239,10 +276,13 @@ Reviewer rules added to the kernel — also walk these before declaring done:
 - [ ] Any new `@FindBy` (if you touched a layout) uses a real CSS/id/name
       selector — no XPath inside `@FindBy(css=…)`, no hardcoded URL, < 150
       chars. **(BLOCKER / WARNING)**
+- [ ] No `extends AbstractService` / `*ResourceClient` / `extends AbstractDAO`
+      / `*DAO.java` under `web-ui-test/`. REST → `hektor-resource-client`;
+      SQL → `hektor-test-dao`. **(BLOCKER)**
 
 Any check failing → fix before moving on. Don't commit failing-checklist
-code. (If you also touched a `*ResourceClient` in test-data-client, run the
-`hektor-resource-client` red-flag list too.)
+code. (If a TDC/DAO skill authored a helper, run that skill's red-flag list
+too.)
 
 ### Parameterised variants
 
@@ -356,6 +396,12 @@ Split layout changes and test additions into separate commits. Multiple
   "layouts-touched": [
     "client/website/layout/search/hybridsearch/LeftFilterLayout.java"
   ],
+  "data-layer": {
+    "reused": ["DopingResourceClient.getClassifiedPromotionWizard"],
+    "authored": [],
+    "tdc-branch": null,
+    "dao-branch": null
+  },
   "coverage-table": [
     { "expectation": "happy path", "method": "testIstanbulFilterTooltip" },
     { "expectation": "no-results error", "method": "testNoResultsState" }

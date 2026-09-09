@@ -7,8 +7,9 @@ here verbatim.
 
 Two of these are **glob-scoped** (`paths:` in their frontmatter) so they attach
 automatically when you open a file they govern: `hektor-conventions` on
-`web-ui-test/**/*.java`, and `hektor-resource-client` on `*ResourceClient.java` /
-`AbName.java`. Four are **explicit-only** (`disable-model-invocation: true`) —
+`web-ui-test/**/*.java`, `hektor-resource-client` on `*ResourceClient.java` /
+`AbName.java`, and `hektor-test-dao` on `*DAO.java` / `*DAOImpl.java`. Four are
+**explicit-only** (`disable-model-invocation: true`) —
 `hektor-distill`, `hektor-skill-stocktake`, `hektor-test-catalogue`,
 `hektor-work-summary-deck` — because each is on-demand reporting or maintenance
 that should never fire mid-task.
@@ -19,7 +20,8 @@ that should never fire mid-task.
 | [`hektor-from-jira`](./hektor-from-jira/SKILL.md) | ONE ticket, end to end. Fetches it via the Atlassian MCP, plans, gates on the plan, composes, gates again on the fixes, hands the files back uncommitted. Never commits, never comments on Jira. |
 | [`hektor-multi-ticket`](./hektor-multi-ticket/SKILL.md) | TWO OR MORE tickets in one request. One fully Hektor-active worktree per ticket (forest-managed), waves of 2–3, every `gradle test` serialised through a lease over the reserved testbox pool, one report table back to the primary session. Drives `hektor-from-jira` per ticket. |
 | [`hektor-conventions`](./hektor-conventions/SKILL.md) | The framework-rules kernel. Read BEFORE any code change to `*Page.java`, `*Layout.java`, or `*Test.java`. |
-| [`hektor-resource-client`](./hektor-resource-client/SKILL.md) | The framework-rules kernel for the sibling repo `test-data-client` — the `*ResourceClient` beans web-test injects with `@AutowiredBean`. |
+| [`hektor-resource-client`](./hektor-resource-client/SKILL.md) | REST test-data helpers in `test-data-client`. Reuse an existing `*ResourceClient` method first; if missing, `tech/TDC-<n>` then consume from web-test. Never write a client in `web-ui-test/`. |
+| [`hektor-test-dao`](./hektor-test-dao/SKILL.md) | SQL helpers in `test-dao`. Reuse an existing `*DAO` method first; if missing, `tech/DAO-<n>` then consume from web-test. Never write a DAO in `web-ui-test/`. |
 | [`hektor-qagent`](./hektor-qagent/SKILL.md) | The QA-corpus retrieval kernel (`qagent` MCP). Read-only semantic search over every existing test, the documented business rules, and step-level run traces. Consulted for dedup, rule-grounding, and historical selectors. |
 | [`hektor-journey-mapping`](./hektor-journey-mapping/SKILL.md) | Map user journeys for a sahibinden section. Mandatory before coverage expansion. |
 | [`hektor-page-authoring`](./hektor-page-authoring/SKILL.md) | Author/modify `*Page.java` + `*Layout.java` matching framework conventions. |
@@ -54,6 +56,7 @@ Entry:  1 ticket   → hektor-from-jira
 1. Convention check        → hektor-conventions
 2. Journey mapping         → hektor-journey-mapping
 3. Page/layout authoring   → hektor-page-authoring
+3b. Data-layer (REST/SQL)  → hektor-resource-client / hektor-test-dao  (reuse first)
 4. Test composition        → hektor-test-composer
 5. Coverage expansion      → hektor-coverage-expansion
 6. Failure diagnosis       → hektor-failure-diagnosis  → hektor-test-repair (if batch)

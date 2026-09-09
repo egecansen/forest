@@ -23,7 +23,9 @@ ownership of phases the downstream skill owns.
 
 You do not author tests yourself. You do not edit `*Test.java`, `*Page.java`,
 or `*Layout.java`. Those are owned by `hektor-test-composer`,
-`hektor-page-authoring`, etc.
+`hektor-page-authoring`, etc. You do not write `*ResourceClient` or `*DAO`
+helpers in web-test — `hektor-test-composer` §2b dispatches
+`hektor-resource-client` / `hektor-test-dao`.
 
 ---
 

@@ -2,7 +2,7 @@
   "version": 1,
   "pack": "hektor",
   "description": "Hektor QA skill set for Cursor — skills, subagent roles, and enforcement gates.",
-  "targets": ["web-test", "test-data-client"],
+  "targets": ["web-test", "test-data-client", "test-dao"],
   "groups": [
     "core",
     "discovery",
@@ -87,7 +87,7 @@
       "id": "hektor-resource-client",
       "label": "Resource Client",
       "group": "authoring",
-      "description": "The framework-rules kernel for sahibinden/test-data-client — the sibling repo holding the *ResourceClient beans web-test injects. Use BEFORE writing…"
+      "description": "Use when a web-test needs a REST/API helper in test-data-client, or when authoring *ResourceClient.java / AbName.java. Reuse first; missing methods go on tech/TDC-<n>, never in web-test."
     },
     {
       "id": "hektor-security-zap",
@@ -112,6 +112,12 @@
       "label": "Test Composer",
       "group": "authoring",
       "description": "Compose the full test portfolio for ONE journey block from docs/hektor/journey-map.md — happy path, error states, edge cases, mobile variants…"
+    },
+    {
+      "id": "hektor-test-dao",
+      "label": "Test Dao",
+      "group": "authoring",
+      "description": "Use when a web-test needs a SQL/DB helper that lives in test-dao, or when authoring *DAO.java / *DAOImpl.java. Reuse first; missing methods go on tech/DAO-<n>, never in web-test."
     },
     {
       "id": "hektor-test-repair",

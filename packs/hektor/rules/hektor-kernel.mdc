@@ -5,28 +5,46 @@ alwaysApply: true
 
 # Hektor
 
-QA authoring and triage for `web-test` (`*Page/*Layout/*Test.java`) and
-`test-data-client` (`*ResourceClient/AbName.java`). This rule is the router and
-the cross-cutting facts only — every method lives in a skill, so nothing here is
-restated there.
+QA authoring and triage for `web-test` (`*Page/*Layout/*Test.java`),
+`test-data-client` (`*ResourceClient/AbName.java`), and `test-dao`
+(`*DAO/*DAOImpl.java`). This rule is the router and the cross-cutting facts
+only — every method lives in a skill, so nothing here is restated there.
 
 ## Read the kernel before writing Java
 
-Every PR is scanned by a bot that marks it **Needs Work** on a BLOCKER. Two
-skills encode those rules, and they auto-attach when you open a file they govern:
+Every PR is scanned by a bot that marks it **Needs Work** on a BLOCKER. Skills
+encode those rules, and they auto-attach when you open a file they govern:
 
 - `hektor-conventions` — `web-ui-test/`. Read before any `*Page.java`,
   `*Layout.java`, `*Test.java`.
 - `hektor-resource-client` — `test-data-client/`. Read before any
-  `*ResourceClient.java` or `AbName.java`.
+  `*ResourceClient.java` or `AbName.java`, and when a web-test needs a REST
+  helper.
+- `hektor-test-dao` — `test-dao/`. Read before any `*DAO.java` / `*DAOImpl.java`,
+  and when a web-test needs a SQL helper.
 
-Invoke either explicitly with `/hektor-conventions` / `/hektor-resource-client`.
-Don't guess these rules from surrounding code — the suite has drifted in places
-the reviewer still rejects.
+Invoke explicitly with `/hektor-conventions` / `/hektor-resource-client` /
+`/hektor-test-dao`. Don't guess these rules from surrounding code.
+
+## Data-layer helpers are never written in web-test
+
+A REST or SQL helper the test needs is **reused from sibling source first**,
+then authored in that sibling — never invented under `web-ui-test/`.
+
+| Need | Search first | If missing | Branch |
+|---|---|---|---|
+| REST / `*ResourceClient` / HTTP fixture | `test-data-client/src` | `hektor-resource-client` | `tech/TDC-<n>` |
+| SQL / `*DAO` | `test-dao/src` | `hektor-test-dao` | `tech/DAO-<n>` |
+
+`<n>` is the ticket digits (`WEBT-255458` → `255458`). Do not write
+`extends AbstractService`, `*ResourceClient`, `extends AbstractDAO`, or
+`*DAO.java` in `web-ui-test/` — that is the WEBT-255458 `PromotionWizardClient`
+failure. The JAR lagging is not a reason to write a local client; grep the
+sibling source.
 
 ## Ticket entry — a Jira link IS the instruction
 
-A prompt that names a ticket of this org (`SHBDN-*`, `WEBT-*`, `RAL-*`, `TDC-*`)
+A prompt that names a ticket of this org (`SHBDN-*`, `WEBT-*`, `RAL-*`, `TDC-*`, `DAO-*`)
 is a ticket-driven entry, even when it is *only* a bare URL with a box after it:
 
 ```
@@ -120,4 +138,5 @@ documented exception. `HEKTOR_CURSOR_HOOKS=off` disables all of it.
 
 Weaken an assertion, loosen a locator, `Thread.sleep` to force timing, or
 disable/quarantine a test to go green. A red test with correct code is a
-finding. `@ScheduledDisable` always needs a `reason`.
+finding. `@ScheduledDisable` always needs a `reason`. Never implement a
+`*ResourceClient` or `*DAO` inside `web-ui-test/` to unblock a test.

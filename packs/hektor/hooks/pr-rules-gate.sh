@@ -14,6 +14,9 @@
 # checks against the lines *this* write adds, so a violation is caught at
 # authoring time instead of on the PR. Two repos are covered:
 #   - web-ui-test/       (web-test)      : *Page.java / *Layout.java / *Test.java
+#     plus a DENY if a REST/SQL helper is written here (extends AbstractService /
+#     AbstractDAO, *ResourceClient.java, *DAO.java) — those belong in the sibling
+#     repos. Negative example: tech/WEBT-255458 PromotionWizardClient.
 #   - test-data-client/  (resource data) : *ResourceClient.java / AbName.java
 # Detection is by path substring, with a filename fallback.
 #
@@ -174,6 +177,20 @@ if [ "$IS_WEBTEST" = 1 ]; then
     fi
   fi
 
+  # BLOCKER — REST/SQL helpers written in web-test (WEBT-255458: PromotionWizardClient).
+  scan B 'extends[[:space:]]+AbstractService' \
+    "extends AbstractService in web-ui-test — REST helpers live in test-data-client (*ResourceClient). Load hektor-resource-client; never write a client here. [BLOCKER]"
+  scan B 'extends[[:space:]]+AbstractDAO' \
+    "extends AbstractDAO in web-ui-test — SQL helpers live in test-dao. Load hektor-test-dao; never write a DAO here. [BLOCKER]"
+  scan B 'class[[:space:]]+[A-Za-z0-9_]*ResourceClient' \
+    "*ResourceClient class in web-ui-test — author it in test-data-client on tech/TDC-<n>. [BLOCKER]"
+  case "$BASENAME" in
+    *ResourceClient.java)
+      add_b "$BASENAME under web-ui-test — ResourceClients belong in test-data-client (hektor-resource-client). [BLOCKER]" ;;
+    *DAO.java|*DAOImpl.java)
+      add_b "$BASENAME under web-ui-test — DAOs belong in test-dao (hektor-test-dao). [BLOCKER]" ;;
+  esac
+
   # WARNING — Layout-typed local variable in a test.
   if [ "$IS_TEST" = 1 ]; then
     scan W '(^|[^A-Za-z0-9_])[A-Z][A-Za-z0-9_]*Layout[[:space:]]+[a-z][A-Za-z0-9_]*[[:space:]]*[=;]' \
@@ -318,7 +335,7 @@ WARNINGs (inline comment on the PR — fix in the same pass):${WARNINGS}"
   REASON="${REASON}
 
 Fix the BLOCKERs before this file is written. See hektor-conventions /
-hektor-resource-client for the rule and the correct pattern.
+hektor-resource-client / hektor-test-dao for the rule and the correct pattern.
 
 Override (only if the user explicitly authorised it, e.g. a knowingly-XPath
 locator): prefix the command's environment with HEKTOR_PR_RULES_GATE=off."

@@ -278,6 +278,21 @@ the ticket is Turkish, English if it's English.]
 - Add `LeftFilterLayout.getTextTooltipText()` if not already generated.
 - Mirror in `ResponsiveSearchResultFilterLayout`.
 
+## Data-layer work expected
+
+Search sibling **source** (`test-data-client/`, `test-dao/`) before listing a
+new method. Reuse wins; a new helper is a sibling-repo branch, never a
+web-test util.
+
+| Need | Repo | Existing method | Action |
+|---|---|---|---|
+| user fixture | test-data-client | `UserResourceClient.createUser` | reuse |
+| expire a vehicle classified | test-dao | `ClassifiedDAO.getExpireClassifiedVehicleCategoryOneYearsOld` | reuse |
+| POST wizard product (if missing) | test-data-client | — | `hektor-resource-client` on `tech/TDC-<n>` |
+
+Negative example: do **not** add `PromotionWizardClient` under `web-ui-test/`
+(WEBT-255458). REST → TDC; SQL → DAO.
+
 ## Risks / open questions
 
 - AC #3 says "hover" — does mobile have a tap-equivalent? If so, AC #2's
@@ -346,6 +361,12 @@ unfixed for batching here.
 
 If the scenario needs a new layout method, composer transparently
 dispatches `hektor-page-authoring` first — that's unchanged.
+
+If the scenario needs a REST or SQL helper, composer §2b runs **before**
+compose: reuse an existing TDC/DAO method, or dispatch `hektor-resource-client`
+(`tech/TDC-<n>`) / `hektor-test-dao` (`tech/DAO-<n>`). Composer must not write
+a client or DAO in web-test. Do not overwrite this ticket's Jira Git Branch
+Name field with the TDC/DAO branch — that field stays `tech/WEBT-<n>`.
 
 ### Phase 7 — Collect outcomes
 
@@ -512,6 +533,10 @@ use that ticket's key for the fix commits.
   "scenarios-green": 3,
   "scenarios-disabled": 0,
   "layout-methods-added": 1,
+  "data-layer-reused": ["UserResourceClient.createUser"],
+  "data-layer-authored": [],
+  "tdc-branch": null,
+  "dao-branch": null,
   "fixes-proposed": 1,
   "fixes-approved": 1,
   "fixes-applied": 1,
