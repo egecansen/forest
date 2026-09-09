@@ -2,7 +2,7 @@
   "port": 5577,
   "roots": ["/absolute/path/to/your/code-root"],
   "containers": ["APPS"],
-  "packsDir": "/absolute/path/to/your/SKLS",
+  "autoProvision": true,
   "jiraBaseUrl": "",
   "jiraProjectKey": "",
   "jiraToken": "",

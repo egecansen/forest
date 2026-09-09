@@ -7,7 +7,8 @@ import { buildSnapshot } from './lib/discover.mjs';
 import { createRegistry } from './lib/agents.mjs';
 import { createJournal } from './lib/journal.mjs';
 import { runGit } from './lib/git.mjs';
-import { listPacks } from './lib/packs.mjs';
+import { listPacks, autoSelections, packTargets } from './lib/packs.mjs';
+import { gateRequest } from './lib/request-gate.mjs';
 import { createActionHandler, originOf } from './lib/actions.mjs';
 import { pruneLandings } from './lib/landed.mjs';
 import { readRepoState } from './lib/repos.mjs';
@@ -115,17 +116,26 @@ export let handleAction = async (req, res) => { res.writeHead(404).end('no actio
 export function setActionHandler(fn) { handleAction = fn; }
 setActionHandler(createActionHandler());
 
+// One journal line per distinct (origin, host) that was refused, so an
+// actual attempt is visible without a flood. Capped: an attacker must not be
+// able to grow this without bound.
+const refused = new Set();
 const server = http.createServer(async (req, res) => {
+  const gate = gateRequest(req, { port: config.port, srpOrigin: originOf(config.srpBaseUrl) });
+  if (!gate.ok) {
+    const key = `${req.headers.origin || '-'}|${req.headers.host || '-'}`;
+    if (!refused.has(key) && refused.size < 100) {
+      refused.add(key);
+      journal.add({ cmd: `refused request from ${req.headers.origin || '(no origin)'} (host ${req.headers.host || '(none)'}): ${gate.reason}`, cwd: ROOT, mode: 'auto' });
+    }
+    res.writeHead(gate.status).end();
+    return;
+  }
   const url = req.url.split('?')[0];
 
-  // Private Network Access preflight for the SRP bookmarklet's POST — the
-  // ONE path in forest a page on another origin may ever reach. Every other
-  // /api/* route below answers with no CORS headers at all and stays
-  // protected today by an unanswered preflight for its application/json
-  // content type; this must not spill onto any of them. The actual security
-  // boundary is the Origin check on the POST itself, in lib/actions.mjs's
-  // /api/srp/token handler — these headers only let a legitimate SRP tab's
-  // fetch() succeed, they do not gate anything by themselves.
+  // Private Network Access preflight for the SRP bookmarklet's POST. The
+  // request gate above has already required the configured SRP origin for
+  // this path; these headers only let a legitimate SRP tab's fetch() succeed.
   if (url === '/api/srp/token' && req.method === 'OPTIONS') {
     const expectedOrigin = originOf(config.srpBaseUrl);
     const reqOrigin = req.headers.origin || '';
@@ -154,7 +164,11 @@ const server = http.createServer(async (req, res) => {
   if (url === '/api/config') return sendJson(res, clientConfig);
   if (url === '/api/worktrees') return sendJson(res, await snapshot());
   if (url === '/api/journal') return sendJson(res, journal.recent());
-  if (url === '/api/packs') return sendJson(res, { packs: await listPacks(config.packsDir) });
+  if (url === '/api/packs') {
+    const repo = new URL(req.url, 'http://x').searchParams.get('repo');
+    const packs = await listPacks(config.packsDir);
+    return sendJson(res, { packs, auto: repo ? autoSelections(packs, repo) : [] });
+  }
   if (url === '/api/diff') {
     const p = new URL(req.url, 'http://x').searchParams.get('path');
     if (!p) return sendJson(res, { diff: '', error: 'path required' }, 400);
@@ -174,6 +188,18 @@ server.on('close', () => clearInterval(snapshotInterval));
 
 // Startup prune: expired landing-ledger entries + their safety refs, once per repo.
 snapshot().then((snap) => { for (const r of snap.repos) pruneLandings(r.repoPath).catch(() => {}); }).catch(() => {});
+
+// A catalog whose `targets` is not an array of strings is picker-only; say so
+// once at startup rather than silently never auto-provisioning.
+listPacks(config.packsDir).then((packs) => {
+  for (const p of packs) {
+    if (p.targets !== undefined && !Array.isArray(p.targets)) {
+      journal.add({ cmd: `pack ${p.pack}: catalog "targets" is not an array — the pack will not auto-provision until it is`, cwd: ROOT, mode: 'auto' });
+    } else if (Array.isArray(p.targets) && packTargets(p).length !== p.targets.length) {
+      journal.add({ cmd: `pack ${p.pack}: some catalog "targets" entries are not non-empty strings and were ignored`, cwd: ROOT, mode: 'auto' });
+    }
+  }
+}).catch(() => {});
 
 server.listen(config.port, '127.0.0.1', () => {
   console.log(`Forest on http://127.0.0.1:${config.port}`);

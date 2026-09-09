@@ -786,7 +786,7 @@ function setGroupOpen(group, open) {
   const body = group.querySelector('.pk-group-body');
   if (body) body.classList.toggle('hidden', !open);
 }
-function renderPack(p, picked) {
+function renderPack(p, picked, auto = false) {
   const skills = picked.skills || [], kits = picked.kits || [];
   const groups = (p.groups && p.groups.length) ? p.groups : [...new Set(p.skillsets.map((s) => s.group || 'other'))];
   const sections = groups.map((g) => {
@@ -801,7 +801,8 @@ function renderPack(p, picked) {
   const hooksSection = p.hooks
     ? pkGroup('Gates', skillRow(p.pack, 'hooks', p.hooks.id, p.hooks.label, p.hooks.description, !!picked.hooks))
     : '';
-  const head = `<div class="pk-pack-h"><label class="pk-all-row"><input type="checkbox" class="pk-all" /> Select all ${esc(p.pack)}</label></div>`;
+  const tag = auto ? '<span class="pk-auto" title="Pre-ticked: this pack targets this repo (catalog targets)">auto</span>' : '';
+  const head = `<div class="pk-pack-h"><label class="pk-all-row"><input type="checkbox" class="pk-all" /> Select all ${esc(p.pack)}</label>${tag}</div>`;
   return `<div class="pk-pack">${head}${sections}${kitSection}${hooksSection}</div>`;
 }
 
@@ -834,15 +835,26 @@ function syncMasters() {
   });
 }
 
-function openPicker(path) {
+async function openPicker(path) {
   const w = findWorktree(path);
   if (!w) return;
   pickerPath = path;
   $('#pk-sub').textContent = `${w.repo} · ${w.branch || '(detached)'}`;
-  const sel = loadSel(path);
+  // A saved selection is the override and wins. Otherwise the server's
+  // automatic selection for this repo is what a launch would install, so it
+  // is what the boxes show — the picker never re-implements the targeting
+  // rule (the server owns it; see autoSelections in lib/packs.mjs).
+  let sel = loadSel(path);
+  const autoPacks = new Set();
+  if (!Object.keys(sel).length) {
+    const j = await fetch(`/api/packs?repo=${encodeURIComponent(w.repo)}`).then((r) => r.json()).catch(() => ({ auto: [] }));
+    sel = {};
+    for (const a of (j.auto || [])) { sel[a.pack] = { skills: a.skills, kits: a.kits, hooks: a.hooks }; autoPacks.add(a.pack); }
+  }
+  if (pickerPath !== path) return; // the picker moved on while the fetch was in flight
   $('#pk-body').innerHTML = state.packs.length
-    ? state.packs.map((p) => renderPack(p, sel[p.pack] || {})).join('')
-    : `<p class="pk-empty">No skill packs found in <code>SKLS/</code>. The session will start with no extra skills.</p>`;
+    ? state.packs.map((p) => renderPack(p, sel[p.pack] || {}, autoPacks.has(p.pack))).join('')
+    : `<p class="pk-empty">No skill packs found in <code>packs/</code>. The session will start with no extra skills.</p>`;
   $('#picker').classList.remove('hidden');
   syncMasters();
   // Restores the saved agent, relabels Start and fetches the scope line for

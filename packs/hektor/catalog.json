@@ -2,6 +2,7 @@
   "version": 1,
   "pack": "hektor",
   "description": "Hektor QA skill set for Cursor — skills, subagent roles, and enforcement gates.",
+  "targets": ["web-test", "test-data-client"],
   "groups": [
     "core",
     "discovery",

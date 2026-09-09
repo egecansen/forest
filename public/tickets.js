@@ -443,6 +443,11 @@ function mergeRequiredSkills(saved, packs) {
 // skills; it launches with at least these two (when a pack offers them).
 function renderSkills() {
   const el = $('#tk-skills');
+  if (target && !savedSelections(target.primaryPath).length) {
+    el.textContent = 'skills: automatic (pack targets)';
+    el.classList.remove('tk-warn');
+    return;
+  }
   const merge = target
     ? mergeRequiredSkills(savedSelections(target.primaryPath), D.state.packs)
     : { addedSkills: [], addedGates: [], missing: [] };
@@ -514,6 +519,15 @@ function savedSelections(path) {
   return Object.entries(sel).map(([pack, v]) => ({ pack, skills: v.skills || [], kits: v.kits || [], hooks: !!v.hooks }));
 }
 
+// The body fields for a launch: `selections` only when this checkout has a
+// saved picker selection (the override). Omitting the key lets the server
+// apply the catalog's automatic selection — the whole pack for a targeted
+// repo — which makes mergeRequiredSkills' two-skill floor moot there.
+function selectionFields(primaryPath) {
+  const saved = savedSelections(primaryPath);
+  return saved.length ? { selections: mergeRequiredSkills(saved, D.state.packs).selections } : {};
+}
+
 async function start() {
   const prompt = $('#tk-prompt').value.trim();
   if (!prompt) return;
@@ -529,14 +543,7 @@ async function startTerminal(prompt) {
   // The MUST from item 4: never the raw saved selection alone — always
   // merged with the required Hektor skills, exactly what renderSkills()
   // already told the user would happen.
-  const { selections } = mergeRequiredSkills(savedSelections(target.primaryPath), D.state.packs);
-  const r = await D.api('/api/launch', {
-    path: target.primaryPath,
-    selections,
-    prompt,
-    mode: D.state.mode,
-    agent,
-  });
+  const r = await D.api('/api/launch', { path: target.primaryPath, ...selectionFields(target.primaryPath), prompt, mode: D.state.mode, agent });
   btn.disabled = false;
   if (r && r.error) { D.toast(`Error: ${r.error}`); return; }
   // A launch that was blocked by a gate keeps the modal open: the ticket list
@@ -552,14 +559,13 @@ async function startTerminal(prompt) {
 async function startCursor(prompt) {
   const btn = $('#tk-start');
   btn.disabled = true;
-  const { selections } = mergeRequiredSkills(savedSelections(target.primaryPath), D.state.packs);
   const tickets = [...pickedTickets];
   const boxes = [...pickedBoxes];
   // `boxes` and `prompt` ride along so the server can write each ticket's
   // own brief (docs/hektor/tickets/<KEY>.md) quoting the exact same box
   // list and session line the clipboard gets — nothing here is recomputed
   // server-side from scratch.
-  const r = await D.api('/api/tickets/worktrees', { repoPath: target.repoPath, tickets, selections, boxes, prompt });
+  const r = await D.api('/api/tickets/worktrees', { repoPath: target.repoPath, tickets, ...selectionFields(target.primaryPath), boxes, prompt });
   btn.disabled = false;
   if (r && r.error) { D.toast(`Error: ${r.error}`); return; }
   const results = (r && r.results) || [];
@@ -644,7 +650,7 @@ async function resolveBlock(r, prompt) {
     // nothing has been provisioned yet and the real selections still have to
     // travel — again exactly what the picker does. Merged the same way
     // start() does, so a forced relaunch still carries the required skills.
-    await forceLaunch(mergeRequiredSkills(savedSelections(target.primaryPath), D.state.packs).selections, prompt);
+    await forceLaunch(selectionFields(target.primaryPath).selections, prompt);
     return;
   }
   // An unknown block kind: say what came back rather than inventing a remedy.
@@ -655,7 +661,7 @@ async function forceLaunch(selections, prompt) {
   const btn = $('#tk-start');
   btn.disabled = true;
   const forced = await D.api('/api/launch', {
-    path: target.primaryPath, selections, prompt, mode: D.state.mode, agent, force: true,
+    path: target.primaryPath, ...(selections ? { selections } : {}), prompt, mode: D.state.mode, agent, force: true,
   });
   btn.disabled = false;
   if (!forced || !forced.ok) { D.toast(`Launch failed: ${(forced && forced.error) || 'server unreachable'}`); return; }

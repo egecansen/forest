@@ -383,6 +383,7 @@ main { max-width: 1320px; margin: 0 auto; padding: 16px 18px 210px; }
 .pk-item-label { font-size: 13.5px; color: var(--ink); }
 .pk-item-desc { font-size: 11.5px; line-height: 1.4; color: var(--muted); }
 .pk-count { margin-right: auto; align-self: center; color: var(--muted); font-size: 12px; }
+.pk-auto { margin-left: 8px; padding: 1px 6px; border-radius: 4px; font-size: 11px; color: var(--muted); border: 1px solid var(--muted); vertical-align: middle; }
 .pk-scope { font-size: 12px; opacity: .65; margin-left: 10px; }
 .pk-scope.warn { opacity: 1; color: var(--amber, #d08a2a); }
 
