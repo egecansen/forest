@@ -5,7 +5,9 @@ description: >
   web-ui-test/src/main/java/com/sahibinden/web/client/. Use BEFORE writing
   tests that target a route currently not covered by a Page/Layout pair.
   Enforces the @PageComponent / @PageLayout / @GenerateMethods / @Layout
-  pattern from review.md and generateMethods.md. Triggers when
+  pattern from review.md and generateMethods.md. Same selector on a
+  different UI layout is a real field — do not refuse it as a clone.
+  Triggers when
   hektor-test-composer reports a missing layout, or when the user asks
   "add a layout for X" or "create the page object for Y".
 ---
@@ -72,6 +74,33 @@ Before creating a new mobile file, **always** `ls
 client/responsivesite/<area>/` to see how the team has organised THAT
 section. Match the existing neighbour's depth and prefix; don't invent a
 deeper subdir than already exists.
+
+### 1b. Reuse existing elements on **this** layout — not every matching CSS
+
+Before writing any `@FindBy`, grep **this layout** and the layouts this page
+already `@Layout`s. A hit on a *different* UI layout (Yepy detail vs
+Money-in-Safe detail) is not a duplicate — declare the field on this layout.
+
+```bash
+# already on THIS layout?
+grep -n "getTextBankTransferInfo\|bankTransferInfo" \
+  web-ui-test/src/main/java/.../YepyOperationDetailLayout.java
+```
+
+| Result | Action |
+|---|---|
+| Method exists on **this** layout, or on a layout this page already `@Layout`s | Call it. Do not add a second field. |
+| Same selector lives on a **different** UI layout (other domain / other screen) | Declare it here. Do **not** `@Layout` a foreign-domain layout onto this page just because one CSS matches. |
+| Truly missing on this screen | Continue to live-DOM inspection, then declare the field once on this layout. |
+
+Negative example **WEBT-258502** is a **scenario** clone (four new test
+methods next to an existing assertion), not “Yepy must not have
+`bankTransferInfo` because PG already does.”
+
+| Excuse | Reality |
+|---|---|
+| "PG already has this CSS, so Yepy must `@Layout` MoneyInSafeOperationDetailLayout" | Different UI layout. Put the field on `YepyOperationDetailLayout`. |
+| "This layout already has `bankTransferInfo`" | Reuse the generated method. Do not declare it again. |
 
 ### 2. Live-DOM inspection
 
@@ -337,6 +366,8 @@ Run, in order:
   for the failing test name or the missing method.
 - The DOM inspection failed and you'd be guessing selectors. Refuse — ask
   for screenshots or a manual inspection.
+- This layout already declares the field. Refuse to add a second `@FindBy`
+  for it — call the generated method.
 
 ---
 

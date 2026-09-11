@@ -199,20 +199,50 @@ folding variants into `@ParameterizedWebTest` and `State variations` —
 the ticket usually only needs the happy path + 1-2 edge cases, not the
 full P0 portfolio.
 
-**Reuse, don't create. Minimize, don't enumerate.** Two hard rules:
+**Reuse, don't create. Minimize, don't enumerate.** Three hard rules:
 - **No new test class when a related one exists.** Find the closest existing
   class via qagent `testlist` (semantic) + a live-repo `@Description` /
   package grep, and **extend it**. Only create a new `*Test` class when no
   related class covers the journey/domain. This applies per surface
   (website + responsivesite each). A native-only match is NOT a reusable
   web class — but still prefer the existing web class for that domain.
-- **Fewest methods that still cover every AC.** Prefer extending or
-  parameterizing an existing method over adding a new one; collapse several
-  ACs into one end-to-end method when they share a flow (e.g. close →
-  assert dismissed → re-enter → assert not-shown-again is ONE method, not
-  three). Add a method only when a scenario can't fold into an existing one
-  without losing coverage or readability. State the AC→method mapping in the
-  plan so coverage is auditable despite the smaller method count.
+- **No new test method when an existing method already drives this screen
+  and the ticket is an assertion (or data) gap.** Strengthen that method's
+  assertion. Prefer extending or parameterizing it over adding a sibling.
+  Collapse several ACs into one end-to-end method when they share a flow
+  (e.g. close → assert dismissed → re-enter → assert not-shown-again is
+  ONE method, not three). Add a method only when a scenario can't fold
+  into an existing one without losing coverage or readability.
+- **No second `@FindBy` on a layout that already has the field.** Call the
+  generated method. The same CSS on a **different UI layout** is not a
+  clone — declare it there (Yepy detail vs Money-in-Safe detail). Do not
+  `@Layout` a foreign-domain layout onto the page just because one
+  selector matches.
+
+State the AC→method mapping in the plan so coverage is auditable despite
+the smaller method count. The plan column **New or extend** must name a
+method when one exists:
+
+| Value | When |
+|---|---|
+| `extend method FQCN#method (strengthen assertion)` | Existing method already visits the screen; ticket is a gap in that assertion. **Default.** |
+| `extend class (add method)` | Related class exists, but no method covers this screen. |
+| `new class` | No related class. Last resort. |
+
+Negative example: **SHBDN-258502 / WEBT-258502**. CI ticket: refund detail
+missing the bank reference number. `MoneyInSafeOrderCancellationTest#testBankReferenceQueryInfoAfterCancellationRefund`
+already called `getTextBankTransferInfo()` and asserted the suffix
+`BANK_REFERENCE_QUERY_INFO`. The agent added four new
+`testRefundDetailShowsBankReferenceNumber` methods. Correct action:
+**strengthen that assertion** (number non-blank). Putting
+`bankTransferInfo` on `YepyOperationDetailLayout` is fine — that is a
+different UI layout.
+
+| Excuse | Reality |
+|---|---|
+| "qagent found the class, so a new method on that class is reuse" | Reuse is the **method** when it already visits the screen. |
+| "A dedicated method makes the ticket visible" | Ticket coverage is the assertion, not a new method name. Put the key in `@Description`. |
+| "PG already has this CSS, so Yepy must not declare it" | Different screen layout. Declare it on the Yepy layout. |
 
 Write `docs/hektor/jira/<TICKET>/plan.md`:
 
@@ -235,9 +265,9 @@ the ticket is Turkish, English if it's English.]
 
 | AC | Scenario | Surface(s) | Target test class | New or extend |
 |---|---|---|---|---|
-| 1. Tooltip metni "Yenilenmiş filtre" olarak güncellenmeli | tooltip metin doğrulaması | website | HybridSearchFilterTest | extend (add method) |
-| 2. Mobilde de aynı metin görünmeli | mobile tooltip metin doğrulaması | responsivesite | ResponsiveHybridSearchTest | extend |
-| 3. Tooltip ikonu hover edildiğinde tooltip görünmeli | tooltip hover davranışı | website | HybridSearchFilterTest | extend |
+| 1. Tooltip metni "Yenilenmiş filtre" olarak güncellenmeli | tooltip metin doğrulaması | website | HybridSearchFilterTest | extend method #testOpenLeftMenuList (strengthen assertion) |
+| 2. Mobilde de aynı metin görünmeli | mobile tooltip metin doğrulaması | responsivesite | ResponsiveHybridSearchTest | extend method (strengthen assertion) |
+| 3. Tooltip ikonu hover edildiğinde tooltip görünmeli | tooltip hover davranışı | website | HybridSearchFilterTest | extend class (add method) |
 
 ## Linked context
 
@@ -275,8 +305,12 @@ the ticket is Turkish, English if it's English.]
 
 ## Layout work expected
 
-- Add `LeftFilterLayout.getTextTooltipText()` if not already generated.
-- Mirror in `ResponsiveSearchResultFilterLayout`.
+Search **this** layout (and layouts this page already `@Layout`s) before
+listing a new field. Same CSS on a different UI layout is allowed.
+
+- Reuse `LeftFilterLayout.getTextTooltipText()` if this page already has that layout.
+- Mirror a field on `ResponsiveSearchResultFilterLayout` when the mobile
+  screen needs it — that is a different layout, not a clone of desktop.
 
 ## Data-layer work expected
 
@@ -359,8 +393,9 @@ test, runs it once on Selenoid + local, but does NOT auto-dispatch
 `hektor-failure-diagnosis` on failure. Instead it returns the failure
 unfixed for batching here.
 
-If the scenario needs a new layout method, composer transparently
-dispatches `hektor-page-authoring` first — that's unchanged.
+If the scenario needs a new layout method, composer §2 runs first: reuse
+the method if **this** page already `@Layout`s it; otherwise add the field
+on **this** screen's layout. Same CSS on a different UI layout is allowed.
 
 If the scenario needs a REST or SQL helper, composer §2b runs **before**
 compose: reuse an existing TDC/DAO method, or dispatch `hektor-resource-client`

@@ -662,9 +662,14 @@ When running tests as part of a Hektor phase, ALWAYS:
 31. A class in `web-ui-test/` that `extends AbstractDAO` or is named `*DAO` /
     `*DAOImpl`, or SQL inlined in a `*Test.java`. SQL helpers belong in
     test-dao. **(BLOCKER)**
+32. A new test method whose flow already exists as another method on the
+    same (or obvious sibling) class, when the ticket is an assertion gap on
+    that method. Strengthen the existing assertion (WEBT-258502 four
+    `testRefundDetailShowsBankReferenceNumber` siblings next to
+    `testBankReferenceQueryInfoAfterCancellationRefund`). **(WARNING)**
 
 Items 1–16 and 30–31 are reviewer **BLOCKERs** — refuse to commit code that trips one.
-Items 17–29 (and 9 above where inline) are reviewer **WARNINGs**: they don't
+Items 17–29, 32 (and 9 above where inline) are reviewer **WARNINGs**: they don't
 block the merge, but the bot leaves an inline comment, so fix them in the same
 pass unless there's a documented reason. If you catch any BLOCKER in code the
 user asked you to commit, refuse and explain which rule was violated. The

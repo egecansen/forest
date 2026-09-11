@@ -42,6 +42,19 @@ then authored in that sibling — never invented under `web-ui-test/`.
 failure. The JAR lagging is not a reason to write a local client; grep the
 sibling source.
 
+## Scenarios are reused; same selector on a different UI layout is not a clone
+
+If a test method already drives the screen and the ticket is an assertion
+gap, strengthen that method — do not add a sibling. Negative example:
+WEBT-258502 added four `testRefundDetailShowsBankReferenceNumber` methods
+instead of updating `testBankReferenceQueryInfoAfterCancellationRefund`.
+
+A `@FindBy` that already exists on **this** layout (or a layout this page
+already `@Layout`s) is reused. The same CSS on a **different** UI layout
+(Yepy detail vs Money-in-Safe detail) is a real field on that layout — do
+not treat it as a duplicate, and do not `@Layout` a foreign-domain layout
+onto the page just because one selector matches.
+
 ## Ticket entry — a Jira link IS the instruction
 
 A prompt that names a ticket of this org (`SHBDN-*`, `WEBT-*`, `RAL-*`, `TDC-*`, `DAO-*`)

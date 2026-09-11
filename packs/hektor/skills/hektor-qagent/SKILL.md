@@ -135,8 +135,13 @@ mcp__qagent__query_collection(
 ```
 A close hit on `com.sahibinden.web.ui.website.*` / `.responsive.*` means the
 scenario likely already exists — open that class in the live repo and
-extend it instead of writing a new one. A hit only on native
+**extend the matching method** (strengthen its assertion) instead of writing
+a sibling method or a new class. A new method is only justified when no
+existing method visits that screen. A hit only on native
 (`sahibinden.tests.mainapp.*`) is a cross-platform parity gap, not a dup.
+
+A generated method already on **this** page's layouts is reused. The same
+CSS on a different UI layout is a real field, not a clone.
 
 **Ground in the documented rules** (`hektor-journey-mapping`,
 `hektor-test-composer`, `hektor-bug-discovery`):

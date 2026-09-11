@@ -6,6 +6,7 @@ description: >
   variants, EDR/contract assertions, parameterised data variants. Writes one
   *Test.java class (or extends the existing one) at the suggested Java target
   path, dispatches hektor-page-authoring if a needed layout doesn't exist,
+  prefers strengthening an existing test method over adding a sibling,
   dispatches hektor-resource-client / hektor-test-dao if a REST or SQL helper
   is missing (never writes those helpers in web-test), runs the new tests on
   Selenoid AND locally, and verifies coverage of every Test expectation in the
@@ -62,8 +63,10 @@ In order, in your own context. Don't return until all six complete.
 
 1. **Load context** (§1) — read the journey block + its sub-journeys + the
    conventions skill.
-2. **Page/layout readiness** (§2) — dispatch `hektor-page-authoring` for
-   any missing or incomplete layout method.
+2. **Page/layout readiness** (§2) — reuse a method already on this page's
+   layouts; declare the field on **this** UI layout if the screen is
+   different. Strengthen an existing test method when the ticket is an
+   assertion gap.
 3. **Data-layer readiness** (§2b) — reuse an existing TDC/DAO method, or
    dispatch `hektor-resource-client` / `hektor-test-dao`. Never write a
    client or DAO in web-test.
@@ -124,21 +127,37 @@ In order, in your own context. Don't return until all six complete.
 
 ## §2 Page/layout readiness
 
-For each interaction the journey requires, check whether the matching
-layout method already exists.
-
-Search pattern:
+For each interaction, search **this page's layouts** before authoring.
 
 ```bash
-grep -r "clickRefreshOnClickButton\|isDisplayedTooltipText" \
-  web-ui-test/src/main/java/com/sahibinden/web/client/
+# 1. this page already @Layout's a layout that has the method?
+grep -n "getTextBankTransferInfo" \
+  web-ui-test/src/main/java/.../<ThisPage>.java \
+  web-ui-test/src/main/java/.../<ThisLayout>.java
+
+# 2. a test method already drives this screen / assertion?
+grep -r "getTextBankTransferInfo\|BANK_REFERENCE_QUERY_INFO\|iade detay" \
+  web-ui-test/src/test/java --include='*Test.java'
 ```
 
-For any missing method, dispatch `hektor-page-authoring` with a brief
-listing exactly which methods you need. Wait for that subagent to return
-`page-authored` and verify `gradle build -x test` passes before continuing.
+Use `client/responsivesite` and `ui.responsive` when the surface is mobile.
+Also query qagent `testlist` (see `hektor-qagent` — Dedup before composing).
 
-Do not write the test methods until every layout method you need exists.
+| Result | Action |
+|---|---|
+| Method exists on a layout this page already `@Layout`s | Call it. Do not add a second field. |
+| Same selector lives on a **different UI layout** | Declare it on **this** layout. Do not `@Layout` a foreign-domain layout onto the page. |
+| Test method already visits this screen and the ticket is an assertion gap | **Update that method.** Do not add a sibling (`testRefundDetailShowsBankReferenceNumber` next to `testBankReferenceQueryInfoAfterCancellationRefund`). |
+| Truly missing on this screen | Dispatch `hektor-page-authoring` with a brief listing exactly which methods you need. Wait for `page-authored` and verify `gradle build -x test` passes before continuing. |
+
+Do not write the test methods until every layout method you need exists
+**or is reused on this page**.
+
+Negative example: **WEBT-258502**. The agent added four new test methods
+instead of strengthening
+`MoneyInSafeOrderCancellationTest#testBankReferenceQueryInfoAfterCancellationRefund`.
+Declaring `bankTransferInfo` on `YepyOperationDetailLayout` was **not**
+the bug — that is a different UI layout.
 
 ---
 
@@ -279,6 +298,10 @@ Reviewer rules added to the kernel — also walk these before declaring done:
 - [ ] No `extends AbstractService` / `*ResourceClient` / `extends AbstractDAO`
       / `*DAO.java` under `web-ui-test/`. REST → `hektor-resource-client`;
       SQL → `hektor-test-dao`. **(BLOCKER)**
+- [ ] No second `@FindBy` on a layout that already has the field. Same CSS
+      on a different UI layout is allowed.
+- [ ] No new test method when an existing method already drives this screen
+      and the ticket is an assertion gap — strengthen that method.
 
 Any check failing → fix before moving on. Don't commit failing-checklist
 code. (If a TDC/DAO skill authored a helper, run that skill's red-flag list

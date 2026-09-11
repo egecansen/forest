@@ -3,6 +3,13 @@
 **Date:** 2026-07-23
 **Repos affected:** `APPS/forest` (Node web UI) and `APPS/idea-worktrees` (IntelliJ plugin)
 **Status:** approved by Egecan, pending implementation
+**Amended 2026-09-11:** a landing now ends by returning the main checkout to
+the branch it was on (step 8). The premise below — the IDE is open on the main
+checkout, so bring the branch to it — stopped holding once Cursor opened
+worktrees directly through forest's workspace file. What remained of the old
+behaviour was that every Finish parked the primary on a ticket branch, the
+ticket's files "appeared in the project", and later commits were made in the
+primary by accident. Steps 1–7 are unchanged.
 
 ## Problem
 
@@ -70,12 +77,27 @@ Given worktree `W`, main checkout `M`, and (eventually) target branch `B`:
    and the pop have already succeeded by then and must not be thrown away
    over a cleanup failure. This makes losing agent work structurally
    impossible.
+8. **Return (added 2026-09-11).** If step 4 switched `M`, put it back:
+   `git switch <previous branch>`. Skipped, with the reason reported in the
+   result (`stayReason`) and the toast, when:
+   - `W` was dirty — step 6 popped its changes into `M` on `B`, and a switch
+     would carry them onto the previous branch (incident 2026-08-24 in
+     reverse). `M` stays on `B` holding the carried work.
+   - `M` was detached before the landing — nothing to return to.
+   - step 7's ancestor guard skipped removal — HEAD moved concurrently, so a
+     switch would compound the surprise.
+   A refused switch is reported, never thrown: the landing has already
+   succeeded. Guided mode appends the same `switch` when `W` is clean. The
+   result carries `returned` / `returnedTo`. Eject is unchanged — its own
+   `git switch <previous>` is simply a no-op after a returned landing, and it
+   still recreates the worktree.
 
 ### Chosen policies (decided 2026-07-23)
 
 | Situation | Policy |
 |---|---|
-| Dirty worktree at Finish | Carry as uncommitted (stash → land → pop). |
+| Dirty worktree at Finish | Carry as uncommitted (stash → land → pop). `M` stays on `B` to hold the carried work (step 8). |
+| Main checkout after landing (2026-09-11) | Returned to its previous branch when `W` was clean; otherwise kept on `B`, reason reported. |
 | Dirty main checkout | Git-native: attempt the switch/merge; git refuses if local edits would be lost or a merge is in progress → abort loudly, touch nothing. Unrelated local edits ride along, which is normal git behavior. |
 | Worktree fate | Per-landing checkbox "remove worktree after landing", default **on**. |
 | Repeat landings | Fully supported: keep-the-worktree landing leaves `W` detached; a later Finish merges the new detached commits into `B` (step 5) and can then remove. Pressing Finish twice is never an error. |
@@ -113,7 +135,7 @@ worktree actions. Body:
   current branch).
 - **auto** mode runs the sequence in-process via `runGit`, journals each
   step, broadcasts a fresh snapshot, and returns `{steps: [...], landed,
-  merged, removed, stashPopped, conflict?}`.
+  merged, removed, stashPopped, returned, returnedTo, stayReason?, conflict?}`.
 - **guided** mode journals and opens a terminal (`runInTerminal`) with the
   exact command sequence so the user runs it themselves — consistent with
   every existing forest action.

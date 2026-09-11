@@ -25,7 +25,10 @@ You do not author tests yourself. You do not edit `*Test.java`, `*Page.java`,
 or `*Layout.java`. Those are owned by `hektor-test-composer`,
 `hektor-page-authoring`, etc. You do not write `*ResourceClient` or `*DAO`
 helpers in web-test — `hektor-test-composer` §2b dispatches
-`hektor-resource-client` / `hektor-test-dao`.
+`hektor-resource-client` / `hektor-test-dao`. Ticket work (`hektor-from-jira`)
+reuses an existing test method when the ticket is an assertion gap; it does
+not add sibling methods (WEBT-258502). Same CSS on a different UI layout
+is a real field, not a clone.
 
 ---
 

@@ -52,7 +52,8 @@ the one rule worth stating up front, because a PR that breaks it is marked
 \"Needs Work\" by the automated reviewer:
 "
 have hektor-conventions && CTX="${CTX}
-- \`web-ui-test/\` (\`*Page.java\`, \`*Layout.java\`, \`*Test.java\`) → \`/hektor-conventions\`"
+- \`web-ui-test/\` (\`*Page.java\`, \`*Layout.java\`, \`*Test.java\`) → \`/hektor-conventions\`
+  (strengthen an existing test method for an assertion gap — same CSS on a different UI layout is not a clone)"
 have hektor-resource-client && CTX="${CTX}
 - \`test-data-client/\` (\`*ResourceClient.java\`, \`AbName.java\`) → \`/hektor-resource-client\`
 - a missing REST helper while writing a web-test → \`/hektor-resource-client\` (reuse first; else \`tech/TDC-<n>\` — never a client in web-ui-test)"

@@ -112,7 +112,7 @@ function rowHtml(w, repo) {
         ? `<button title="Repair ${w.scope.missing} missing hook script(s)" data-act="repair" data-path="${enc}">🩹</button>`
         : `<button title="Refresh hooks: re-provision this worktree from the current pack/kit sources (stale registrations are cleaned up; a session already running here keeps its old hook config until restarted)" data-act="repair" data-path="${enc}">↻</button>`}
       <button title="Open in Cursor" data-act="open-cursor" data-path="${enc}">⤓</button>
-      ${w.isPrimary ? '' : `<button data-act="finish" data-path="${enc}" title="Finish: land this worktree's branch in the main checkout">✓</button>`}
+      ${w.isPrimary ? '' : `<button data-act="finish" data-path="${enc}" title="Finish: land this worktree's branch, then put the main checkout back on its previous branch">✓</button>`}
       ${pruneable ? `<button title="Prune" data-act="remove" data-path="${enc}" data-repo="${encodeURIComponent(w.repoPath)}" data-primary="${w.isPrimary}">🧹</button>` : ''}
     </div>
   </div>`;
@@ -653,9 +653,15 @@ async function openFinish(path) {
   if (!preview.targetBranch && !preview.nameMismatch) { toast('Cannot resolve a target branch for this worktree'); return; }
   if (dirtyMainToast(preview)) return;
   finishCtx = { w, preview };
+  // Where the main checkout ends up (finish step 8): back where it was, unless
+  // it has to hold the carried files, or it is already on the landed branch.
+  const target = preview.targetBranch ?? preview.candidates[0];
+  const mainAfter = !preview.mainBranch || preview.mainBranch === target ? ''
+    : preview.dirtyCount ? ' · main checkout stays on the landed branch to hold them'
+    : ` · main checkout returns to ${preview.mainBranch}`;
   $('#fw-summary').textContent =
-    `${preview.worktreeName} → ${preview.relanding ? 'merge into' : 'land as'} ${preview.targetBranch ?? preview.candidates[0]}` +
-    ` · ${preview.dirtyCount} uncommitted file(s) will carry over · ↑${w.ahead} ↓${w.behind} vs ${w.baseBranch}`;
+    `${preview.worktreeName} → ${preview.relanding ? 'merge into' : 'land as'} ${target}` +
+    ` · ${preview.dirtyCount} uncommitted file(s) will carry over${mainAfter} · ↑${w.ahead} ↓${w.behind} vs ${w.baseBranch}`;
   $('#fw-namechoice').classList.toggle('hidden', !preview.nameMismatch);
   if (preview.nameMismatch) {
     $('#fw-name-branch-label').textContent = `Land as "${preview.candidates[0]}" (the branch's name)`;
@@ -690,7 +696,7 @@ async function submitFinish() {
   if (r.error) { toast(`Error: ${r.error}`); return; }
   if (state.mode === 'guided') { toast('Finish sequence sent to terminal'); return; }
   if (r.conflict) { toast('Merge conflict — resolve in your IDE, then press Finish again'); return; }
-  toast(`Landed ${r.targetBranch}${r.removed ? ', worktree removed' : ''}${r.stashConflict ? ' — stash pop conflicted, stash kept' : ''}${r.removeError ? ` — worktree remove failed: ${r.removeError}` : ''}${r.removeSkipped ? ` — worktree kept: ${r.removeSkipped}` : ''}`);
+  toast(`Landed ${r.targetBranch}${r.removed ? ', worktree removed' : ''}${r.returned ? `, main checkout back on ${r.returnedTo}` : ''}${r.stayReason ? ` — ${r.stayReason}` : ''}${r.stashConflict ? ' — stash pop conflicted, stash kept' : ''}${r.removeError ? ` — worktree remove failed: ${r.removeError}` : ''}${r.removeSkipped ? ` — worktree kept: ${r.removeSkipped}` : ''}`);
 }
 
 // The base the new branch will actually be cut from, shown filled in rather
